@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "dataset_id": "annotool-sample",
+  "seed": 6006,
+  "types": [
+    "drift",
+    "wrong_class",
+    "missed_region",
+    "hallucinated_region",
+    "track_id_swap"
+  ],
+  "similar_run": [40, 59],
+  "defects": [
+    {
+      "type": "drift",
+      "frame": 12,
+      "region_id": "sample-r03",
+      "expected_box": [274, 36, 56, 34],
+      "model_box": [292, 44, 56, 34]
+    },
+    {
+      "type": "drift",
+      "frame": 13,
+      "region_id": "sample-r04",
+      "expected_box": [398, 36, 48, 39],
+      "model_box": [416, 44, 48, 39]
+    },
+    {
+      "type": "wrong_class",
+      "frame": 24,
+      "region_id": "sample-r05",
+      "expected_class": "cystic_duct",
+      "model_class": "gallbladder"
+    },
+    {
+      "type": "missed_region",
+      "frame": 36,
+      "region_id": "sample-r07"
+    },
+    {
+      "type": "hallucinated_region",
+      "frame": 72,
+      "region_id": "hallucinated-f072",
+      "model_region": {
+        "id": "hallucinated-f072",
+        "class": "unknown",
+        "kind": "region",
+        "box": [500, 275, 72, 48],
+        "conf": 0.41,
+        "track_id": null,
+        "filled": false
+      }
+    },
+    {
+      "type": "track_id_swap",
+      "frame": 90,
+      "region_ids": ["sample-r01", "sample-r02"],
+      "expected_track_ids": {
+        "sample-r01": "sample-t01",
+        "sample-r02": "sample-t02"
+      },
+      "model_track_ids": {
+        "sample-r01": "sample-t02",
+        "sample-r02": "sample-t01"
+      }
+    }
+  ]
+}
