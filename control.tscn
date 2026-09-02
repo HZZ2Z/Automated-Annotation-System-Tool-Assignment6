@@ -1,0 +1,219 @@
+[gd_scene format=3 uid="uid://cef6fvr8knfvm"]
+
+[ext_resource type="Script" uid="uid://bj7tb2gyjp24q" path="res://scipts/main.gd" id="1_0fbet"]
+
+[node name="Control" type="Control" unique_id=240270367]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_0fbet")
+
+[node name="MainVBox" type="VBoxContainer" parent="." unique_id=705353198]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="TopToolbar" type="HBoxContainer" parent="MainVBox" unique_id=705036345]
+custom_minimum_size = Vector2(0, 45)
+layout_mode = 2
+
+[node name="Open" type="Button" parent="MainVBox/TopToolbar" unique_id=2146014452]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+text = "Open
+
+
+"
+
+[node name="Save" type="Button" parent="MainVBox/TopToolbar" unique_id=1548653746]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+text = "Save"
+
+[node name="Undo" type="Button" parent="MainVBox/TopToolbar" unique_id=1573375447]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+text = "Undo"
+
+[node name="Redo" type="Button" parent="MainVBox/TopToolbar" unique_id=265059750]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+text = "Redo"
+
+[node name="Exprot" type="Button" parent="MainVBox/TopToolbar" unique_id=1814994853]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+text = "Export"
+
+[node name="Workspace" type="HSplitContainer" parent="MainVBox" unique_id=1616137878]
+layout_mode = 2
+size_flags_vertical = 3
+split_offsets = PackedInt32Array(100)
+split_offset = 100
+
+[node name="ToolPanel" type="PanelContainer" parent="MainVBox/Workspace" unique_id=1780768632]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MainVBox/Workspace/ToolPanel" unique_id=1490551155]
+layout_mode = 2
+
+[node name="Select" type="Button" parent="MainVBox/Workspace/ToolPanel/VBoxContainer" unique_id=932097402]
+custom_minimum_size = Vector2(0, 75)
+layout_mode = 2
+text = "Select
+"
+
+[node name="Move" type="Button" parent="MainVBox/Workspace/ToolPanel/VBoxContainer" unique_id=1029331237]
+custom_minimum_size = Vector2(0, 75)
+layout_mode = 2
+text = "Move"
+
+[node name="Box" type="Button" parent="MainVBox/Workspace/ToolPanel/VBoxContainer" unique_id=931571854]
+custom_minimum_size = Vector2(0, 75)
+layout_mode = 2
+text = "Box"
+
+[node name="Polygon" type="Button" parent="MainVBox/Workspace/ToolPanel/VBoxContainer" unique_id=453072429]
+custom_minimum_size = Vector2(0, 75)
+layout_mode = 2
+text = "Polygon"
+
+[node name="Fill" type="Button" parent="MainVBox/Workspace/ToolPanel/VBoxContainer" unique_id=2042389045]
+custom_minimum_size = Vector2(0, 75)
+layout_mode = 2
+text = "Fill"
+
+[node name="Delete" type="Button" parent="MainVBox/Workspace/ToolPanel/VBoxContainer" unique_id=222685614]
+custom_minimum_size = Vector2(0, 75)
+layout_mode = 2
+text = "Delete"
+
+[node name="MainSplit" type="HSplitContainer" parent="MainVBox/Workspace" unique_id=404624267]
+layout_mode = 2
+
+[node name="CenterPanel" type="PanelContainer" parent="MainVBox/Workspace/MainSplit" unique_id=2088959181]
+custom_minimum_size = Vector2(800, 0)
+layout_mode = 2
+
+[node name="AnnotationCanvas" type="Control" parent="MainVBox/Workspace/MainSplit/CenterPanel" unique_id=1129545098]
+layout_mode = 2
+
+[node name="CanvasBackground" type="ColorRect" parent="MainVBox/Workspace/MainSplit/CenterPanel/AnnotationCanvas" unique_id=1452172861]
+layout_mode = 0
+offset_right = 800.0
+offset_bottom = 495.0
+color = Color(0.20784314, 0.20784314, 0.20784314, 1)
+
+[node name="ImageView" type="TextureRect" parent="MainVBox/Workspace/MainSplit/CenterPanel/AnnotationCanvas" unique_id=1585353376]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="RightPanel" type="PanelContainer" parent="MainVBox/Workspace/MainSplit" unique_id=232594252]
+layout_mode = 2
+
+[node name="RegionInspector" type="VBoxContainer" parent="MainVBox/Workspace/MainSplit/RightPanel" unique_id=455942790]
+layout_mode = 2
+
+[node name="TitleLabel" type="Label" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=1465200906]
+layout_mode = 2
+text = "Region Properties
+"
+horizontal_alignment = 1
+
+[node name="Separator" type="HSeparator" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=1630667045]
+layout_mode = 2
+
+[node name="ClassLabel" type="Label" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=1045474732]
+layout_mode = 2
+text = "Class"
+horizontal_alignment = 1
+
+[node name="ClassOption" type="OptionButton" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=1672497037]
+layout_mode = 2
+
+[node name="ConfidenceTitle" type="Label" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=374136637]
+layout_mode = 2
+text = "Confidence"
+horizontal_alignment = 1
+
+[node name="ConfidenceValue" type="Label" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=100260575]
+layout_mode = 2
+text = "0.92"
+horizontal_alignment = 1
+
+[node name="TrackLabel" type="Label" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=677431722]
+layout_mode = 2
+text = "Track ID"
+horizontal_alignment = 1
+
+[node name="TrackEdit" type="LineEdit" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=315868980]
+layout_mode = 2
+text = "[ T02            ]"
+alignment = 1
+
+[node name="OpacityLabel" type="Label" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=531146800]
+layout_mode = 2
+text = "Overlay Opacity"
+horizontal_alignment = 1
+
+[node name="OpacitySlide" type="HSlider" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=1645474648]
+layout_mode = 2
+
+[node name="VerifiedCheck" type="CheckBox" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=1163508384]
+layout_mode = 2
+text = "Verified"
+
+[node name="DeleteRegionButton" type="Button" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=736451592]
+layout_mode = 2
+text = "Delete Region"
+
+[node name="TimelinePanel" type="PanelContainer" parent="MainVBox" unique_id=617245300]
+custom_minimum_size = Vector2(0, 60)
+layout_mode = 2
+
+[node name="TimelineVBox" type="VBoxContainer" parent="MainVBox/TimelinePanel" unique_id=62126172]
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+
+[node name="PlaybackControls" type="HBoxContainer" parent="MainVBox/TimelinePanel/TimelineVBox" unique_id=1107104726]
+layout_mode = 2
+
+[node name="Previous" type="Button" parent="MainVBox/TimelinePanel/TimelineVBox/PlaybackControls" unique_id=1980174336]
+layout_mode = 2
+
+[node name="Play" type="Button" parent="MainVBox/TimelinePanel/TimelineVBox/PlaybackControls" unique_id=210788530]
+layout_mode = 2
+
+[node name="Next" type="Button" parent="MainVBox/TimelinePanel/TimelineVBox/PlaybackControls" unique_id=599034841]
+layout_mode = 2
+
+[node name="FrameLabel" type="Button" parent="MainVBox/TimelinePanel/TimelineVBox/PlaybackControls" unique_id=1337815983]
+layout_mode = 2
+
+[node name="TimeLabel" type="Button" parent="MainVBox/TimelinePanel/TimelineVBox/PlaybackControls" unique_id=1707494033]
+layout_mode = 2
+
+[node name="FrameSlider" type="HSlider" parent="MainVBox/TimelinePanel/TimelineVBox" unique_id=530394014]
+layout_mode = 2
+
+[node name="BatchControls" type="HBoxContainer" parent="MainVBox/TimelinePanel/TimelineVBox" unique_id=560041323]
+layout_mode = 2
+
+[node name="OpenFileDialog" type="FileDialog" parent="." unique_id=1393790148]
+title = "Open a File"
+file_mode = 0
+access = 2
+filters = PackedStringArray("*.png ; PNG Images", "*.jpg, *.jpeg ; JPEG Images")
