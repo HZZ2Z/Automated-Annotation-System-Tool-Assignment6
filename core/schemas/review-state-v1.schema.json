@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "review-state-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "dataset_id", "frames", "batch_markers"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "dataset_id": {"type": "string", "minLength": 1},
+    "frames": {
+      "type": "object",
+      "propertyNames": {"pattern": "^(?:0|[1-9][0-9]*)$"},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["verified"],
+        "properties": {"verified": {"type": "boolean"}}
+      }
+    },
+    "batch_markers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["keyframe", "start_frame", "end_frame", "mode", "threshold"],
+        "properties": {
+          "keyframe": {"type": "integer", "minimum": 0},
+          "start_frame": {"type": "integer", "minimum": 0},
+          "end_frame": {"type": "integer", "minimum": 0},
+          "mode": {"enum": ["merge", "overwrite"]},
+          "threshold": {"type": "number", "minimum": 0}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dataset-manifest-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "dataset_id", "source_name", "source_sha256", "width", "height", "frame_count", "nominal_fps", "frames", "model_version", "taxonomy_version"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "dataset_id": {"type": "string", "minLength": 1},
+    "source_name": {"type": "string", "minLength": 1},
+    "source_sha256": {"type": "string", "pattern": "^[A-Fa-f0-9]{64}$"},
+    "width": {"type": "integer", "exclusiveMinimum": 0},
+    "height": {"type": "integer", "exclusiveMinimum": 0},
+    "frame_count": {"type": "integer", "exclusiveMinimum": 0},
+    "nominal_fps": {"type": "number", "exclusiveMinimum": 0},
+    "frames": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/frame"}
+    },
+    "model_version": {"type": "string", "minLength": 1},
+    "taxonomy_version": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame", "time_s", "image_path"],
+      "properties": {
+        "frame": {"type": "integer", "minimum": 0},
+        "time_s": {"type": "number", "minimum": 0},
+        "image_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"}
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "taxonomy_version": "sample-taxonomy-v1",
+  "kinds": ["instrument", "anatomy", "region"],
+  "classes": [
+    {"id": "grasper", "kind": "instrument", "color": "#ef4444"},
+    {"id": "scissors", "kind": "instrument", "color": "#f59e0b"},
+    {"id": "cystic_duct", "kind": "anatomy", "color": "#22c55e"},
+    {"id": "gallbladder", "kind": "anatomy", "color": "#3b82f6"},
+    {"id": "unknown", "kind": "region", "color": "#a855f7"}
+  ]
+}

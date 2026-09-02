@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "dataset_id": "fixture-v1",
+  "source": "model_output_v1",
+  "frame": 0,
+  "time_s": 0.0,
+  "image_size": [640, 360],
+  "regions": [
+    {
+      "id": "fixture-r1",
+      "class": "grasper",
+      "kind": "instrument",
+      "box": [10, 20, 40, 30],
+      "conf": 0.9,
+      "track_id": "T01",
+      "filled": false
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "dataset_id": "fixture-v1",
+  "source": "model_output_v1",
+  "frame": 0,
+  "image_size": [640, 360],
+  "regions": [
+    {
+      "id": "fixture-r2",
+      "class": "gallbladder",
+      "kind": "anatomy",
+      "polygon": [[10, 10], [60, 10], [40, 50]],
+      "filled": true
+    }
+  ]
+}
