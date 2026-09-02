@@ -15,7 +15,7 @@ The product is an annotation and feedback tool. It does not train or run a perce
 - One local dataset open at a time.
 - Image-sequence sources and arbitrary FFmpeg-supported videos converted into the same indexed image-sequence representation.
 - Rendering of box and polygon regions over a 2D image.
-- Complete box editing: select, move, resize, keyboard nudge, relabel, add, delete, and fill.
+- Complete box editing: select, move, resize, keyboard nudge, relabel, track-ID correction, add, delete, and fill.
 - Polygon display, selection, move, delete, relabel, and fill. Polygon vertex editing and polygon drawing are not included.
 - Bounded undo/redo for every annotation-changing action.
 - Frame playback, pause, seek, single-step, explicit frame index, and explicit timestamp.
@@ -133,7 +133,7 @@ Each record contains:
 
 Each region contains:
 
-- dataset-unique `id`
+- frame-unique `id`
 - non-empty `class`
 - `kind` from the documented taxonomy
 - exactly one geometry: `box` or `polygon`
@@ -204,12 +204,13 @@ All persistent annotation changes use commands:
 - resize box
 - keyboard nudge
 - relabel region
+- change track ID
 - add box
 - delete region
 - toggle fill
 - propagate batch
 
-Each command implements validation, execute, and undo. Undo/redo stores the last 200 accepted commands. A new command after undo clears the redo branch.
+Each command implements `apply`, including validation before mutation, and `revert`. Undo/redo stores the last 200 accepted commands. A new command after undo clears the redo branch.
 
 Relabeling provides both the configured taxonomy list and a free-text entry. A non-empty free-text value is accepted and preserved exactly after schema validation.
 
