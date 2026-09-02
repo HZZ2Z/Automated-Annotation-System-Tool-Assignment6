@@ -121,10 +121,29 @@ def test_manifest_semantics_compares_integral_float_frame_count() -> None:
     manifest = load(FIXTURES / "valid/dataset-manifest.json")
     manifest["frame_count"] = 3.0
 
-    assert validate_instance(manifest, "dataset-manifest-v1.schema.json") == []
+    schema_errors = validate_instance(manifest, "dataset-manifest-v1.schema.json")
     errors = validate_manifest_semantics(manifest)
 
+    assert any(error.startswith("frame_count:") for error in schema_errors)
     assert any(error.startswith("frame_count:") for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("frame_count", "frame_entries"),
+    [(2.0, 2), (True, 1)],
+)
+def test_manifest_requires_an_exact_integer_frame_count(
+    frame_count: int | float | bool, frame_entries: int
+) -> None:
+    manifest = load(FIXTURES / "valid/dataset-manifest.json")
+    manifest["frame_count"] = frame_count
+    manifest["frames"] = manifest["frames"][:frame_entries]
+
+    schema_errors = validate_instance(manifest, "dataset-manifest-v1.schema.json")
+    semantic_errors = validate_manifest_semantics(manifest)
+
+    assert any(error.startswith("frame_count:") for error in schema_errors)
+    assert any(error.startswith("frame_count:") for error in semantic_errors)
 
 
 def test_manifest_schema_rejects_non_relative_image_paths() -> None:

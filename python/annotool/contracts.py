@@ -6,10 +6,17 @@ from pathlib import Path
 from typing import Any
 
 from jsonschema import Draft202012Validator
+from jsonschema.validators import extend
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_DIR = ROOT / "core/schemas"
+StrictDraft202012Validator = extend(
+    Draft202012Validator,
+    type_checker=Draft202012Validator.TYPE_CHECKER.redefine(
+        "integer", lambda _checker, instance: type(instance) is int
+    ),
+)
 
 
 @lru_cache(maxsize=None)
@@ -20,7 +27,7 @@ def load_schema(name: str) -> dict[str, Any]:
 
 def validate_instance(data: dict[str, Any], schema_name: str) -> list[str]:
     """Return deterministic, field-specific JSON Schema validation errors."""
-    validator = Draft202012Validator(load_schema(schema_name))
+    validator = StrictDraft202012Validator(load_schema(schema_name))
     errors = sorted(validator.iter_errors(data), key=lambda item: list(item.path))
     return [
         f"{'.'.join(str(part) for part in error.absolute_path) or '$'}: "
@@ -77,7 +84,9 @@ def validate_manifest_semantics(record: dict[str, Any]) -> list[str]:
         return errors
 
     frame_count = record.get("frame_count")
-    if frame_count != len(frames):
+    if type(frame_count) is not int:
+        errors.append("frame_count: must be an exact integer")
+    elif frame_count != len(frames):
         errors.append(
             f"frame_count: expected {len(frames)} entries, got {frame_count}"
         )
