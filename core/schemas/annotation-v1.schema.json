@@ -7,7 +7,7 @@
   "properties": {
     "schema_version": {"const": 1},
     "dataset_id": {"type": "string", "minLength": 1},
-    "source": {"type": "string", "pattern": "^(?:model_output_v[1-9][0-9]*|human_corrected)$"},
+    "source": {"type": "string", "pattern": "^(?:model_output_v[1-9][0-9]*|human_corrected)\\Z"},
     "frame": {"type": "integer", "minimum": 0},
     "time_s": {"type": "number", "minimum": 0},
     "image_size": {

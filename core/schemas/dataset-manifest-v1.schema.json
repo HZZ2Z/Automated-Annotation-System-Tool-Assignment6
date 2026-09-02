@@ -28,7 +28,16 @@
       "properties": {
         "frame": {"type": "integer", "minimum": 0},
         "time_s": {"type": "number", "minimum": 0},
-        "image_path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+"}
+        "image_path": {
+          "type": "string",
+          "minLength": 1,
+          "allOf": [
+            {"not": {"pattern": "^/"}},
+            {"not": {"pattern": "\\\\"}},
+            {"not": {"pattern": "^[A-Za-z][A-Za-z0-9+.-]*:"}},
+            {"not": {"pattern": "(?:^|/)\\.\\.(?:/|$)"}}
+          ]
+        }
       }
     }
   }

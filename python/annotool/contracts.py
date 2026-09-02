@@ -32,15 +32,15 @@ def validate_instance(data: dict[str, Any], schema_name: str) -> list[str]:
 def validate_annotation_semantics(record: dict[str, Any]) -> list[str]:
     """Validate annotation constraints that depend on multiple fields."""
     image_size = record.get("image_size")
-    if not _valid_image_size(image_size):
-        return []
-
-    width, height = image_size
     errors: list[str] = []
     seen_ids: set[str] = set()
     regions = record.get("regions")
     if not isinstance(regions, list):
         return errors
+
+    bounds_are_valid = _valid_image_size(image_size)
+    if bounds_are_valid:
+        width, height = image_size
 
     for index, region in enumerate(regions):
         if not isinstance(region, dict):
@@ -52,14 +52,14 @@ def validate_annotation_semantics(record: dict[str, Any]) -> list[str]:
             seen_ids.add(region_id)
 
         box = region.get("box")
-        if _valid_box(box) and not _box_within_bounds(box, width, height):
+        if bounds_are_valid and _valid_box(box) and not _box_within_bounds(box, width, height):
             errors.append(
                 f"regions.{index}.box: box must stay within image bounds "
                 f"[0, {width}] x [0, {height}]"
             )
 
         polygon = region.get("polygon")
-        if isinstance(polygon, list):
+        if bounds_are_valid and isinstance(polygon, list):
             for vertex_index, vertex in enumerate(polygon):
                 if _valid_vertex(vertex) and not _vertex_within_bounds(vertex, width, height):
                     errors.append(
@@ -77,7 +77,7 @@ def validate_manifest_semantics(record: dict[str, Any]) -> list[str]:
         return errors
 
     frame_count = record.get("frame_count")
-    if isinstance(frame_count, int) and frame_count != len(frames):
+    if frame_count != len(frames):
         errors.append(
             f"frame_count: expected {len(frames)} entries, got {frame_count}"
         )

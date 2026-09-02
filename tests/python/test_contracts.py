@@ -1,5 +1,8 @@
 import json
+import math
 from pathlib import Path
+
+import pytest
 
 from annotool.contracts import (
     validate_annotation_semantics,
@@ -112,3 +115,77 @@ def test_cli_reports_non_object_jsonl_record_without_a_traceback(
 
     output = capsys.readouterr().out  # type: ignore[attr-defined]
     assert "record 0: $:" in output
+
+
+def test_manifest_semantics_compares_integral_float_frame_count() -> None:
+    manifest = load(FIXTURES / "valid/dataset-manifest.json")
+    manifest["frame_count"] = 3.0
+
+    assert validate_instance(manifest, "dataset-manifest-v1.schema.json") == []
+    errors = validate_manifest_semantics(manifest)
+
+    assert any(error.startswith("frame_count:") for error in errors)
+
+
+def test_manifest_schema_rejects_non_relative_image_paths() -> None:
+    invalid_paths = [
+        "/frames/frame_000000.png",
+        "C:\\frames\\frame_000000.png",
+        "\\\\server\\share\\frame_000000.png",
+        "frames\\..\\frame_000000.png",
+        "https://example.invalid/frame_000000.png",
+        "frames/../frame_000000.png",
+    ]
+    for image_path in invalid_paths:
+        manifest = load(FIXTURES / "valid/dataset-manifest.json")
+        manifest["frames"][0]["image_path"] = image_path
+
+        assert validate_instance(manifest, "dataset-manifest-v1.schema.json"), image_path
+
+
+def test_annotation_semantics_checks_duplicate_ids_without_valid_image_size() -> None:
+    record = load(FIXTURES / "valid/annotation-box.json")
+    record["image_size"] = [640]
+    record["regions"].append(dict(record["regions"][0]))
+
+    errors = validate_annotation_semantics(record)
+
+    assert any("regions.1.id" in error for error in errors)
+
+
+def test_jsonl_rejects_non_finite_constants_and_preserves_existing_target(
+    tmp_path: Path,
+) -> None:
+    invalid_input = tmp_path / "invalid.jsonl"
+    invalid_input.write_text('{"value": Infinity}\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="non-finite JSON constant"):
+        read_jsonl(invalid_input)
+
+    target = tmp_path / "records.jsonl"
+    target.write_text('{"existing": true}\n', encoding="utf-8")
+    with pytest.raises(ValueError):
+        write_jsonl_atomic(target, [{"value": math.nan}])
+
+    assert target.read_text(encoding="utf-8") == '{"existing": true}\n'
+    assert not target.with_suffix(".jsonl.tmp").exists()
+
+
+def test_cli_rejects_non_finite_single_json_without_traceback(
+    tmp_path: Path, capsys: object
+) -> None:
+    path = tmp_path / "invalid.json"
+    path.write_text('{"value": NaN}', encoding="utf-8")
+
+    assert main([str(path)]) == 1
+
+    output = capsys.readouterr().out  # type: ignore[attr-defined]
+    assert "non-finite JSON constant" in output
+
+
+def test_annotation_source_rejects_terminal_newline() -> None:
+    record = load(FIXTURES / "valid/annotation-box.json")
+    record["source"] = "human_corrected\n"
+
+    errors = validate_instance(record, "annotation-v1.schema.json")
+
+    assert any(error.startswith("source:") for error in errors)

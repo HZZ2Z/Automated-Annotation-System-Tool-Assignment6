@@ -10,7 +10,7 @@ from annotool.contracts import (
     validate_instance,
     validate_manifest_semantics,
 )
-from annotool.jsonl import read_jsonl
+from annotool.jsonl import read_jsonl, reject_non_finite_constant
 
 
 DEFAULT_SCHEMA = "annotation-v1.schema.json"
@@ -30,7 +30,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def load_records(path: Path) -> list[dict]:
     if path.suffix.lower() == ".jsonl":
         return read_jsonl(path)
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(
+        path.read_text(encoding="utf-8"),
+        parse_constant=reject_non_finite_constant,
+    )
     if not isinstance(payload, dict):
         raise ValueError(f"{path}: expected one JSON object")
     return [payload]
