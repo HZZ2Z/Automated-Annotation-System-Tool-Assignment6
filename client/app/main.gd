@@ -3,7 +3,7 @@ extends Control
 @onready var open_button: Button = $MainVBox/TopToolbar/Open
 @onready var file_dialog: FileDialog = $OpenFileDialog
 @onready var image_view: TextureRect = $MainVBox/Workspace/MainSplit/CenterPanel/AnnotationCanvas/ImageView
-@onready var status_bar: Label = $StatusBar
+@onready var status_bar: Label = $MainVBox/StatusBar
 
 
 func _ready() -> void:
