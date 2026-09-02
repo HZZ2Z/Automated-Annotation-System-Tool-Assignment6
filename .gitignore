@@ -3,6 +3,7 @@
 /android/
 .venv/
 __pycache__/
+.pytest_cache/
 *.py[cod]
 generated_sample/
 exports/
