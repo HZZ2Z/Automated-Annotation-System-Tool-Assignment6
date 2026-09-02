@@ -1,8 +1,8 @@
 [gd_scene format=3 uid="uid://cef6fvr8knfvm"]
 
-[ext_resource type="Script" uid="uid://bj7tb2gyjp24q" path="res://scipts/main.gd" id="1_0fbet"]
+[ext_resource type="Script" path="res://client/app/main.gd" id="1_0fbet"]
 
-[node name="Control" type="Control" unique_id=240270367]
+[node name="Main" type="Control" unique_id=240270367]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -26,10 +26,7 @@ layout_mode = 2
 [node name="Open" type="Button" parent="MainVBox/TopToolbar" unique_id=2146014452]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
-text = "Open
-
-
-"
+text = "Open"
 
 [node name="Save" type="Button" parent="MainVBox/TopToolbar" unique_id=1548653746]
 custom_minimum_size = Vector2(100, 0)
@@ -46,7 +43,7 @@ custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 text = "Redo"
 
-[node name="Exprot" type="Button" parent="MainVBox/TopToolbar" unique_id=1814994853]
+[node name="Export" type="Button" parent="MainVBox/TopToolbar" unique_id=1814994853]
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 text = "Export"
@@ -67,8 +64,7 @@ layout_mode = 2
 [node name="Select" type="Button" parent="MainVBox/Workspace/ToolPanel/VBoxContainer" unique_id=932097402]
 custom_minimum_size = Vector2(0, 75)
 layout_mode = 2
-text = "Select
-"
+text = "Select"
 
 [node name="Move" type="Button" parent="MainVBox/Workspace/ToolPanel/VBoxContainer" unique_id=1029331237]
 custom_minimum_size = Vector2(0, 75)
@@ -79,11 +75,6 @@ text = "Move"
 custom_minimum_size = Vector2(0, 75)
 layout_mode = 2
 text = "Box"
-
-[node name="Polygon" type="Button" parent="MainVBox/Workspace/ToolPanel/VBoxContainer" unique_id=453072429]
-custom_minimum_size = Vector2(0, 75)
-layout_mode = 2
-text = "Polygon"
 
 [node name="Fill" type="Button" parent="MainVBox/Workspace/ToolPanel/VBoxContainer" unique_id=2042389045]
 custom_minimum_size = Vector2(0, 75)
@@ -129,8 +120,7 @@ layout_mode = 2
 
 [node name="TitleLabel" type="Label" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=1465200906]
 layout_mode = 2
-text = "Region Properties
-"
+text = "Region Properties"
 horizontal_alignment = 1
 
 [node name="Separator" type="HSeparator" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=1630667045]
@@ -143,6 +133,10 @@ horizontal_alignment = 1
 
 [node name="ClassOption" type="OptionButton" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=1672497037]
 layout_mode = 2
+
+[node name="ClassFreeText" type="LineEdit" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector"]
+layout_mode = 2
+placeholder_text = "Class"
 
 [node name="ConfidenceTitle" type="Label" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=374136637]
 layout_mode = 2
@@ -161,7 +155,7 @@ horizontal_alignment = 1
 
 [node name="TrackEdit" type="LineEdit" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=315868980]
 layout_mode = 2
-text = "[ T02            ]"
+placeholder_text = "Track ID"
 alignment = 1
 
 [node name="OpacityLabel" type="Label" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=531146800]
@@ -171,6 +165,10 @@ horizontal_alignment = 1
 
 [node name="OpacitySlide" type="HSlider" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=1645474648]
 layout_mode = 2
+min_value = 0.0
+max_value = 1.0
+step = 0.05
+value = 0.35
 
 [node name="VerifiedCheck" type="CheckBox" parent="MainVBox/Workspace/MainSplit/RightPanel/RegionInspector" unique_id=1163508384]
 layout_mode = 2
@@ -193,24 +191,39 @@ layout_mode = 2
 
 [node name="Previous" type="Button" parent="MainVBox/TimelinePanel/TimelineVBox/PlaybackControls" unique_id=1980174336]
 layout_mode = 2
+text = "Previous"
 
 [node name="Play" type="Button" parent="MainVBox/TimelinePanel/TimelineVBox/PlaybackControls" unique_id=210788530]
 layout_mode = 2
+text = "Play"
 
 [node name="Next" type="Button" parent="MainVBox/TimelinePanel/TimelineVBox/PlaybackControls" unique_id=599034841]
 layout_mode = 2
+text = "Next"
 
-[node name="FrameLabel" type="Button" parent="MainVBox/TimelinePanel/TimelineVBox/PlaybackControls" unique_id=1337815983]
+[node name="FrameLabel" type="Label" parent="MainVBox/TimelinePanel/TimelineVBox/PlaybackControls" unique_id=1337815983]
 layout_mode = 2
+text = "Frame 0 / 0"
 
-[node name="TimeLabel" type="Button" parent="MainVBox/TimelinePanel/TimelineVBox/PlaybackControls" unique_id=1707494033]
+[node name="TimeLabel" type="Label" parent="MainVBox/TimelinePanel/TimelineVBox/PlaybackControls" unique_id=1707494033]
 layout_mode = 2
+text = "00:00.000"
 
 [node name="FrameSlider" type="HSlider" parent="MainVBox/TimelinePanel/TimelineVBox" unique_id=530394014]
 layout_mode = 2
 
 [node name="BatchControls" type="HBoxContainer" parent="MainVBox/TimelinePanel/TimelineVBox" unique_id=560041323]
 layout_mode = 2
+
+[node name="StatusBar" type="Label" parent="." ]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 0
+text = "Ready"
 
 [node name="OpenFileDialog" type="FileDialog" parent="." unique_id=1393790148]
 title = "Open a File"

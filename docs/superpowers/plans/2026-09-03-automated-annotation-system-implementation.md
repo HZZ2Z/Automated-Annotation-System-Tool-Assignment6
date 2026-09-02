@@ -6,7 +6,7 @@
 
 **Architecture:** JSON Schema and shared fixtures define the contract. Python owns deterministic data generation, video normalization, similarity calculation, validation, diffing, and package construction; Godot owns indexed playback, bounded frame loading, rendering, editing, review state, and the user workflow. Godot discovers four local plugin stages and invokes Python work asynchronously where file processing is required.
 
-**Tech Stack:** Godot 4.4.1-stable with GDScript and Compatibility renderer; Python 3.10–3.14 (tested on 3.14.7); FFmpeg 6.1+; JSON Schema Draft 2020-12; NumPy; OpenCV headless; jsonschema; pytest; Mermaid.
+**Tech Stack:** Godot 4.7.2-stable with GDScript and Compatibility renderer; Python 3.10–3.14 (tested on 3.14.7); FFmpeg 6.1+; JSON Schema Draft 2020-12; NumPy; OpenCV headless; jsonschema; pytest; Mermaid.
 
 **Spec:** docs/superpowers/specs/2026-09-03-automated-annotation-system-design.md
 
@@ -126,7 +126,7 @@ Each file has one primary responsibility.
 - Create mechanically: requirements.lock
 
 **Interfaces:**
-- Consumes: Python 3.10–3.14, Godot 4.4.1-stable, FFmpeg 6.1+.
+- Consumes: Python 3.10–3.14, Godot 4.7.2-stable, FFmpeg 6.1+.
 - Produces: the annotool Python package, pytest command, Godot headless test command, and pinned dependency lock used by every later task.
 
 - [ ] **Step 1: Verify external executables**
@@ -140,7 +140,7 @@ ffmpeg -version
 git --version
 ~~~
 
-Expected: Python reports 3.10–3.14, Godot reports 4.4.1.stable, FFmpeg reports 6.1 or newer, and Git is available. If Godot is absent, install the official 4.4.1-stable Linux build. If FFmpeg is absent, install the distribution FFmpeg package and re-run the checks before continuing.
+Expected: Python reports 3.10–3.14, Godot reports 4.7.2.stable, FFmpeg reports 6.1 or newer, and Git is available. If Godot is absent, install the official 4.7.2-stable Linux build. If FFmpeg is absent, install the distribution FFmpeg package and re-run the checks before continuing.
 
 - [ ] **Step 2: Write the failing Python environment test**
 

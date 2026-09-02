@@ -1,3 +1,17 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+.venv/
+__pycache__/
+*.py[cod]
+generated_sample/
+exports/
+autosave/
+build/
+dist/
+*.tmp
+*.temp
+*.log
+*.import
+icon.svg.import
+docs/000*.png

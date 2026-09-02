@@ -3,6 +3,7 @@ extends Control
 @onready var open_button: Button = $MainVBox/TopToolbar/Open
 @onready var file_dialog: FileDialog = $OpenFileDialog
 @onready var image_view: TextureRect = $MainVBox/Workspace/MainSplit/CenterPanel/AnnotationCanvas/ImageView
+@onready var status_bar: Label = $StatusBar
 
 
 func _ready() -> void:
@@ -15,14 +16,17 @@ func _on_open_pressed() -> void:
 
 
 func _on_file_selected(path: String) -> void:
+	load_image_preview(path)
+
+
+func load_image_preview(path: String) -> Error:
 	var image := Image.new()
 	var err := image.load(path)
 
 	if err != OK:
-		print("Failed to load image: ", path)
-		return
+		status_bar.text = "Cannot load image: %s" % path.get_file()
+		return err
 
 	image_view.texture = ImageTexture.create_from_image(image)
-
-	print("Loaded: ", path)
-	print("Size: ", image.get_width(), " x ", image.get_height())
+	status_bar.text = "Loaded: %s (%d x %d)" % [path.get_file(), image.get_width(), image.get_height()]
+	return OK
