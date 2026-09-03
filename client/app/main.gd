@@ -378,7 +378,12 @@ func _on_timeline_frame_requested(index: int) -> void:
 
 
 func _on_explorer_frame_requested(index: int) -> void:
-	_on_timeline_frame_requested(index)
+	if not seek(index):
+		_dataset_explorer.select_frame(_current_frame)
+		return
+	pause()
+	if _edit_plugin != null:
+		_edit_plugin.cancel()
 
 
 func _on_unavailable_tool_requested(_tool_id: StringName) -> void:

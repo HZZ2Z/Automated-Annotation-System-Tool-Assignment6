@@ -48,20 +48,6 @@ func run(support, tree: SceneTree) -> void:
 	var edit_plugin = main.get("_edit_plugin")
 	support.expect_equal(tool_panel.call("get_active_tool"), &"select", "Main should show Select after opening a source")
 	support.expect_equal(edit_plugin.call("get_active_tool"), &"select", "the installed edit plugin should agree with the ToolPanel")
-	var store = main.get("_store")
-	var history = main.get("_history")
-	var record_before: Dictionary = store.get_corrected_record(main.get_current_frame())
-	var active_before: StringName = tool_panel.get_active_tool()
-	var can_undo_before: bool = history.can_undo()
-	(tool_panel.get_node("ToolGrid/Subtract") as Button).pressed.emit()
-	support.expect_equal(main.get_node("MainVBox/StatusBar").text, "待开发",
-		"reserved tools should produce the exact approved status")
-	support.expect_equal(tool_panel.get_active_tool(), active_before,
-		"reserved tools should preserve active edit mode")
-	support.expect_equal(store.get_corrected_record(main.get_current_frame()), record_before,
-		"reserved tools should not mutate annotation data")
-	support.expect_equal(history.can_undo(), can_undo_before,
-		"reserved tools should not create history")
 	(tool_panel.get_node("ToolGrid/Move") as Button).pressed.emit()
 	support.expect_equal(edit_plugin.call("get_active_tool"), &"move", "ToolPanel Move should update the edit plugin")
 	support.expect("Move" in _status(main), "tool changes should be visible in the status bar")
@@ -121,6 +107,77 @@ func run(support, tree: SceneTree) -> void:
 	support.expect_equal(main.call("get_current_frame"), 50, "texture failure should preserve current frame")
 	support.expect(viewport.get("_texture") == preserved_texture, "texture failure should preserve the visible texture")
 	support.expect_equal(viewport.get("_record"), preserved_record, "texture failure should preserve the visible annotation record")
+	var missing_frame_item := _frame_item(explorer, 117)
+	support.expect(missing_frame_item != null,
+		"missing-frame navigation should exercise a real explorer TreeItem")
+	main.play()
+	support.expect(main.is_playing(), "missing-frame playback setup should be active")
+	if missing_frame_item != null:
+		missing_frame_item.select(0)
+	await tree.process_frame
+	support.expect_equal(main.get_current_frame(), 50,
+		"failed explorer navigation should preserve the accepted frame")
+	support.expect(viewport.get("_texture") == preserved_texture,
+		"failed explorer navigation should preserve the visible texture")
+	support.expect_equal(viewport.get("_record"), preserved_record,
+		"failed explorer navigation should preserve the visible record")
+	support.expect_equal(_selected_frame(explorer), 50,
+		"failed explorer navigation should restore the accepted highlight")
+	support.expect(main.is_playing(),
+		"failed explorer navigation should preserve active playback")
+	main.pause()
+	support.expect(explorer.select_frame(50),
+		"gesture preservation setup should select the accepted frame")
+
+	var commit_press := InputEventMouseButton.new()
+	commit_press.button_index = MOUSE_BUTTON_LEFT
+	commit_press.pressed = true
+	var commit_release := InputEventMouseButton.new()
+	commit_release.button_index = MOUSE_BUTTON_LEFT
+	commit_release.pressed = false
+	main.call("_on_add_box_pressed")
+	main.call("_on_image_pointer_event", commit_press, Vector2(0.5, 0.5))
+	main.call("_on_image_pointer_event", commit_release, Vector2(2.5, 2.5))
+	var navigation_selection_before: String = main.call("_get_selected_region_id")
+	support.expect(not navigation_selection_before.is_empty(),
+		"gesture preservation setup should have a real selected region")
+	main.call("_on_add_box_pressed")
+	var gesture_press := InputEventMouseButton.new()
+	gesture_press.button_index = MOUSE_BUTTON_LEFT
+	gesture_press.pressed = true
+	var gesture_motion := InputEventMouseMotion.new()
+	gesture_motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+	main.call("_on_image_pointer_event", gesture_press, Vector2(0.25, 0.25))
+	main.call("_on_image_pointer_event", gesture_motion, Vector2(1.5, 1.5))
+	var navigation_store_record: Dictionary = main.get("_store").get_corrected_record(50)
+	var navigation_visible_preview: Dictionary = viewport.get("_record").duplicate(true)
+	var navigation_undo_before: int = main.get("_history").get_undo_count()
+	var navigation_redo_before: int = main.get("_history").get_redo_count()
+	support.expect_equal(edit_plugin.get("_drag_kind"), "add",
+		"gesture preservation setup should have an active edit gesture")
+	support.expect(not _find_region(navigation_visible_preview, "__new_box_preview").is_empty(),
+		"gesture preservation setup should display a transient preview")
+	if missing_frame_item != null:
+		missing_frame_item.select(0)
+	await tree.process_frame
+	support.expect_equal(main.get_current_frame(), 50,
+		"failed explorer navigation should retain the gesture frame")
+	support.expect_equal(_selected_frame(explorer), 50,
+		"failed explorer navigation with a gesture should restore the accepted highlight")
+	support.expect_equal(main.call("_get_selected_region_id"), navigation_selection_before,
+		"failed explorer navigation should preserve region selection")
+	support.expect_equal(main.get("_store").get_corrected_record(50), navigation_store_record,
+		"failed explorer navigation should preserve annotation data")
+	support.expect_equal(viewport.get("_record"), navigation_visible_preview,
+		"failed explorer navigation should preserve the visible edit preview")
+	support.expect_equal(edit_plugin.get("_drag_kind"), "add",
+		"failed explorer navigation should preserve the active edit gesture")
+	support.expect_equal(main.get("_history").get_undo_count(), navigation_undo_before,
+		"failed explorer navigation should preserve undo history")
+	support.expect_equal(main.get("_history").get_redo_count(), navigation_redo_before,
+		"failed explorer navigation should preserve redo history")
+	edit_plugin.cancel()
+	preserved_record = viewport.get("_record").duplicate(true)
 
 	var explorer_before: Dictionary = explorer.get("_view_model").duplicate(true)
 	var selected_before: int = _selected_frame(explorer)
@@ -168,6 +225,47 @@ func run(support, tree: SceneTree) -> void:
 	support.expect(not (main.get_node("MainVBox/TopToolbar/Undo") as Button).disabled, "a committed mouse edit should enable Undo")
 	support.expect_equal(_status(main), "Modified", "a committed mouse edit should show in-memory Modified state")
 	var added_region_id: String = main.call("_get_selected_region_id")
+	var image_edit_plugin = main.get("_edit_plugin")
+	main.call("_on_add_box_pressed")
+	var reserved_press := InputEventMouseButton.new()
+	reserved_press.button_index = MOUSE_BUTTON_LEFT
+	reserved_press.pressed = true
+	var reserved_motion := InputEventMouseMotion.new()
+	reserved_motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+	main.call("_on_image_pointer_event", reserved_press, Vector2(0.25, 0.25))
+	main.call("_on_image_pointer_event", reserved_motion, Vector2(1.5, 1.5))
+	var image_store = main.get("_store")
+	var image_history = main.get("_history")
+	var reserved_record_before: Dictionary = image_store.get_corrected_record(main.get_current_frame())
+	var reserved_visible_before: Dictionary = viewport.get("_record").duplicate(true)
+	var reserved_selection_before: String = main.call("_get_selected_region_id")
+	var reserved_active_before: StringName = tool_panel.get_active_tool()
+	var reserved_undo_before: int = image_history.get_undo_count()
+	var reserved_redo_before: int = image_history.get_redo_count()
+	support.expect_equal(reserved_selection_before, added_region_id,
+		"reserved-tool setup should retain a real selected region")
+	support.expect_equal(image_edit_plugin.get("_drag_kind"), "add",
+		"reserved-tool setup should have an active edit gesture")
+	support.expect(not _find_region(reserved_visible_before, "__new_box_preview").is_empty(),
+		"reserved-tool setup should display a transient preview")
+	(tool_panel.get_node("ToolGrid/Subtract") as Button).pressed.emit()
+	support.expect_equal(main.get_node("MainVBox/StatusBar").text, "待开发",
+		"reserved tools should produce the exact approved status")
+	support.expect_equal(tool_panel.get_active_tool(), reserved_active_before,
+		"reserved tools should preserve active edit mode")
+	support.expect_equal(main.call("_get_selected_region_id"), reserved_selection_before,
+		"reserved tools should preserve region selection")
+	support.expect_equal(image_store.get_corrected_record(main.get_current_frame()), reserved_record_before,
+		"reserved tools should not mutate annotation data")
+	support.expect_equal(viewport.get("_record"), reserved_visible_before,
+		"reserved tools should preserve the visible edit preview")
+	support.expect_equal(image_edit_plugin.get("_drag_kind"), "add",
+		"reserved tools should preserve the active edit gesture")
+	support.expect_equal(image_history.get_undo_count(), reserved_undo_before,
+		"reserved tools should preserve exact undo history")
+	support.expect_equal(image_history.get_redo_count(), reserved_redo_before,
+		"reserved tools should preserve exact redo history")
+	image_edit_plugin.cancel()
 	main.call("_on_geometry_requested", added_region_id, [0.5, 0.5, -1.0, 2.0])
 	support.expect(_status(main) != "Modified" and "positive" in _status(main).to_lower(), "a refused edit should remain visible even when the dataset was already modified")
 
@@ -224,6 +322,26 @@ func _selected_frame(explorer: Node) -> int:
 		return -1
 	var value: Variant = item.get_metadata(0)
 	return int(value) if typeof(value) == TYPE_INT else -1
+
+
+func _frame_item(explorer: Node, frame_index: int) -> TreeItem:
+	var tree := explorer.get_node("Tree") as Tree
+	return _find_frame_item(tree.get_root(), frame_index)
+
+
+func _find_frame_item(item: TreeItem, frame_index: int) -> TreeItem:
+	if item == null:
+		return null
+	var value: Variant = item.get_metadata(0)
+	if typeof(value) == TYPE_INT and int(value) == frame_index:
+		return item
+	var child := item.get_first_child()
+	while child != null:
+		var match := _find_frame_item(child, frame_index)
+		if match != null:
+			return match
+		child = child.get_next()
+	return null
 
 
 func _find_region(record: Dictionary, region_id: String) -> Dictionary:
