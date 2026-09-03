@@ -15,6 +15,7 @@ from annotool.contracts import (
     validate_manifest_semantics,
 )
 from annotool.jsonl import write_jsonl_atomic
+from annotool.similarity import normalized_mad
 
 
 FRAME_COUNT = 120
@@ -77,6 +78,8 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
     ground_truth: list[dict[str, Any]] = []
     frame_paths: list[Path] = []
     source_hasher = hashlib.sha256()
+    similarity_scores: list[float] = []
+    previous_image: np.ndarray | None = None
 
     for frame in range(FRAME_COUNT):
         regions = _clean_regions(frame, seed)
@@ -87,6 +90,9 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
         frame_bytes = frame_path.read_bytes()
         source_hasher.update(frame_bytes)
         frame_paths.append(frame_path)
+        if previous_image is not None:
+            similarity_scores.append(normalized_mad(previous_image, image))
+        previous_image = image
         ground_truth.append(
             {
                 "schema_version": 1,
@@ -118,6 +124,7 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
             }
             for frame in range(FRAME_COUNT)
         ],
+        "similarity_scores": similarity_scores,
         "model_version": "synthetic-model-v1",
         "taxonomy_version": TAXONOMY_VERSION,
     }

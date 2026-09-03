@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -12,6 +13,10 @@ from annotool.frame_source import decode_video
 
 
 ROOT = Path(__file__).resolve().parents[2]
+requires_ffmpeg = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg and ffprobe are required for video integration tests",
+)
 
 
 def make_three_frame_video(tmp_path: Path) -> Path:
@@ -43,6 +48,56 @@ def make_three_frame_video(tmp_path: Path) -> Path:
     return video_path
 
 
+def make_two_stream_video(tmp_path: Path) -> Path:
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    for index in range(1, 4):
+        assert cv2.imwrite(
+            str(first_dir / f"frame_{index:02d}.png"),
+            np.full((24, 32, 3), 30 * index, dtype=np.uint8),
+        )
+        assert cv2.imwrite(
+            str(second_dir / f"frame_{index:02d}.png"),
+            np.full((48, 64, 3), 60 * index, dtype=np.uint8),
+        )
+    video_path = tmp_path / "two-streams.mkv"
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "2",
+            "-i",
+            str(first_dir / "frame_%02d.png"),
+            "-framerate",
+            "2",
+            "-i",
+            str(second_dir / "frame_%02d.png"),
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:v:0",
+            "-c:v",
+            "ffv1",
+            "-disposition:v:0",
+            "0",
+            "-disposition:v:1",
+            "default",
+            str(video_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return video_path
+
+
+@requires_ffmpeg
 def test_decode_video_normalizes_a_real_lossless_video(tmp_path: Path) -> None:
     video_path = make_three_frame_video(tmp_path)
     output_dir = tmp_path / "normalized"
@@ -64,10 +119,26 @@ def test_decode_video_normalizes_a_real_lossless_video(tmp_path: Path) -> None:
     assert (manifest["width"], manifest["height"], manifest["nominal_fps"]) == (32, 24, 2.0)
     assert len(result["similarity_scores"]) == 2
     assert all(0.0 <= score <= 1.0 for score in result["similarity_scores"])
+    assert manifest["similarity_scores"] == result["similarity_scores"]
     for entry in manifest["frames"]:
         image = cv2.imread(str(output_dir / entry["image_path"]), cv2.IMREAD_COLOR)
         assert image is not None
         assert image.shape == (24, 32, 3)
+
+
+@requires_ffmpeg
+def test_decode_video_uses_first_stream_even_when_second_is_default(tmp_path: Path) -> None:
+    video_path = make_two_stream_video(tmp_path)
+    output_dir = tmp_path / "normalized"
+
+    result = decode_video(video_path, output_dir)
+
+    assert (result["width"], result["height"], result["frame_count"]) == (32, 24, 3)
+    assert len(result["similarity_scores"]) == 2
+    assert all(
+        cv2.imread(str(path), cv2.IMREAD_COLOR).shape == (24, 32, 3)
+        for path in sorted((output_dir / "frames").glob("*.png"))
+    )
 
 
 def test_decode_video_rejects_output_collision_without_overwriting(tmp_path: Path) -> None:
@@ -83,6 +154,7 @@ def test_decode_video_rejects_output_collision_without_overwriting(tmp_path: Pat
 
 
 @pytest.mark.parametrize("input_name", ["missing-video.mkv", "not-a-video.mkv"])
+@requires_ffmpeg
 def test_decode_video_rejects_missing_and_invalid_videos(tmp_path: Path, input_name: str) -> None:
     input_path = tmp_path / input_name
     if input_name == "not-a-video.mkv":
@@ -114,6 +186,7 @@ def test_cli_writes_failure_result_without_traceback(tmp_path: Path) -> None:
     assert json.loads(result_path.read_text(encoding="utf-8"))["success"] is False
 
 
+@requires_ffmpeg
 def test_cli_writes_success_result_for_normalized_video(tmp_path: Path) -> None:
     video_path = make_three_frame_video(tmp_path)
     output_dir = tmp_path / "normalized"

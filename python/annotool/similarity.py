@@ -57,8 +57,8 @@ def _validate_image(image: object, name: str) -> None:
         raise ValueError(f"{name} must be a 2D grayscale or 3D color image")
     if image.ndim == 3 and image.shape[2] not in (1, 3, 4):
         raise ValueError(f"{name} must have 1, 3, or 4 channels")
-    if not np.issubdtype(image.dtype, np.number) or not np.isfinite(image).all():
-        raise ValueError(f"{name} must contain finite numeric pixels")
+    if image.dtype != np.uint8:
+        raise TypeError(f"{name} must use uint8 pixels")
 
 
 def _channel_count(image: np.ndarray) -> int:

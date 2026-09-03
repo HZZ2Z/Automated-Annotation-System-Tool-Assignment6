@@ -26,6 +26,22 @@ def test_normalized_mad_is_finite_and_bounded_for_valid_images() -> None:
 
 
 @pytest.mark.parametrize(
+    "image",
+    [
+        np.zeros((2, 2, 3), dtype=np.complex64),
+        np.zeros((2, 2, 3), dtype=np.uint64),
+        np.zeros((2, 2, 3), dtype=np.float16),
+        np.full((2, 2, 3), 256.0, dtype=np.float32),
+    ],
+)
+def test_normalized_mad_rejects_unsupported_pixel_arrays(image: np.ndarray) -> None:
+    valid = np.zeros((2, 2, 3), dtype=np.uint8)
+
+    with pytest.raises((TypeError, ValueError)):
+        normalized_mad(image, valid)
+
+
+@pytest.mark.parametrize(
     ("left", "right", "error"),
     [
         ("not an image", np.zeros((2, 2, 3), dtype=np.uint8), TypeError),

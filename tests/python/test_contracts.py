@@ -68,6 +68,20 @@ def test_manifest_frame_gap_is_rejected_semantically() -> None:
     assert any("frames.1.frame" in error for error in errors)
 
 
+def test_manifest_similarity_scores_must_be_finite_and_match_transitions() -> None:
+    manifest = load(FIXTURES / "valid/dataset-manifest.json")
+    manifest["similarity_scores"] = [0.01]
+
+    assert validate_instance(manifest, "dataset-manifest-v1.schema.json") == []
+    assert validate_manifest_semantics(manifest) == []
+
+    manifest["similarity_scores"] = []
+    assert any("similarity_scores" in error for error in validate_manifest_semantics(manifest))
+
+    manifest["similarity_scores"] = [math.nan]
+    assert any("similarity_scores.0" in error for error in validate_manifest_semantics(manifest))
+
+
 def test_annotation_semantics_reject_duplicate_ids_and_out_of_bounds_geometry() -> None:
     record = load(FIXTURES / "valid/annotation-box.json")
     duplicate = dict(record["regions"][0])

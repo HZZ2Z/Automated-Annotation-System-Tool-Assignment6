@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 import cv2
+import numpy as np
 
 from annotool.contracts import validate_instance, validate_manifest_semantics
 from annotool.similarity import normalized_mad
@@ -49,16 +50,14 @@ def decode_video(input_path: Path, output_dir: Path) -> dict[str, Any]:
                 "video timestamp count does not match extracted frame count "
                 f"({len(probe['timestamps'])} != {len(frame_paths)})"
             )
-        images = _read_and_validate_images(frame_paths, probe["width"], probe["height"])
-        manifest = _build_manifest(input_path, probe, frame_paths)
+        similarity_scores = _validate_and_score_frames(
+            frame_paths, probe["width"], probe["height"]
+        )
+        manifest = _build_manifest(input_path, probe, frame_paths, similarity_scores)
         _validate_manifest(manifest)
-        similarity_scores = [
-            normalized_mad(images[index], images[index + 1])
-            for index in range(len(images) - 1)
-        ]
         _write_manifest(staging_dir / "manifest.json", manifest)
         staging_dir.replace(output_dir)
-        return {**manifest, "similarity_scores": similarity_scores}
+        return manifest
     except Exception:
         if staging_dir.exists():
             shutil.rmtree(staging_dir)
@@ -157,6 +156,8 @@ def _extract_frames(input_path: Path, frames_dir: Path) -> None:
         "error",
         "-i",
         str(input_path),
+        "-map",
+        "0:v:0",
         "-vsync",
         "0",
         str(frames_dir / "frame_%06d.png"),
@@ -197,20 +198,29 @@ def _normalize_frame_names(frames_dir: Path) -> list[Path]:
     return normalized_paths
 
 
-def _read_and_validate_images(frame_paths: list[Path], width: int, height: int) -> list[Any]:
-    images: list[Any] = []
+def _validate_and_score_frames(
+    frame_paths: list[Path], width: int, height: int
+) -> list[float]:
+    """Check one decoded image at a time and retain only adjacent frames."""
+    previous_image: np.ndarray | None = None
+    similarity_scores: list[float] = []
     for index, frame_path in enumerate(frame_paths):
         image = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
         if image is None or image.shape != (height, width, 3):
             raise ValueError(f"decoded frame {index} is unreadable or has invalid dimensions")
-        images.append(image)
-    return images
+        if previous_image is not None:
+            similarity_scores.append(normalized_mad(previous_image, image))
+        previous_image = image
+    return similarity_scores
 
 
 def _build_manifest(
-    input_path: Path, probe: dict[str, Any], frame_paths: list[Path]
+    input_path: Path,
+    probe: dict[str, Any],
+    frame_paths: list[Path],
+    similarity_scores: list[float],
 ) -> dict[str, Any]:
-    source_sha256 = hashlib.sha256(input_path.read_bytes()).hexdigest()
+    source_sha256 = _sha256_file(input_path)
     return {
         "schema_version": 1,
         "dataset_id": f"video-{source_sha256[:16]}",
@@ -228,9 +238,18 @@ def _build_manifest(
             }
             for index, frame_path in enumerate(frame_paths)
         ],
+        "similarity_scores": similarity_scores,
         "model_version": "none",
         "taxonomy_version": "none",
     }
+
+
+def _sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> None:

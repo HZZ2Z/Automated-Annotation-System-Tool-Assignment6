@@ -15,6 +15,7 @@ from annotool.contracts import (
 )
 from annotool.jsonl import read_jsonl
 from annotool.sample import generate_sample
+from annotool.similarity import contiguous_run
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -70,6 +71,8 @@ def test_sample_files_and_records_satisfy_contracts(
         360,
     )
     assert manifest["nominal_fps"] == 30.0
+    assert len(manifest["similarity_scores"]) == 119
+    assert all(0.0 <= score <= 1.0 for score in manifest["similarity_scores"])
 
     records = read_jsonl(sample_dir / "model_output.jsonl")
     assert len(records) == 120
@@ -135,17 +138,12 @@ def test_similar_run_is_near_identical_with_distinguishable_boundaries(
 ) -> None:
     sample_dir, _, _ = samples
 
-    def gray(frame: int) -> np.ndarray:
-        image = cv2.imread(str(sample_dir / f"frames/frame_{frame:06d}.png"))
-        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    manifest = json.loads((sample_dir / "manifest.json").read_text(encoding="utf-8"))
+    scores = manifest["similarity_scores"]
 
-    run_differences = [
-        float(np.mean(cv2.absdiff(gray(frame), gray(frame + 1))))
-        for frame in range(40, 59)
-    ]
-    assert max(run_differences) <= 1.0
-    assert float(np.mean(cv2.absdiff(gray(39), gray(40)))) > 2.0
-    assert float(np.mean(cv2.absdiff(gray(59), gray(60)))) > 2.0
+    assert contiguous_run(scores, keyframe=50, threshold=0.02) == (40, 59)
+    assert scores[39] >= 0.02
+    assert scores[59] >= 0.02
 
 
 def test_cli_rejects_existing_directory_without_overwriting(tmp_path: Path) -> None:

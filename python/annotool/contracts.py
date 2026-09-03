@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +91,24 @@ def validate_manifest_semantics(record: dict[str, Any]) -> list[str]:
         errors.append(
             f"frame_count: expected {len(frames)} entries, got {frame_count}"
         )
+
+    similarity_scores = record.get("similarity_scores")
+    if "similarity_scores" in record and isinstance(similarity_scores, list):
+        if type(frame_count) is int and len(similarity_scores) != frame_count - 1:
+            errors.append(
+                "similarity_scores: expected "
+                f"{frame_count - 1} entries, got {len(similarity_scores)}"
+            )
+        for index, score in enumerate(similarity_scores):
+            if (
+                isinstance(score, bool)
+                or not isinstance(score, (int, float))
+                or not math.isfinite(score)
+                or not 0.0 <= score <= 1.0
+            ):
+                errors.append(
+                    f"similarity_scores.{index}: must be a finite number between 0 and 1"
+                )
 
     seen_paths: set[str] = set()
     previous_time: float | int | None = None
