@@ -4,5 +4,6 @@ func open(_path: String) -> PackedStringArray: return PackedStringArray()
 func get_frame_count() -> int: return 0
 func get_frame_entry(_index: int) -> Dictionary: return {}
 func get_model_records() -> Array[Dictionary]: return []
+func get_manifest() -> Dictionary: return {}
 func load_texture(_index: int) -> Texture2D: return null
 func close() -> void: pass

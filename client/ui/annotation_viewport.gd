@@ -29,6 +29,17 @@ func _ready() -> void:
 	_sync_renderer()
 
 
+func set_renderer(renderer: Variant) -> void:
+	if not renderer is Object or renderer == null:
+		return
+	for method: String in ["set_state", "draw", "hit_test"]:
+		if not renderer.has_method(method):
+			return
+	_renderer = renderer
+	_sync_renderer()
+	queue_redraw()
+
+
 func set_texture(texture: Texture2D) -> void:
 	if _texture == texture:
 		return
