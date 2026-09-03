@@ -1,10 +1,11 @@
-[gd_scene load_steps=5 format=3 uid="uid://cef6fvr8knfvm"]
+[gd_scene load_steps=6 format=3 uid="uid://cef6fvr8knfvm"]
 
 [ext_resource type="Script" path="res://client/app/main.gd" id="1_main"]
 [ext_resource type="PackedScene" path="res://client/ui/annotation_viewport.tscn" id="2_viewport"]
 [ext_resource type="PackedScene" path="res://client/ui/inspector_panel.tscn" id="3_inspector"]
 [ext_resource type="PackedScene" path="res://client/ui/timeline.tscn" id="4_timeline"]
 [ext_resource type="PackedScene" path="res://client/ui/tool_panel.tscn" id="5_tools"]
+[ext_resource type="PackedScene" path="res://client/ui/dataset_explorer.tscn" id="6_explorer"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -56,31 +57,50 @@ disabled = true
 text = "Export"
 tooltip_text = "Available after feedback export is implemented"
 
-[node name="Workspace" type="HBoxContainer" parent="MainVBox"]
+[node name="WorkspaceSplit" type="HSplitContainer" parent="MainVBox"]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="ToolPanel" parent="MainVBox/Workspace" instance=ExtResource("5_tools")]
+[node name="DatasetExplorerContainer" type="PanelContainer" parent="MainVBox/WorkspaceSplit"]
+custom_minimum_size = Vector2(220, 0)
 layout_mode = 2
 
-[node name="ViewportPanel" type="PanelContainer" parent="MainVBox/Workspace"]
+[node name="DatasetExplorer" parent="MainVBox/WorkspaceSplit/DatasetExplorerContainer" instance=ExtResource("6_explorer")]
+layout_mode = 2
+
+[node name="ContentSplit" type="HSplitContainer" parent="MainVBox/WorkspaceSplit"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="ViewportPanel" type="PanelContainer" parent="MainVBox/WorkspaceSplit/ContentSplit"]
 custom_minimum_size = Vector2(500, 300)
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="AnnotationViewport" parent="MainVBox/Workspace/ViewportPanel" instance=ExtResource("2_viewport")]
+[node name="AnnotationViewport" parent="MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel" instance=ExtResource("2_viewport")]
 layout_mode = 2
 
-[node name="InspectorPanelContainer" type="PanelContainer" parent="MainVBox/Workspace"]
-custom_minimum_size = Vector2(240, 0)
+[node name="RightSidebarContainer" type="PanelContainer" parent="MainVBox/WorkspaceSplit/ContentSplit"]
+custom_minimum_size = Vector2(320, 0)
 layout_mode = 2
 
-[node name="InspectorColumn" type="VBoxContainer" parent="MainVBox/Workspace/InspectorPanelContainer"]
+[node name="RightSidebar" type="VBoxContainer" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer"]
 layout_mode = 2
 
-[node name="InspectorPanel" parent="MainVBox/Workspace/InspectorPanelContainer/InspectorColumn" instance=ExtResource("3_inspector")]
+[node name="InspectorScroll" type="ScrollContainer" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar"]
 layout_mode = 2
 size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="InspectorPanel" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/InspectorScroll" instance=ExtResource("3_inspector")]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Separator" type="HSeparator" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar"]
+layout_mode = 2
+
+[node name="ToolPanel" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar" instance=ExtResource("5_tools")]
+layout_mode = 2
 
 [node name="TimelinePanel" type="PanelContainer" parent="MainVBox"]
 custom_minimum_size = Vector2(0, 112)

@@ -68,7 +68,19 @@ func get_manifest():
 	if mode == "manifest_bad_fps":
 		fps = 0.0
 	var count := 2 if mode in ["valid_two", "records_count_mismatch", "records_hole", "entry_second_bad_frame", "entry_second_bad_time"] else 1
-	return {"frame_count": count, "nominal_fps": fps}
+	var frames: Array[Dictionary] = []
+	for index in range(count):
+		frames.append({
+			"frame": index,
+			"time_s": 1.25 + float(index),
+			"image_path": "fixture_%06d.png" % index,
+		})
+	return {
+		"dataset_id": "counting-source",
+		"frame_count": count,
+		"nominal_fps": fps,
+		"frames": frames,
+	}
 
 
 func load_texture(_index: int):

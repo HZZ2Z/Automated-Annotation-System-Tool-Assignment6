@@ -14,6 +14,14 @@
 
 详细拓扑见 [docs/architecture.md](docs/architecture.md)，稳定扩展契约见 [docs/plugin-api.md](docs/plugin-api.md)。
 
+## 当前前端布局
+
+应用采用可调整宽度的三栏标注工作区。左栏是当前已接受数据集的只读浏览器，只显示真实帧和确实存在的元数据文件；它不是通用文件管理器，不负责重命名、删除、拖拽、写入或独立打开文件。中央是实际的 `AnnotationViewport`。右栏上方是可滚动的区域属性 Inspector，下方固定一个无分类、四列平铺的 `2D Tools` 工具区。
+
+工具区按固定顺序提供十二个位置：Add Box、Subtract、Lasso、Fill、Erase、Close、Paint、Wipe、Region Growing、Live Wire、Selection、Move / Resize。其中只有 **Add Box、Fill、Erase、Selection、Move / Resize** 接入现有 Edit 插件。其余七项只是明确的预留控件；点击后只显示 `待开发`，不会改变当前工具或标注状态。
+
+该布局只调整客户端组合和导航呈现，不改变 Plugin API version 1，也不改变 Part 1 的 Source、Render、Edit、Feedback、Schema、Store、History 和 Python 契约。
+
 ## 支持的环境
 
 已核对的参考环境为：
@@ -86,12 +94,15 @@ Part 1.1 只有一个权威 Schema：`core/schemas/model_output_v1.schema.json`�
 
 ## 运行测试
 
+全新 clone 或新增 Godot 资源后，先执行一次无界面编辑器扫描，让 Godot 建立本地导入缓存：
+
 ```bash
+"$GODOT_BIN" --headless --editor --quit --path .
 .venv/bin/python -m pytest tests/python -q
 "$GODOT_BIN" --headless --path . --script tests/godot/test_runner.gd
 ```
 
-只有在摘要中没有 failure，且没有跳过 FFmpeg 检查时，才接受 Python 门禁。Godot 测试会故意打开损坏的图像 fixture 来验证可恢复错误，因此可能出现引擎解码警告；最后必须输出 `PASS: complete Godot test suite`，且进程退出状态必须为 0。
+第一条命令只生成被 `.gitignore` 排除的 `.godot/` 导入缓存，不产生提交文件。只有在摘要中没有 failure，且没有跳过 FFmpeg 检查时，才接受 Python 门禁。Godot 测试会故意打开损坏的图像 fixture 来验证可恢复错误，因此可能出现引擎解码警告；最后必须输出 `PASS: complete Godot test suite`，且进程退出状态必须为 0。
 
 ## 运行客户端
 
@@ -101,11 +112,13 @@ Part 1.1 只有一个权威 Schema：`core/schemas/model_output_v1.schema.json`�
 
 在 Godot 中点击 Run，然后按以下 Part 1 评审路径操作：
 
-1. 点击 **Open** 并选择单张图像（`.png`、`.jpg` 或 `.jpeg`）。确认它显示为 `Frame 0 (1 total)`。
-2. 依次激活 Select、Move、Box、Fill 和 Delete。左侧任意时刻只有一个工具保持按下；切换工具应取消未完成预览。
-3. 再次点击 **Open**，并选择归一化目录 `sample/assignment_v1`。确认第 0 帧和模型区域出现，属性面板位于右侧，播放/时间线控件位于底部。
-4. 尝试打开损坏或不支持的文件。状态栏必须说明拒绝原因，之前已加载的数据源仍可使用。
-5. 确认顶部仍包含打开、保存、撤销、重做和导出。保存和导出在 Part 1 边界中故意保持禁用。
+1. 点击 **Open** 并选择单张图像（`.png`、`.jpg` 或 `.jpeg`）。确认左侧浏览器显示真实图像和 `Frames (1)`，没有虚构元数据；中央显示图像和 `Frame 0 (1 total)`。
+2. 在右下工具区依次激活 Add Box、Fill、Erase、Selection 和 Move / Resize。任意时刻只允许一个可用工具保持按下，切换工具会取消未完成的预览。
+3. 依次点击 Subtract、Lasso、Close、Paint、Wipe、Region Growing 和 Live Wire，确认状态栏精确显示 `待开发`。这些是不可用的预留控件，不是已实现功能。
+4. 再次点击 **Open**，选择归一化目录 `sample/assignment_v1`。确认左侧帧数与 manifest 一致，只显示真实元数据文件；中央显示第 0 帧及模型区域，右侧 Inspector 可滚动，播放和时间线控件位于底部。
+5. 尝试打开损坏或不支持的文件。状态栏必须说明拒绝原因，之前的浏览器、图像、标注、帧位置和历史记录仍可使用。
+6. 调整工作区的两个分隔条，确认中央视口仍可用，并且没有引入停靠或文件管理行为。
+7. 确认顶部仍包含 Open、Save、Undo、Redo 和 Export。Save 和 Export 在 Part 1 边界中故意保持禁用。
 
 ### 当前键盘快捷键
 
@@ -130,7 +143,7 @@ Part 1.1 只有一个权威 Schema：`core/schemas/model_output_v1.schema.json`�
 
 - Source：`image_sequence_source` 读取归一化目录；`single_image_source` 将 PNG/JPG/JPEG 适配为一个索引帧。
 - Render：`canvas_region_renderer` 通过共享视口变换绘制图像坐标中的区域。
-- Edit：`basic_edit_tools` 拥有 Select/Move/Box/Fill/Delete 意图，并向有界 history 提交已验证命令。
+- Edit：`basic_edit_tools` 实现 Add Box、Fill、Erase、Selection、Move / Resize，并向有界 history 提交已验证命令；其余七个工具停留在界面层的 `待开发` 边界。
 - 导出/回传：`file_training_handoff` 验证修正快照，保留每条记录原有的帧来源，并原子写入单独的 JSONL。它不会覆盖 `model_output_v1.jsonl`；Part 1 中不启用其界面按钮。
 
 新增插件需要新插件目录和 `plugin.json`，不应修改 Registry。精确方法、生命周期、所有权规则和兼容性测试见 [docs/plugin-api.md](docs/plugin-api.md)。

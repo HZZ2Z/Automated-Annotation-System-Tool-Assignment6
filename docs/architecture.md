@@ -25,7 +25,47 @@ flowchart LR
 
 `source` 表示图像或帧来源，例如 `sample_v1`；`model_output_v1` 表示模型输出契约和文件版本。两者职责不同。
 
-## 3. Part 1.1 模块所有权
+## 3. 前端组成与交互边界
+
+应用外壳把真实标注视口放在两个可调整宽度的侧栏之间：
+
+```text
+MainVBox
+├── TopToolbar
+├── WorkspaceSplit
+│   ├── DatasetExplorerContainer
+│   │   └── DatasetExplorer
+│   └── ContentSplit
+│       ├── ViewportPanel
+│       │   └── AnnotationViewport
+│       └── RightSidebarContainer
+│           └── RightSidebar
+│               ├── InspectorScroll
+│               │   └── InspectorPanel
+│               ├── Separator
+│               └── ToolPanel
+├── TimelinePanel
+└── StatusBar
+```
+
+`DatasetExplorer` 只是 `AnnotationMain` 已接受数据源的只读投影，不是通用文件管理器。只有候选数据源事务完整提交后，它才接收由标签和路径组成的深拷贝视图模型。用户选择帧只发出一次导航请求；程序更新当前帧高亮时会抑制反向事件，避免反馈循环。单图模式只显示真实图像及一个索引帧；规范化目录显示 manifest 中的帧，并只列出确实存在的元数据文件。
+
+中央 `AnnotationViewport`、既有 Renderer 和图像坐标变换仍是唯一显示路径。右侧 `InspectorPanel` 位于可滚动区域中，其下方固定无分类、四列的十二槽工具区。Add Box、Fill、Erase、Selection、Move / Resize 进入现有 Edit 插件；Subtract、Lasso、Close、Paint、Wipe、Region Growing、Live Wire 只进入界面层不可用信号，精确显示 `待开发`，不会修改当前工具、选择、标注、手势或历史。
+
+各层所有权如下：
+
+- `AnnotationMain` 组装应用并执行失败原子的 Source 替换，不实现解码、绘制、编辑或导出细节。
+- `DatasetExplorer` 只拥有当前数据集的呈现和帧请求意图，不打开、验证、缓存、编辑或写入源数据。
+- `ToolPanel` 拥有声明式十二槽呈现表，并把可用编辑意图与不可用工具意图分开。
+- Source 插件拥有文件句柄和缓存，并返回 manifest 与模型记录的深拷贝。
+- `AnnotationStore` 分别拥有不可变模型基线和可编辑修正副本。
+- `AnnotationViewport` 负责输入到图像坐标的转换，并把绘制委托给 Render 插件。
+- Edit 插件只拥有临时手势状态；完成的修改作为一条命令进入 `CommandHistory`。
+- Feedback 插件验证修正快照并通过同目录临时文件加重命名原子发布独立 JSONL；它不覆盖 `model_output_v1.jsonl`。
+
+这一界面组合不改变 Plugin API version 1，也不改变 Part 1 的 Source、Render、Edit、Feedback、Schema、Store、History、Renderer 或 Python 边界。
+
+## 4. Part 1.1 模块所有权
 
 | 职责 | 权威文件 | 主要调用方 |
 |---|---|---|
@@ -43,9 +83,9 @@ flowchart LR
 
 `core/schemas/` 只存放 Part 1.1 的模型输出 Schema。帧源清单位于 `core/frame_source/`，属于 Part 1.3 的内部契约，不能把它解释成第二个 Part 1.1 Schema。
 
-## 4. 契约边界
+## 5. 契约边界
 
-### 4.1 权威 Schema
+### 5.1 权威 Schema
 
 `core/schemas/model_output_v1.schema.json` 使用 JSON Schema Draft 2020-12。顶层必填字段只有：
 
@@ -58,7 +98,7 @@ flowchart LR
 
 Schema 使用 `additionalProperties: false`，因此 `dataset_id`、`image_size`、`filled` 等项目内部字段不能混入模型输出记录。
 
-### 4.2 两端验证
+### 5.2 两端验证
 
 Python 入口 `python/validate_model_output.py` 可以作为脚本运行，也能导入以下函数：
 
@@ -69,7 +109,7 @@ Python 入口 `python/validate_model_output.py` 可以作为脚本运行，也�
 
 Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段规则。两端共用 `core/fixtures` 中的代表性样例，避免规则漂移。预期错误以数组返回并带字段路径，例如 `regions.0.class`；不会通过未捕获异常使界面崩溃。
 
-### 4.3 不可变模型输出
+### 5.3 不可变模型输出
 
 `AnnotationStore.load_model_records()` 先验证全部候选记录，只有全部通过才一次性替换状态。加载时执行深拷贝，并分别保存：
 
@@ -80,7 +120,7 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 
 `filled` 只用于界面显示。它可以存在于编辑中的修正记录，但 `_model_output_projection()` 会在契约验证和规范快照边界删除它，避免污染模型输出契约。
 
-### 4.4 版本化文件读取
+### 5.4 版本化文件读取
 
 图像序列数据源的规则如下：
 
@@ -93,7 +133,7 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 
 这是一条故障隔离边界：候选数据只有在完整验证后才替换当前状态，格式错误只形成可读错误，不传播为界面崩溃。
 
-## 5. 其他项目模块
+## 6. 其他项目模块
 
 | 模块 | 主要位置 | 职责 |
 |---|---|---|
@@ -104,7 +144,7 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 | 样本生成 | `python/annotool/sample.py`、`python/make_sample_input.py` | 生成 `sample_v1` 和 `model_output_v1.jsonl` |
 | 帧源归一化 | `python/annotool/frame_source.py`、`python/frame_source.py` | 将视频解码为索引帧和内部数据清单 |
 
-## 6. 常见修改导航
+## 7. 常见修改导航
 
 | 我要修改什么 | 首要文件 | 必须同步检查 | 重点测试 |
 |---|---|---|---|
@@ -119,7 +159,7 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 
 修改 V1 规则时，先对照 Assignment，再决定是否仍是兼容的 V1。不要先套用额外设计规范，也不要凭计划文档增加老师未要求的字段。
 
-## 7. 验证命令
+## 8. 验证命令
 
 从仓库根目录运行：
 
