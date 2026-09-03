@@ -1,52 +1,19 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=2 format=3]
 
 [ext_resource type="Script" path="res://client/ui/tool_panel.gd" id="1_tool_panel"]
 
-[sub_resource type="ButtonGroup" id="ButtonGroup_tools"]
-allow_unpress = false
-
 [node name="ToolPanel" type="VBoxContainer"]
-custom_minimum_size = Vector2(100, 0)
-theme_override_constants/separation = 4
+custom_minimum_size = Vector2(320, 226)
+theme_override_constants/separation = 6
 script = ExtResource("1_tool_panel")
 
-[node name="Select" type="Button" parent="."]
-custom_minimum_size = Vector2(100, 64)
+[node name="Title" type="Label" parent="."]
 layout_mode = 2
-toggle_mode = true
-button_pressed = true
-button_group = SubResource("ButtonGroup_tools")
-text = "Select"
-tooltip_text = "Select a region"
+text = "2D Tools"
+horizontal_alignment = 1
 
-[node name="Move" type="Button" parent="."]
-custom_minimum_size = Vector2(100, 64)
+[node name="ToolGrid" type="GridContainer" parent="."]
 layout_mode = 2
-toggle_mode = true
-button_group = SubResource("ButtonGroup_tools")
-text = "Move"
-tooltip_text = "Move or resize the selected region"
-
-[node name="Box" type="Button" parent="."]
-custom_minimum_size = Vector2(100, 64)
-layout_mode = 2
-toggle_mode = true
-button_group = SubResource("ButtonGroup_tools")
-text = "Box"
-tooltip_text = "Drag to add a box"
-
-[node name="Fill" type="Button" parent="."]
-custom_minimum_size = Vector2(100, 64)
-layout_mode = 2
-toggle_mode = true
-button_group = SubResource("ButtonGroup_tools")
-text = "Fill"
-tooltip_text = "Toggle fill on a selected region"
-
-[node name="Delete" type="Button" parent="."]
-custom_minimum_size = Vector2(100, 64)
-layout_mode = 2
-toggle_mode = true
-button_group = SubResource("ButtonGroup_tools")
-text = "Delete"
-tooltip_text = "Delete a selected region"
+columns = 4
+theme_override_constants/h_separation = 4
+theme_override_constants/v_separation = 4
