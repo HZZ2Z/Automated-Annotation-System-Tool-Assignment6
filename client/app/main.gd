@@ -630,7 +630,11 @@ func _build_dataset_explorer_view_model(path: String, manifest: Dictionary) -> D
 			})
 	var artifacts: Array[Dictionary] = []
 	if is_directory:
-		for label: String in ["manifest.json", "model_output.jsonl"]:
+		var artifact_labels: Array[String] = ["manifest.json"]
+		var model_version := str(manifest.get("model_version", "none"))
+		if model_version == "model_output_v1":
+			artifact_labels.append("%s.jsonl" % model_version)
+		for label: String in artifact_labels:
 			var artifact_path := absolute.path_join(label)
 			if FileAccess.file_exists(artifact_path):
 				artifacts.append({"label": label, "path": artifact_path})

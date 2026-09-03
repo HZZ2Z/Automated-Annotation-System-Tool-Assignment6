@@ -20,7 +20,7 @@ func run(support, tree: SceneTree) -> void:
 		await tree.process_frame
 		return
 
-	var source_root := _make_source(support, "valid", 120, 0.01)
+	var source_root := _make_source(support, "valid", 120, 0.01, "model_output_v1")
 	var errors: PackedStringArray = main.call("open_source", source_root)
 	support.expect_equal(errors, PackedStringArray(), "a normalized 120-frame directory should open")
 	support.expect_equal(main.call("get_current_frame"), 0, "opening should select frame zero")
@@ -33,6 +33,10 @@ func run(support, tree: SceneTree) -> void:
 		"successful open should populate the accepted dataset")
 	support.expect_equal(explorer.get("_view_model").get("frames", []).size(), 120,
 		"explorer should contain every accepted manifest frame")
+	support.expect_equal(explorer.get("_view_model").get("artifacts"), [
+		{"label": "manifest.json", "path": source_root.path_join("manifest.json")},
+		{"label": "model_output_v1.jsonl", "path": source_root.path_join("model_output_v1.jsonl")},
+	], "explorer should show the versioned model output selected by the accepted manifest")
 	support.expect_equal(_selected_frame(explorer), 0,
 		"successful open should highlight frame zero")
 
@@ -277,7 +281,13 @@ func run(support, tree: SceneTree) -> void:
 	_cleanup(support)
 
 
-func _make_source(support, label: String, frame_count: int, nominal_fps: float) -> String:
+func _make_source(
+	support,
+	label: String,
+	frame_count: int,
+	nominal_fps: float,
+	model_version: String = "none",
+) -> String:
 	var root := "%s%s-%d-%d" % [TEMP_PREFIX, label, OS.get_process_id(), Time.get_ticks_usec()]
 	_temp_paths.append(root)
 	DirAccess.make_dir_recursive_absolute(root.path_join("frames"))
@@ -299,10 +309,20 @@ func _make_source(support, label: String, frame_count: int, nominal_fps: float) 
 		"frame_count": frame_count,
 		"nominal_fps": nominal_fps,
 		"frames": entries,
-		"model_version": "none",
+		"model_version": model_version,
 		"taxonomy_version": "none",
 	}
 	_write_text(root.path_join("manifest.json"), JSON.stringify(manifest, "  ") + "\n")
+	if model_version != "none":
+		var model_records := PackedStringArray()
+		for index in range(frame_count):
+			model_records.append(JSON.stringify({
+				"schema_version": 1,
+				"source": manifest["source_name"],
+				"frame": index,
+				"regions": [],
+			}))
+		_write_text(root.path_join("%s.jsonl" % model_version), "\n".join(model_records) + "\n")
 	return root
 
 
