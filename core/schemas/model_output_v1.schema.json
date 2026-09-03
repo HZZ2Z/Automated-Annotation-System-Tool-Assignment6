@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "model_output_v1.schema.json",
+  "title": "Model Output V1 Per-Image Annotation Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source", "frame", "regions"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "source": {"type": "string", "minLength": 1},
+    "frame": {"type": "integer", "minimum": 0},
+    "time_s": {"type": "number", "minimum": 0},
+    "regions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/region"}
+    }
+  },
+  "$defs": {
+    "region": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "class", "kind"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "class": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "minLength": 1},
+        "box": {
+          "type": "array",
+          "minItems": 4,
+          "prefixItems": [
+            {"type": "number", "minimum": 0},
+            {"type": "number", "minimum": 0},
+            {"type": "number", "exclusiveMinimum": 0},
+            {"type": "number", "exclusiveMinimum": 0}
+          ],
+          "items": false
+        },
+        "polygon": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "prefixItems": [
+              {"type": "number", "minimum": 0},
+              {"type": "number", "minimum": 0}
+            ],
+            "items": false
+          }
+        },
+        "conf": {"type": "number", "minimum": 0, "maximum": 1},
+        "track_id": {"type": ["string", "null"]}
+      },
+      "anyOf": [
+        {"required": ["box"]},
+        {"required": ["polygon"]}
+      ]
+    }
+  }
+}

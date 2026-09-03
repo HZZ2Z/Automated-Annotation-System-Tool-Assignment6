@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "source": "sample_v1",
+  "frame": 0,
+  "regions": [
+    {
+      "id": "short",
+      "class": "grasper",
+      "kind": "instrument",
+      "box": [0, 0, 1]
+    },
+    {
+      "id": "zero",
+      "class": "grasper",
+      "kind": "instrument",
+      "box": [0, 0, 0, 1]
+    }
+  ]
+}

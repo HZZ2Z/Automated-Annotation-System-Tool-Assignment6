@@ -53,15 +53,30 @@ def _load_taxonomy_class_kinds() -> dict[str, str]:
     }
 
 
-def validate_instance(data: dict[str, Any], schema_name: str) -> list[str]:
+def validate_instance(data: object, schema_name: str) -> list[str]:
     """Return deterministic, field-specific JSON Schema validation errors."""
     validator = StrictDraft202012Validator(load_schema(schema_name))
     errors = sorted(validator.iter_errors(data), key=lambda item: list(item.path))
     return [
-        f"{'.'.join(str(part) for part in error.absolute_path) or '$'}: "
+        f"{_validation_error_path(error)}: "
         f"{error.message} [{error.validator}]"
         for error in errors
     ]
+
+
+def _validation_error_path(error: Any) -> str:
+    """Point required/additional-property errors at the actual field."""
+    parts = [str(part) for part in error.absolute_path]
+    if error.validator == "required":
+        missing = error.message.split("'", 2)[1:2]
+        if missing:
+            parts.append(missing[0])
+    elif error.validator == "additionalProperties" and isinstance(error.instance, dict):
+        properties = error.schema.get("properties", {})
+        unexpected = sorted(set(error.instance) - set(properties))
+        if unexpected:
+            parts.append(unexpected[0])
+    return ".".join(parts) or "$"
 
 
 def validate_annotation_semantics(record: dict[str, Any]) -> list[str]:

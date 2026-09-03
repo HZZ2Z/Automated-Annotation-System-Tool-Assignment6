@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source": "sample_v1",
+  "frame": 0,
+  "unexpected": true,
+  "regions": [
+    {
+      "id": "bad",
+      "class": "grasper",
+      "kind": "instrument",
+      "box": [0, 0, 1, 1],
+      "conf": 1.1,
+      "track_id": 7,
+      "filled": false
+    }
+  ]
+}
