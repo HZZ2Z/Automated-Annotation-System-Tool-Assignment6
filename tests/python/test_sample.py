@@ -9,18 +9,17 @@ import numpy as np
 import pytest
 
 from annotool.contracts import (
-    validate_annotation_semantics,
     validate_instance,
     validate_manifest_semantics,
 )
 from annotool.jsonl import read_jsonl
 from annotool.sample import generate_sample
 from annotool.similarity import contiguous_run
+from validate_model_output import validate_model_output
 
 
 ROOT = Path(__file__).resolve().parents[2]
 EXPECTED_DEFECTS = ROOT / "tests/expected/sample-defects.json"
-TAXONOMY = ROOT / "core/taxonomy/classes.json"
 
 
 @pytest.fixture(scope="module")
@@ -34,25 +33,18 @@ def samples(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict[str, s
     return first_dir, first_hashes, second_dir
 
 
-def test_sample_is_deterministic(
-    samples: tuple[Path, dict[str, str], Path],
-) -> None:
+def test_sample_is_deterministic(samples: tuple[Path, dict[str, str], Path]) -> None:
     first_dir, first_hashes, second_dir = samples
-
     assert json.loads((first_dir / "hashes.json").read_text(encoding="utf-8")) == first_hashes
     assert json.loads((second_dir / "hashes.json").read_text(encoding="utf-8")) == first_hashes
-    assert set(first_hashes) == {
-        *(f"frames/frame_{frame:06d}.png" for frame in range(120)),
-        "manifest.json",
-        "model_output.jsonl",
-        "expected_defects.json",
-    }
+    assert "model_output_v1.jsonl" in first_hashes
+    assert "model_output.jsonl" not in first_hashes
+    assert not (first_dir / "model_output.jsonl").exists()
     for relative_path, digest in first_hashes.items():
-        content = (first_dir / relative_path).read_bytes()
-        assert hashlib.sha256(content).hexdigest() == digest
+        assert hashlib.sha256((first_dir / relative_path).read_bytes()).hexdigest() == digest
 
 
-def test_sample_files_and_records_satisfy_contracts(
+def test_sample_model_output_matches_assignment_contract(
     samples: tuple[Path, dict[str, str], Path],
 ) -> None:
     sample_dir, _, _ = samples
@@ -74,23 +66,25 @@ def test_sample_files_and_records_satisfy_contracts(
     assert len(manifest["similarity_scores"]) == 119
     assert all(0.0 <= score <= 1.0 for score in manifest["similarity_scores"])
 
-    records = read_jsonl(sample_dir / "model_output.jsonl")
+    model_path = sample_dir / "model_output_v1.jsonl"
+    assert validate_model_output(model_path) == []
+    records = read_jsonl(model_path)
     assert len(records) == 120
-    taxonomy = json.loads(TAXONOMY.read_text(encoding="utf-8"))
-    valid_classes = {(entry["id"], entry["kind"]) for entry in taxonomy["classes"]}
     region_counts = []
     for frame, record in enumerate(records):
+        assert record["schema_version"] == 1
+        assert record["source"] == "sample_v1"
         assert record["frame"] == frame
-        assert validate_instance(record, "annotation-v1.schema.json") == []
-        assert validate_annotation_semantics(record) == []
-        assert all(
-            (region["class"], region["kind"]) in valid_classes
-            for region in record["regions"]
-        )
+        assert set(record) == {"schema_version", "source", "frame", "time_s", "regions"}
+        assert all("filled" not in region for region in record["regions"])
+        assert "dataset_id" not in record
+        assert "image_size" not in record
         region_counts.append(len(record["regions"]))
     assert set(region_counts) == {19, 20, 21}
     assert all(19 <= count <= 21 for count in region_counts)
     assert not any(sample_dir.glob("*ground_truth*"))
+    assert manifest["source_name"] == "sample_v1"
+    assert manifest["model_version"] == "model_output_v1"
 
 
 def test_sample_contains_required_defects(
@@ -109,7 +103,10 @@ def test_sample_contains_required_defects(
     }
     assert defects["similar_run"] == [40, 59]
 
-    records = {record["frame"]: record for record in read_jsonl(sample_dir / "model_output.jsonl")}
+    records = {
+        record["frame"]: record
+        for record in read_jsonl(sample_dir / "model_output_v1.jsonl")
+    }
     by_id = {
         frame: {region["id"]: region for region in record["regions"]}
         for frame, record in records.items()

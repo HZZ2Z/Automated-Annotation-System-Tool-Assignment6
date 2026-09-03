@@ -10,7 +10,6 @@ import cv2
 import numpy as np
 
 from annotool.contracts import (
-    validate_annotation_semantics,
     validate_instance,
     validate_manifest_semantics,
 )
@@ -26,7 +25,8 @@ SIMILAR_START = 40
 SIMILAR_END = 59
 
 DATASET_ID = "annotool-sample"
-MODEL_SOURCE = "model_output_v1"
+SOURCE_ID = "sample_v1"
+MODEL_VERSION = "model_output_v1"
 TAXONOMY_VERSION = "sample-taxonomy-v1"
 
 _REGION_CLASSES = (
@@ -96,11 +96,9 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
         ground_truth.append(
             {
                 "schema_version": 1,
-                "dataset_id": DATASET_ID,
-                "source": MODEL_SOURCE,
+                "source": SOURCE_ID,
                 "frame": frame,
                 "time_s": frame / FPS,
-                "image_size": [WIDTH, HEIGHT],
                 "regions": regions,
             }
         )
@@ -110,7 +108,7 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
     manifest = {
         "schema_version": 1,
         "dataset_id": DATASET_ID,
-        "source_name": f"synthetic-sample-seed-{seed}",
+        "source_name": SOURCE_ID,
         "source_sha256": source_hasher.hexdigest(),
         "width": WIDTH,
         "height": HEIGHT,
@@ -125,13 +123,13 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
             for frame in range(FRAME_COUNT)
         ],
         "similarity_scores": similarity_scores,
-        "model_version": "synthetic-model-v1",
+        "model_version": MODEL_VERSION,
         "taxonomy_version": TAXONOMY_VERSION,
     }
 
     _validate_outputs(manifest, model_output)
     manifest_path = output_dir / "manifest.json"
-    annotation_path = output_dir / "model_output.jsonl"
+    annotation_path = output_dir / f"{MODEL_VERSION}.jsonl"
     defects_path = output_dir / "expected_defects.json"
     _write_json(manifest_path, manifest)
     write_jsonl_atomic(annotation_path, model_output)
@@ -161,7 +159,6 @@ def _clean_regions(frame: int, seed: int) -> list[dict[str, Any]]:
             "kind": _CLASS_KINDS[class_id],
             "conf": round(0.72 + (index % 7) * 0.035, 3),
             "track_id": f"sample-t{index + 1:02d}",
-            "filled": index % 4 == 0,
         }
         if index < 16:
             region["box"] = [x, y, width, height]
@@ -271,7 +268,6 @@ def _plant_defects(
         "box": [500, 275, 72, 48],
         "conf": 0.41,
         "track_id": None,
-        "filled": False,
     }
     model_output[72]["regions"].append(hallucinated_region)
     defects.append(
@@ -330,11 +326,11 @@ def _validate_outputs(manifest: dict[str, Any], records: list[dict[str, Any]]) -
         raise ValueError("invalid generated manifest: " + "; ".join(manifest_errors))
 
     for frame, record in enumerate(records):
-        errors = validate_instance(record, "annotation-v1.schema.json")
-        errors.extend(validate_annotation_semantics(record))
+        errors = validate_instance(record, "model_output_v1.schema.json")
         if errors:
             raise ValueError(
-                f"invalid generated annotation at frame {frame}: " + "; ".join(errors)
+                f"invalid generated model output at frame {frame}: "
+                + "; ".join(errors)
             )
 
 

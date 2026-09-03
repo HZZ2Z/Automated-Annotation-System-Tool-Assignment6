@@ -47,8 +47,7 @@
         "kind": "region",
         "box": [500, 275, 72, 48],
         "conf": 0.41,
-        "track_id": null,
-        "filled": false
+        "track_id": null
       }
     },
     {
