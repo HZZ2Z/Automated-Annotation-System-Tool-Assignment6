@@ -47,9 +47,10 @@ class StagedEditContextBridge:
 @onready var _open_button: Button = $MainVBox/TopToolbar/Open
 @onready var _undo_button: Button = $MainVBox/TopToolbar/Undo
 @onready var _redo_button: Button = $MainVBox/TopToolbar/Redo
-@onready var _tool_panel = $MainVBox/Workspace/ToolPanel
-@onready var _viewport = $MainVBox/Workspace/ViewportPanel/AnnotationViewport
-@onready var _inspector = $MainVBox/Workspace/InspectorPanelContainer/InspectorColumn/InspectorPanel
+@onready var _dataset_explorer = $MainVBox/WorkspaceSplit/DatasetExplorerContainer/DatasetExplorer
+@onready var _viewport = $MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport
+@onready var _inspector = $MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/InspectorScroll/InspectorPanel
+@onready var _tool_panel = $MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/ToolPanel
 @onready var _previous_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/Previous
 @onready var _play_pause_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/PlayPause
 @onready var _next_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/Next

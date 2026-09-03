@@ -20,7 +20,7 @@ func _test_keyboard_preview_and_text_focus(support, tree: SceneTree) -> void:
 	var main: Variant = await _mounted_main(tree)
 	var root := _make_source(support, "keyboard", 40, 30)
 	support.expect_equal(main.open_source(root), PackedStringArray(), "keyboard fixture should open")
-	var viewport = main.get_node("MainVBox/Workspace/ViewportPanel/AnnotationViewport")
+	var viewport = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport")
 	viewport.grab_focus()
 	await tree.process_frame
 	await _dispatch_key(tree, KEY_A, 97)
@@ -36,7 +36,7 @@ func _test_keyboard_preview_and_text_focus(support, tree: SceneTree) -> void:
 	support.expect_equal(_status(main), "Modified", "keyboard-add commit should update the Modified indicator")
 
 	var edit_plugin = main.get("_edit_plugin")
-	var line_edit := main.get_node("MainVBox/Workspace/InspectorPanelContainer/InspectorColumn/InspectorPanel/Fields/ClassFreeText") as LineEdit
+	var line_edit := main.get_node("MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/InspectorScroll/InspectorPanel/Fields/ClassFreeText") as LineEdit
 	var text_before := line_edit.text
 	line_edit.grab_focus()
 	line_edit.caret_column = line_edit.text.length()
@@ -55,7 +55,7 @@ func _test_candidate_cleanup_and_transactional_edit(support, tree: SceneTree) ->
 	support.expect_equal(main.open_source(root), PackedStringArray(), "transaction baseline should open")
 	support.expect(main.seek(1), "transaction baseline should start from old frame one")
 	main.call("_set_selected_region", "old-selection")
-	var viewport = main.get_node("MainVBox/Workspace/ViewportPanel/AnnotationViewport")
+	var viewport = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport")
 	var old_source = main.get("_source")
 	var old_store = main.get("_store")
 	var old_history = main.get("_history")
@@ -136,7 +136,7 @@ func _test_source_boundary_validation(support, tree: SceneTree) -> void:
 	var root := _make_source(support, "boundary", 40, 30)
 	support.expect_equal(main.open_source(root), PackedStringArray(), "boundary baseline should open")
 	var baseline_frame: int = main.get_current_frame()
-	var viewport = main.get_node("MainVBox/Workspace/ViewportPanel/AnnotationViewport")
+	var viewport = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport")
 	var baseline_texture = viewport.get("_texture")
 	var modes := [
 		"manifest_empty",
@@ -183,7 +183,7 @@ func _test_configured_plugin_ids(support, tree: SceneTree) -> void:
 	for setting: String in ["source_plugin_id", "render_plugin_id", "edit_plugin_id"]:
 		var main = MAIN_SCENE.instantiate()
 		main.set(setting, "missing-" + setting)
-		var viewport = main.get_node("MainVBox/Workspace/ViewportPanel/AnnotationViewport")
+		var viewport = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport")
 		var fallback_renderer = viewport.get("_renderer")
 		tree.root.add_child(main)
 		await tree.process_frame

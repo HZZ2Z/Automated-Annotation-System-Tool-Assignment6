@@ -22,9 +22,11 @@ func run(support, tree: SceneTree) -> void:
 		"MainVBox/TopToolbar/Undo",
 		"MainVBox/TopToolbar/Redo",
 		"MainVBox/TopToolbar/Export",
-		"MainVBox/Workspace/ToolPanel",
-		"MainVBox/Workspace/ViewportPanel/AnnotationViewport",
-		"MainVBox/Workspace/InspectorPanelContainer/InspectorColumn/InspectorPanel",
+		"MainVBox/WorkspaceSplit/DatasetExplorerContainer/DatasetExplorer",
+		"MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport",
+		"MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/InspectorScroll/InspectorPanel",
+		"MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/Separator",
+		"MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/ToolPanel",
 		"MainVBox/TimelinePanel/TimelineColumn/Transport/Previous",
 		"MainVBox/TimelinePanel/TimelineColumn/Transport/PlayPause",
 		"MainVBox/TimelinePanel/TimelineColumn/Transport/Next",
@@ -44,14 +46,38 @@ func run(support, tree: SceneTree) -> void:
 		"MainVBox/TopToolbar/Previous",
 		"MainVBox/TopToolbar/PlayPause",
 		"MainVBox/TopToolbar/Next",
-		"MainVBox/Workspace/MainSplit/CenterPanel/AnnotationCanvas/ImageView",
-		"MainVBox/Workspace/MainSplit/RightPanel/RegionInspector",
 	]:
 		support.expect(main.get_node_or_null(removed_path) == null, "obsolete duplicate UI should be absent: %s" % removed_path)
 
-	var viewport = main.get_node_or_null("MainVBox/Workspace/ViewportPanel/AnnotationViewport")
-	var inspector = main.get_node_or_null("MainVBox/Workspace/InspectorPanelContainer/InspectorColumn/InspectorPanel")
-	var tool_panel = main.get_node_or_null("MainVBox/Workspace/ToolPanel")
+	var workspace := main.get_node("MainVBox/WorkspaceSplit") as HSplitContainer
+	var content := main.get_node("MainVBox/WorkspaceSplit/ContentSplit") as HSplitContainer
+	var explorer_container := main.get_node(
+		"MainVBox/WorkspaceSplit/DatasetExplorerContainer"
+	) as PanelContainer
+	var right_container := main.get_node(
+		"MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer"
+	) as PanelContainer
+	var inspector_scroll := main.get_node(
+		"MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/InspectorScroll"
+	) as ScrollContainer
+	var tool_panel := main.get_node(
+		"MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/ToolPanel"
+	)
+	support.expect(workspace != null and content != null,
+		"workspace should use nested resizable split containers")
+	support.expect(explorer_container.custom_minimum_size.x >= 220.0,
+		"dataset explorer should retain its approved minimum width")
+	support.expect(right_container.custom_minimum_size.x >= 320.0,
+		"right sidebar should retain its approved minimum width")
+	support.expect(inspector_scroll.size_flags_vertical == Control.SIZE_EXPAND_FILL,
+		"inspector should scroll and yield fixed space to the tool grid")
+	support.expect(tool_panel.get_parent().name == "RightSidebar",
+		"ToolPanel should sit below the right inspector")
+	support.expect(main.get_node_or_null("MainVBox/" + "Workspace/ToolPanel") == null,
+		"the obsolete left edit strip should be absent")
+
+	var viewport = main.get_node_or_null("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport")
+	var inspector = main.get_node_or_null("MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/InspectorScroll/InspectorPanel")
 	var timeline = main.get_node_or_null("MainVBox/TimelinePanel/TimelineColumn/Timeline")
 	support.expect(viewport != null and viewport.has_method("set_state") and viewport.has_method("set_renderer"), "workspace should instantiate the real AnnotationViewport API")
 	support.expect(inspector != null and inspector.has_method("populate"), "workspace should instantiate the real InspectorPanel API")
@@ -84,8 +110,6 @@ func run(support, tree: SceneTree) -> void:
 		support.expect("*.mp4" in filters, "SourceDialog should expose common video selection for the documented conversion path")
 	var playback_timer := main.get_node_or_null("PlaybackTimer") as Timer
 	support.expect(playback_timer != null and playback_timer.one_shot == false and playback_timer.is_stopped(), "PlaybackTimer should start stopped and repeat")
-	var inspector_container := main.get_node_or_null("MainVBox/Workspace/InspectorPanelContainer") as PanelContainer
-	support.expect(inspector_container != null and inspector_container.custom_minimum_size.x >= 240.0, "inspector should retain the approved minimum width")
 	var timeline_panel := main.get_node_or_null("MainVBox/TimelinePanel") as PanelContainer
 	support.expect(timeline_panel != null and timeline_panel.custom_minimum_size.y > 0.0, "timeline should retain a fixed minimum height")
 

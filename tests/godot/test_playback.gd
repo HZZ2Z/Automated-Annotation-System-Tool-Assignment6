@@ -26,7 +26,7 @@ func run(support, tree: SceneTree) -> void:
 	support.expect_equal(main.call("get_current_frame"), 0, "opening should select frame zero")
 	support.expect_equal(_label(main, "FrameLabel"), "Frame 0 (120 total)", "frame label should show zero-based current index and total frame count")
 	support.expect_equal(_label(main, "TimeLabel"), "00:00.125", "initial timestamp should come from manifest entry zero")
-	var tool_panel = main.get_node("MainVBox/Workspace/ToolPanel")
+	var tool_panel = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/ToolPanel")
 	var edit_plugin = main.get("_edit_plugin")
 	support.expect_equal(tool_panel.call("get_active_tool"), &"select", "Main should show Select after opening a source")
 	support.expect_equal(edit_plugin.call("get_active_tool"), &"select", "the installed edit plugin should agree with the ToolPanel")
@@ -42,9 +42,9 @@ func run(support, tree: SceneTree) -> void:
 	preview_motion.button_mask = MOUSE_BUTTON_MASK_LEFT
 	main.call("_on_image_pointer_event", preview_press, Vector2(0.5, 0.5))
 	main.call("_on_image_pointer_event", preview_motion, Vector2(2.5, 2.5))
-	support.expect(not _find_region(main.get_node("MainVBox/Workspace/ViewportPanel/AnnotationViewport").get("_record"), "__new_box_preview").is_empty(), "Main should display a Box preview before commit")
+	support.expect(not _find_region(main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport").get("_record"), "__new_box_preview").is_empty(), "Main should display a Box preview before commit")
 	(tool_panel.get_node("ToolGrid/Select") as Button).pressed.emit()
-	support.expect(_find_region(main.get_node("MainVBox/Workspace/ViewportPanel/AnnotationViewport").get("_record"), "__new_box_preview").is_empty(), "switching tools through Main should cancel the Box preview")
+	support.expect(_find_region(main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport").get("_record"), "__new_box_preview").is_empty(), "switching tools through Main should cancel the Box preview")
 	support.expect_equal(main.get("_history").get_undo_count(), 0, "cancelled Main preview should not create edit history")
 
 	support.expect(not main.call("step", -1), "previous at frame zero should be a clamped no-op")
@@ -80,7 +80,7 @@ func run(support, tree: SceneTree) -> void:
 	support.expect(not main.call("is_playing"), "play at the final frame should remain stopped")
 
 	support.expect(main.call("seek", 50), "state-preservation setup seek should succeed")
-	var viewport = main.get_node("MainVBox/Workspace/ViewportPanel/AnnotationViewport")
+	var viewport = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport")
 	var preserved_texture: Texture2D = viewport.get("_texture")
 	var preserved_record: Dictionary = viewport.get("_record").duplicate(true)
 	DirAccess.remove_absolute(source_root.path_join("frames/frame_000117.png"))
