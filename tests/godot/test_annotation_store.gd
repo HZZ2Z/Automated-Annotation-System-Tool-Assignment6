@@ -36,6 +36,14 @@ class ChangeDatasetCommand extends RefCounted:
 			store.replace_corrected_record(frame, previous)
 
 
+class ApplyOnlyCommand extends RefCounted:
+	var apply_called := false
+
+	func apply(_store) -> PackedStringArray:
+		apply_called = true
+		return PackedStringArray()
+
+
 static func run(support: TestSupport) -> void:
 	var store_script := ResourceLoader.load(STORE_PATH)
 	var command_script := ResourceLoader.load(COMMAND_PATH)
@@ -50,6 +58,7 @@ static func run(support: TestSupport) -> void:
 	_test_transactional_replace_and_dirty_frames(store_script, support)
 	_test_snapshot_and_digest(store_script, support)
 	_test_command_base(command_script, store_script, support)
+	_test_history_requires_reversible_commands(history_script, store_script, support)
 	_test_history_execute_undo_redo(history_script, store_script, support)
 	_test_history_failures_and_capacity(history_script, store_script, support)
 
@@ -190,6 +199,28 @@ static func _test_command_base(command_script, store_script, support: TestSuppor
 	var command = command_script.new()
 	support.expect(not command.apply(store).is_empty(), "base edit command should report unimplemented apply")
 	command.revert(store)
+
+
+static func _test_history_requires_reversible_commands(history_script, store_script, support: TestSupport) -> void:
+	var store = store_script.new()
+	store.load_model_records(_two_records())
+	var history = history_script.new()
+	var before: Dictionary = store.get_corrected_record(0)
+	var apply_only := ApplyOnlyCommand.new()
+	var apply_only_errors: PackedStringArray = history.execute(apply_only, store)
+	support.expect(not apply_only_errors.is_empty(), "apply-only command should be rejected")
+	support.expect(" ".join(apply_only_errors).contains("revert"), "apply-only rejection should clearly require revert(store)")
+	support.expect(not apply_only.apply_called, "rejected apply-only command should not be applied")
+	support.expect_equal(store.get_corrected_record(0), before, "rejected apply-only command should not mutate the store")
+	support.expect_equal(history.get_undo_count(), 0, "rejected apply-only command should not enter undo history")
+	support.expect_equal(history.get_redo_count(), 0, "rejected apply-only command should not alter redo history")
+
+	for malformed in [null, 42, "command", {}]:
+		var errors: PackedStringArray = history.execute(malformed, store)
+		support.expect(not errors.is_empty(), "null and non-object commands should return a clear error")
+	support.expect_equal(store.get_corrected_record(0), before, "malformed commands should not mutate the store")
+	support.expect_equal(history.get_undo_count(), 0, "malformed commands should not alter undo history")
+	support.expect_equal(history.get_redo_count(), 0, "malformed commands should not alter redo history")
 
 
 static func _test_history_execute_undo_redo(history_script, store_script, support: TestSupport) -> void:

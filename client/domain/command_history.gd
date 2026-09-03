@@ -12,8 +12,10 @@ func _init(requested_capacity: int = 200) -> void:
 
 
 func execute(command: Variant, store: Variant) -> PackedStringArray:
-	if command == null or not command.has_method("apply"):
-		return PackedStringArray(["command: expected an object with apply(store)"])
+	if not command is Object:
+		return PackedStringArray(["command: expected an object with apply(store) and revert(store)"])
+	if not command.has_method("apply") or not command.has_method("revert"):
+		return PackedStringArray(["command: expected apply(store) and revert(store)"])
 	var result: Variant = command.apply(store)
 	if not result is PackedStringArray:
 		return PackedStringArray(["command: apply must return PackedStringArray"])
