@@ -223,6 +223,7 @@ func open_source(path: String) -> PackedStringArray:
 		_show_errors("Cannot open source", edit_errors)
 		return edit_errors
 
+	var candidate_explorer_view_model := _build_dataset_explorer_view_model(path, candidate_manifest)
 	pause()
 	_deactivate_edit(_edit_plugin)
 	if _source != null:
@@ -244,6 +245,8 @@ func open_source(path: String) -> PackedStringArray:
 	_refresh_labels(first_entry)
 	_refresh_toolbar()
 	_set_status("Loaded %s (%d frames)" % [str(_manifest.get("dataset_id", "dataset")), candidate_frame_count])
+	_dataset_explorer.populate(candidate_explorer_view_model)
+	_dataset_explorer.select_frame(0)
 	return PackedStringArray()
 
 
@@ -272,6 +275,7 @@ func set_frame(index: int) -> bool:
 	_timeline.set_current_frame(index)
 	_refresh_labels(entry)
 	_refresh_toolbar()
+	_dataset_explorer.select_frame(index)
 	return true
 
 
@@ -371,6 +375,18 @@ func _on_timeline_frame_requested(index: int) -> void:
 	if _edit_plugin != null:
 		_edit_plugin.cancel()
 	seek(index)
+
+
+func _on_explorer_frame_requested(index: int) -> void:
+	_on_timeline_frame_requested(index)
+
+
+func _on_unavailable_tool_requested(_tool_id: StringName) -> void:
+	_set_status("待开发")
+
+
+func _on_explorer_view_model_rejected(message: String) -> void:
+	_set_status(message)
 
 
 func _on_region_selected(region_id: String) -> void:
@@ -591,6 +607,39 @@ func _source_plugin_id_for_path(path: String) -> String:
 	return ""
 
 
+func _build_dataset_explorer_view_model(path: String, manifest: Dictionary) -> Dictionary:
+	var absolute := ProjectSettings.globalize_path(path).simplify_path().trim_suffix("/")
+	var is_directory := DirAccess.dir_exists_absolute(absolute)
+	var frames: Array[Dictionary] = []
+	var frame_values: Variant = manifest.get("frames", [])
+	if frame_values is Array:
+		for position in range(frame_values.size()):
+			var entry_value: Variant = frame_values[position]
+			if not entry_value is Dictionary:
+				continue
+			var relative := str(entry_value.get("image_path", ""))
+			frames.append({
+				"index": position,
+				"label": relative,
+				"path": absolute.path_join(relative) if is_directory else absolute,
+			})
+	var artifacts: Array[Dictionary] = []
+	if is_directory:
+		for label: String in ["manifest.json", "model_output.jsonl"]:
+			var artifact_path := absolute.path_join(label)
+			if FileAccess.file_exists(artifact_path):
+				artifacts.append({"label": label, "path": artifact_path})
+	var display_name := str(manifest.get("dataset_id", absolute.get_file()))
+	if not is_directory:
+		display_name = absolute.get_file()
+	return {
+		"display_name": display_name,
+		"source_path": absolute,
+		"frames": frames,
+		"artifacts": artifacts,
+	}
+
+
 func _connect_ui() -> void:
 	_open_button.pressed.connect(func(): _source_dialog.popup_centered_ratio(0.8))
 	_previous_button.pressed.connect(_on_previous_pressed)
@@ -601,7 +650,10 @@ func _connect_ui() -> void:
 	_opacity_slider.value_changed.connect(_on_opacity_changed)
 	_undo_button.pressed.connect(_on_undo_pressed)
 	_redo_button.pressed.connect(_on_redo_pressed)
+	_dataset_explorer.frame_requested.connect(_on_explorer_frame_requested)
+	_dataset_explorer.view_model_rejected.connect(_on_explorer_view_model_rejected)
 	_tool_panel.tool_requested.connect(_on_tool_requested)
+	_tool_panel.unavailable_tool_requested.connect(_on_unavailable_tool_requested)
 	_source_dialog.file_selected.connect(_on_file_selected)
 	_source_dialog.dir_selected.connect(_on_directory_selected)
 	_playback_timer.timeout.connect(_on_playback_timeout)
@@ -654,15 +706,15 @@ func _sync_tool_panel() -> void:
 func _tool_display_name(tool_id: StringName) -> String:
 	match tool_id:
 		&"select":
-			return "Select"
+			return "Selection"
 		&"move":
-			return "Move"
+			return "Move / Resize"
 		&"box":
-			return "Box"
+			return "Add Box"
 		&"fill":
 			return "Fill"
 		&"delete":
-			return "Delete"
+			return "Erase"
 	return str(tool_id)
 
 

@@ -135,6 +135,17 @@ func _test_source_boundary_validation(support, tree: SceneTree) -> void:
 	var main: Variant = await _mounted_main(tree)
 	var root := _make_source(support, "boundary", 40, 30)
 	support.expect_equal(main.open_source(root), PackedStringArray(), "boundary baseline should open")
+	var explorer = main.get_node(
+		"MainVBox/WorkspaceSplit/DatasetExplorerContainer/DatasetExplorer"
+	)
+	var accepted_model: Dictionary = explorer.get("_view_model").duplicate(true)
+	explorer.populate({"display_name": "broken"})
+	support.expect("Dataset explorer" in _status(main),
+		"invalid explorer data should produce a user-facing status")
+	support.expect(_status(main).length() <= 180,
+		"invalid explorer data should produce a bounded status")
+	support.expect_equal(explorer.get("_view_model"), accepted_model,
+		"invalid explorer data should preserve the accepted tree")
 	var baseline_frame: int = main.get_current_frame()
 	var viewport = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport")
 	var baseline_texture = viewport.get("_texture")

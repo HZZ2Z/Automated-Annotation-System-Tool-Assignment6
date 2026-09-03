@@ -26,10 +26,42 @@ func run(support, tree: SceneTree) -> void:
 	support.expect_equal(main.call("get_current_frame"), 0, "opening should select frame zero")
 	support.expect_equal(_label(main, "FrameLabel"), "Frame 0 (120 total)", "frame label should show zero-based current index and total frame count")
 	support.expect_equal(_label(main, "TimeLabel"), "00:00.125", "initial timestamp should come from manifest entry zero")
+	var explorer = main.get_node(
+		"MainVBox/WorkspaceSplit/DatasetExplorerContainer/DatasetExplorer"
+	)
+	support.expect_equal(explorer.get("_view_model").get("display_name"), "valid",
+		"successful open should populate the accepted dataset")
+	support.expect_equal(explorer.get("_view_model").get("frames", []).size(), 120,
+		"explorer should contain every accepted manifest frame")
+	support.expect_equal(_selected_frame(explorer), 0,
+		"successful open should highlight frame zero")
+
+	explorer.frame_requested.emit(5)
+	support.expect_equal(main.get_current_frame(), 5,
+		"explorer navigation should seek through AnnotationMain")
+	support.expect_equal(_selected_frame(explorer), 5,
+		"explorer highlight should agree with the accepted frame")
+	support.expect(main.seek(7), "direct seek should succeed")
+	support.expect_equal(_selected_frame(explorer), 7,
+		"direct seek should update the explorer without a second request")
 	var tool_panel = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/ToolPanel")
 	var edit_plugin = main.get("_edit_plugin")
 	support.expect_equal(tool_panel.call("get_active_tool"), &"select", "Main should show Select after opening a source")
 	support.expect_equal(edit_plugin.call("get_active_tool"), &"select", "the installed edit plugin should agree with the ToolPanel")
+	var store = main.get("_store")
+	var history = main.get("_history")
+	var record_before: Dictionary = store.get_corrected_record(main.get_current_frame())
+	var active_before: StringName = tool_panel.get_active_tool()
+	var can_undo_before: bool = history.can_undo()
+	(tool_panel.get_node("ToolGrid/Subtract") as Button).pressed.emit()
+	support.expect_equal(main.get_node("MainVBox/StatusBar").text, "待开发",
+		"reserved tools should produce the exact approved status")
+	support.expect_equal(tool_panel.get_active_tool(), active_before,
+		"reserved tools should preserve active edit mode")
+	support.expect_equal(store.get_corrected_record(main.get_current_frame()), record_before,
+		"reserved tools should not mutate annotation data")
+	support.expect_equal(history.can_undo(), can_undo_before,
+		"reserved tools should not create history")
 	(tool_panel.get_node("ToolGrid/Move") as Button).pressed.emit()
 	support.expect_equal(edit_plugin.call("get_active_tool"), &"move", "ToolPanel Move should update the edit plugin")
 	support.expect("Move" in _status(main), "tool changes should be visible in the status bar")
@@ -47,6 +79,7 @@ func run(support, tree: SceneTree) -> void:
 	support.expect(_find_region(main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport").get("_record"), "__new_box_preview").is_empty(), "switching tools through Main should cancel the Box preview")
 	support.expect_equal(main.get("_history").get_undo_count(), 0, "cancelled Main preview should not create edit history")
 
+	support.expect(main.call("seek", 0), "lower-bound setup seek should succeed")
 	support.expect(not main.call("step", -1), "previous at frame zero should be a clamped no-op")
 	support.expect_equal(main.call("get_current_frame"), 0, "lower-bound step should retain frame zero")
 	support.expect(main.call("step", 1), "next should select frame one")
@@ -89,10 +122,16 @@ func run(support, tree: SceneTree) -> void:
 	support.expect(viewport.get("_texture") == preserved_texture, "texture failure should preserve the visible texture")
 	support.expect_equal(viewport.get("_record"), preserved_record, "texture failure should preserve the visible annotation record")
 
+	var explorer_before: Dictionary = explorer.get("_view_model").duplicate(true)
+	var selected_before: int = _selected_frame(explorer)
 	var failed_root := _make_source(support, "corrupt-replacement", 1, 24.0)
 	_write_text(failed_root.path_join("frames/frame_000000.png"), "not image data")
 	var replacement_errors: PackedStringArray = main.call("open_source", failed_root)
 	support.expect(not replacement_errors.is_empty(), "replacement with a corrupt first texture should fail")
+	support.expect_equal(explorer.get("_view_model"), explorer_before,
+		"failed source replacement should preserve the explorer tree")
+	support.expect_equal(_selected_frame(explorer), selected_before,
+		"failed source replacement should preserve explorer selection")
 	support.expect_equal(main.call("get_current_frame"), 50, "failed replacement should preserve current frame")
 	support.expect(viewport.get("_texture") == preserved_texture, "failed replacement should preserve current texture")
 	support.expect_equal(viewport.get("_record"), preserved_record, "failed replacement should preserve current record")
@@ -106,6 +145,17 @@ func run(support, tree: SceneTree) -> void:
 	support.expect(viewport.get("_texture") != null and viewport.get("_texture").get_width() == 4, "raw image selection should display its decoded texture")
 	support.expect_equal(_label(main, "FrameLabel"), "Frame 0 (1 total)", "raw image should use the same indexed frame UI")
 	support.expect("Loaded" in _status(main), "raw image selection should report a successful load")
+	var image_model: Dictionary = explorer.get("_view_model")
+	support.expect_equal(image_model.get("frames", []).size(), 1,
+		"a standalone image should expose one frame")
+	support.expect_equal(image_model.get("display_name"), raw_file.get_file(),
+		"a standalone image should identify the real opened file")
+	var image_frames: Array = image_model.get("frames", [])
+	var image_label: Variant = image_frames[0].get("label") if not image_frames.is_empty() else null
+	support.expect_equal(image_label, raw_file.get_file(),
+		"a standalone image should show its real file name")
+	support.expect_equal(image_model.get("artifacts"), [],
+		"a standalone image should not invent disk metadata")
 	main.call("_on_add_box_pressed")
 	var press := InputEventMouseButton.new()
 	press.button_index = MOUSE_BUTTON_LEFT
@@ -165,6 +215,15 @@ func _label(main: Node, node_name: String) -> String:
 
 func _status(main: Node) -> String:
 	return str(main.get_node("MainVBox/StatusBar").text)
+
+
+func _selected_frame(explorer: Node) -> int:
+	var tree := explorer.get_node("Tree") as Tree
+	var item := tree.get_selected()
+	if item == null:
+		return -1
+	var value: Variant = item.get_metadata(0)
+	return int(value) if typeof(value) == TYPE_INT else -1
 
 
 func _find_region(record: Dictionary, region_id: String) -> Dictionary:
