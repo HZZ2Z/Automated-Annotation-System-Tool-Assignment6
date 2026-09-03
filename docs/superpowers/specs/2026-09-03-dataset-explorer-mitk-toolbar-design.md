@@ -144,12 +144,15 @@ populate(view_model: Dictionary) -> void
 select_frame(index: int) -> bool
 clear() -> void
 signal frame_requested(index: int)
+signal view_model_rejected(message: String)
 ```
 
 - Clicking a valid frame emits `frame_requested` exactly once.
 - Programmatic `select_frame` updates highlight and visibility without emitting navigation.
 - Artifact rows are informational and do not open an editor.
 - Invalid indices are refused without changing the current selection.
+- An invalid view model leaves the existing tree unchanged and emits one bounded
+  `view_model_rejected` message for `AnnotationMain` to show in the status bar.
 
 ### 4.4 Transactional synchronization
 
