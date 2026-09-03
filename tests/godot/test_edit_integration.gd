@@ -30,6 +30,7 @@ func run(support: TestSupport, tree: SceneTree) -> void:
 		"taxonomy": {"classes": [{"id": "unknown", "kind": "region"}]},
 	}
 	support.expect(plugin.activate(context).is_empty(), "real viewport integration context should activate")
+	support.expect(plugin.set_active_tool(&"move").is_empty(), "real viewport integration should select Move explicitly")
 	viewport.region_selected.connect(func(region_id: String): selected[0] = region_id)
 	viewport.image_pointer_event.connect(func(event: InputEvent, image_position: Vector2): plugin.handle_pointer(event, image_position))
 	viewport.call("set_record", store.get_corrected_record(0))
@@ -107,6 +108,7 @@ func run(support: TestSupport, tree: SceneTree) -> void:
 	selected[0] = "box-1"
 	plugin.begin_add_box()
 	replacement.edit_cancel_requested.emit()
+	plugin.set_active_tool(&"move")
 	_mouse_button(replacement, true, Vector2(15, 15))
 	_mouse_motion(replacement, Vector2(16, 15), MOUSE_BUTTON_MASK_LEFT)
 	_mouse_button(replacement, false, Vector2(16, 15))

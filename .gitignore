@@ -2,10 +2,12 @@
 .godot/
 /android/
 .venv/
+.tools/
 __pycache__/
 .pytest_cache/
 *.py[cod]
 generated_sample/
+sample/
 exports/
 autosave/
 build/

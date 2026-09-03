@@ -9,6 +9,7 @@ const RELABEL_COMMAND := preload("res://client/domain/commands/relabel_region_co
 const TRACK_COMMAND := preload("res://client/domain/commands/set_track_id_command.gd")
 const FILL_COMMAND := preload("res://client/domain/commands/toggle_fill_command.gd")
 const HANDLE_TOLERANCE_VIEWPORT_PX := 8.0
+const TOOL_IDS: Array[StringName] = [&"select", &"move", &"box", &"fill", &"delete"]
 
 var _store: Variant
 var _history: Variant
@@ -19,6 +20,7 @@ var _selected_region_setter := Callable()
 var _status_callback := Callable()
 var _taxonomy: Dictionary = {}
 var _active := false
+var _active_tool: StringName = &"select"
 
 var _add_pointer_mode := false
 var _drag_kind := ""
@@ -37,6 +39,7 @@ func activate(context: Dictionary) -> PackedStringArray:
 	_disconnect_viewport_cancel()
 	_clear_transient()
 	_active = false
+	_active_tool = &"select"
 	var errors := PackedStringArray()
 	var status_candidate := _context_callable(context, ["status", "status_callback"])
 	_status_callback = Callable()
@@ -84,6 +87,26 @@ func deactivate() -> void:
 	_status_callback = Callable()
 	_taxonomy = {}
 	_active = false
+	_active_tool = &"select"
+
+
+func set_active_tool(tool_id: StringName) -> PackedStringArray:
+	if not _active:
+		return PackedStringArray(["edit plugin is not active"])
+	if tool_id not in TOOL_IDS:
+		var errors := PackedStringArray(["Unsupported edit tool: %s" % tool_id])
+		_report_errors(errors)
+		return errors
+	if tool_id == _active_tool:
+		return PackedStringArray()
+	cancel()
+	_active_tool = tool_id
+	_add_pointer_mode = tool_id == &"box"
+	return PackedStringArray()
+
+
+func get_active_tool() -> StringName:
+	return _active_tool
 
 
 func handle_pointer(event: InputEvent, image_position: Vector2) -> void:
@@ -163,6 +186,7 @@ func begin_add_box() -> void:
 	if not _active:
 		return
 	cancel()
+	_active_tool = &"box"
 	_add_pointer_mode = true
 	_report("Drag to create a box; press Escape to cancel")
 
@@ -217,12 +241,24 @@ func _begin_pointer_drag(event: InputEventMouseButton, image_position: Vector2) 
 	var record := _record_for_frame(frame)
 	if frame < 0 or record.is_empty():
 		return
-	if _add_pointer_mode:
+	if _active_tool == &"box":
 		_add_pointer_mode = false
 		_drag_kind = "add"
 		_drag_frame = frame
 		_drag_start = image_position
 		_drag_before = record.duplicate(true)
+		return
+	var hit := _hit_test(record, image_position)
+	if _active_tool == &"select":
+		_set_selected_region(str(hit.get("id", "")))
+		return
+	if _active_tool == &"fill":
+		_apply_fill_tool(frame, record, hit)
+		return
+	if _active_tool == &"delete":
+		_apply_delete_tool(frame, record, hit)
+		return
+	if _active_tool != &"move":
 		return
 	var selected_id := _selected_region_id()
 	var selected_region := _find_region(record, selected_id)
@@ -236,7 +272,6 @@ func _begin_pointer_drag(event: InputEventMouseButton, image_position: Vector2) 
 			_drag_start = image_position
 			_drag_before = record.duplicate(true)
 			return
-	var hit := _hit_test(record, image_position)
 	if hit.is_empty():
 		_set_selected_region("")
 		return
@@ -252,6 +287,28 @@ func _begin_pointer_drag(event: InputEventMouseButton, image_position: Vector2) 
 	_drag_region_id = region_id
 	_drag_start = image_position
 	_drag_before = record.duplicate(true)
+
+
+func _apply_fill_tool(frame: int, record: Dictionary, hit: Dictionary) -> void:
+	if hit.is_empty():
+		_set_selected_region("")
+		return
+	var region_id := str(hit.get("id", ""))
+	_set_selected_region(region_id)
+	var errors := _execute(FILL_COMMAND.new(frame, record, region_id, not bool(hit.get("filled", false))), frame)
+	if not errors.is_empty():
+		_set_selected_region(region_id)
+
+
+func _apply_delete_tool(frame: int, record: Dictionary, hit: Dictionary) -> void:
+	if hit.is_empty():
+		_set_selected_region("")
+		return
+	var region_id := str(hit.get("id", ""))
+	_set_selected_region(region_id)
+	var errors := _execute(DELETE_COMMAND.new(frame, record, region_id), frame)
+	if errors.is_empty():
+		_set_selected_region("")
 
 
 func _update_pointer_preview(image_position: Vector2) -> void:

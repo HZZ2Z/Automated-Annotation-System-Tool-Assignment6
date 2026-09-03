@@ -19,6 +19,8 @@ static func run(support) -> void:
 	support.expect(_contains(errors, "missing method get_manifest for stage source"), "source plugins without authoritative manifest access should be rejected")
 	support.expect(registry.get_plugin("edit", "missing-edit-ui") == null, "edit plugins missing Inspector operations must not register")
 	support.expect(_contains(errors, "missing method relabel_selected for stage edit"), "edit API should include the UI operations Main invokes")
+	support.expect("set_active_tool" in API_SCRIPT.REQUIRED_METHODS["edit"], "edit API v1 should expose explicit tool selection")
+	support.expect("get_active_tool" in API_SCRIPT.REQUIRED_METHODS["edit"], "edit API v1 should expose the active tool for UI synchronization")
 	support.expect("deactivate" in API_SCRIPT.REQUIRED_METHODS["edit"], "edit API v1 should expose an explicit teardown lifecycle")
 	support.expect(registry.get_plugin("analysis", "unknown-stage") == null, "unknown stage plugin must not register")
 

@@ -26,6 +26,26 @@ func run(support, tree: SceneTree) -> void:
 	support.expect_equal(main.call("get_current_frame"), 0, "opening should select frame zero")
 	support.expect_equal(_label(main, "FrameLabel"), "Frame 0 (120 total)", "frame label should show zero-based current index and total frame count")
 	support.expect_equal(_label(main, "TimeLabel"), "00:00.125", "initial timestamp should come from manifest entry zero")
+	var tool_panel = main.get_node("MainVBox/Workspace/ToolPanel")
+	var edit_plugin = main.get("_edit_plugin")
+	support.expect_equal(tool_panel.call("get_active_tool"), &"select", "Main should show Select after opening a source")
+	support.expect_equal(edit_plugin.call("get_active_tool"), &"select", "the installed edit plugin should agree with the ToolPanel")
+	(tool_panel.get_node("Move") as Button).pressed.emit()
+	support.expect_equal(edit_plugin.call("get_active_tool"), &"move", "ToolPanel Move should update the edit plugin")
+	support.expect("Move" in _status(main), "tool changes should be visible in the status bar")
+
+	(tool_panel.get_node("Box") as Button).pressed.emit()
+	var preview_press := InputEventMouseButton.new()
+	preview_press.button_index = MOUSE_BUTTON_LEFT
+	preview_press.pressed = true
+	var preview_motion := InputEventMouseMotion.new()
+	preview_motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+	main.call("_on_image_pointer_event", preview_press, Vector2(0.5, 0.5))
+	main.call("_on_image_pointer_event", preview_motion, Vector2(2.5, 2.5))
+	support.expect(not _find_region(main.get_node("MainVBox/Workspace/ViewportPanel/AnnotationViewport").get("_record"), "__new_box_preview").is_empty(), "Main should display a Box preview before commit")
+	(tool_panel.get_node("Select") as Button).pressed.emit()
+	support.expect(_find_region(main.get_node("MainVBox/Workspace/ViewportPanel/AnnotationViewport").get("_record"), "__new_box_preview").is_empty(), "switching tools through Main should cancel the Box preview")
+	support.expect_equal(main.get("_history").get_undo_count(), 0, "cancelled Main preview should not create edit history")
 
 	support.expect(not main.call("step", -1), "previous at frame zero should be a clamped no-op")
 	support.expect_equal(main.call("get_current_frame"), 0, "lower-bound step should retain frame zero")
@@ -82,9 +102,10 @@ func run(support, tree: SceneTree) -> void:
 
 	var raw_file := source_root.path_join("frames/frame_000000.png")
 	main.call("_on_file_selected", raw_file)
-	support.expect_equal(main.call("get_current_frame"), 51, "raw file selection should not replace the active dataset")
-	support.expect(viewport.get("_texture") == preserved_texture, "raw file selection should leave the active texture unchanged")
-	support.expect("normalized" in _status(main).to_lower(), "raw file selection should show a concise normalized-directory explanation")
+	support.expect_equal(main.call("get_current_frame"), 0, "raw image selection should become a one-frame source")
+	support.expect(viewport.get("_texture") != null and viewport.get("_texture").get_width() == 4, "raw image selection should display its decoded texture")
+	support.expect_equal(_label(main, "FrameLabel"), "Frame 0 (1 total)", "raw image should use the same indexed frame UI")
+	support.expect("Loaded" in _status(main), "raw image selection should report a successful load")
 	main.call("_on_add_box_pressed")
 	var press := InputEventMouseButton.new()
 	press.button_index = MOUSE_BUTTON_LEFT
@@ -138,11 +159,19 @@ func _make_source(support, label: String, frame_count: int, nominal_fps: float) 
 
 
 func _label(main: Node, node_name: String) -> String:
-	return str(main.get_node("MainVBox/TopToolbar/%s" % node_name).text)
+	var path := "MainVBox/TimelinePanel/TimelineColumn/Transport/%s" % node_name
+	return str(main.get_node(path).text)
 
 
 func _status(main: Node) -> String:
 	return str(main.get_node("MainVBox/StatusBar").text)
+
+
+func _find_region(record: Dictionary, region_id: String) -> Dictionary:
+	for value: Variant in record.get("regions", []):
+		if value is Dictionary and value.get("id") == region_id:
+			return value
+	return {}
 
 
 func _write_text(path: String, value: String) -> void:

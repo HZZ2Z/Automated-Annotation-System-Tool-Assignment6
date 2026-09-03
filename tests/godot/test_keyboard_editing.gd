@@ -99,6 +99,8 @@ static func run(support: TestSupport) -> void:
 	if plugin_script == null:
 		return
 	_test_activation_contract(plugin_script, support)
+	_test_explicit_tool_contract_and_preview_cancel(plugin_script, support)
+	_test_pointer_tools_have_distinct_commands(plugin_script, support)
 	_test_pointer_selection_and_single_move(plugin_script, support)
 	_test_resize_uses_viewport_pixel_handles(plugin_script, support)
 	_test_add_cancel_and_invalid_pointer_restore(plugin_script, support)
@@ -128,9 +130,75 @@ static func _test_activation_contract(plugin_script: Script, support: TestSuppor
 	support.expect(not fixture.statuses.is_empty(), "activation errors should reach the status callback when available")
 
 
+static func _test_explicit_tool_contract_and_preview_cancel(plugin_script: Script, support: TestSupport) -> void:
+	var fixture := _fixture(plugin_script)
+	fixture.plugin.activate(fixture.context)
+	support.expect_equal(fixture.plugin.get_active_tool(), &"select", "activation should start in the non-mutating Select tool")
+	var errors: PackedStringArray = fixture.plugin.set_active_tool(&"polygon")
+	support.expect(not errors.is_empty(), "unsupported tools should be rejected")
+	support.expect_equal(fixture.plugin.get_active_tool(), &"select", "rejected tools should preserve the active tool")
+
+	support.expect(fixture.plugin.set_active_tool(&"box").is_empty(), "Box should be a supported explicit tool")
+	_pointer(fixture.plugin, true, Vector2(60, 50), fixture.viewport)
+	_motion(fixture.plugin, Vector2(75, 65), fixture.viewport)
+	support.expect(not _find_region(fixture.viewport.records.back(), "__new_box_preview").is_empty(), "Box drag should create only a transient preview before release")
+	support.expect(fixture.plugin.set_active_tool(&"move").is_empty(), "switching tools should be accepted during a preview")
+	support.expect_equal(fixture.plugin.get_active_tool(), &"move", "the requested Move tool should become authoritative")
+	support.expect_equal(fixture.viewport.records.back(), fixture.store.get_corrected_record(0), "tool switching should restore the committed record and cancel the preview")
+	support.expect_equal(fixture.history.get_undo_count(), 0, "cancelled preview must not enter command history")
+
+
+static func _test_pointer_tools_have_distinct_commands(plugin_script: Script, support: TestSupport) -> void:
+	var selected := _fixture(plugin_script)
+	selected.plugin.activate(selected.context)
+	selected.plugin.set_active_tool(&"select")
+	_pointer(selected.plugin, true, Vector2(15, 15), selected.viewport)
+	_motion(selected.plugin, Vector2(18, 19), selected.viewport)
+	_pointer(selected.plugin, false, Vector2(18, 19), selected.viewport)
+	support.expect_equal(selected.selected[0], "box-1", "Select should select the hit region")
+	support.expect_equal(selected.store.get_corrected_record(0), _record(), "Select drag should never mutate geometry")
+	support.expect_equal(selected.history.get_undo_count(), 0, "Select should never create edit history")
+
+	var moved := _fixture(plugin_script)
+	moved.plugin.activate(moved.context)
+	moved.plugin.set_active_tool(&"move")
+	_pointer(moved.plugin, true, Vector2(15, 15), moved.viewport)
+	_motion(moved.plugin, Vector2(18, 19), moved.viewport)
+	_pointer(moved.plugin, false, Vector2(18, 19), moved.viewport)
+	support.expect_equal(moved.store.get_corrected_record(0).regions[0].box, [13.0, 14.0, 20, 15], "Move should commit the pointer delta")
+	support.expect_equal(moved.history.get_undo_count(), 1, "Move should create exactly one command")
+
+	var added := _fixture(plugin_script)
+	added.plugin.activate(added.context)
+	added.plugin.set_active_tool(&"box")
+	_pointer(added.plugin, true, Vector2(60, 50), added.viewport)
+	_motion(added.plugin, Vector2(75, 65), added.viewport)
+	_pointer(added.plugin, false, Vector2(75, 65), added.viewport)
+	support.expect_equal(added.store.get_corrected_record(0).regions.size(), 3, "Box should add exactly one region")
+	support.expect_equal(added.history.get_undo_count(), 1, "Box should create exactly one command")
+
+	var filled := _fixture(plugin_script)
+	filled.plugin.activate(filled.context)
+	filled.plugin.set_active_tool(&"fill")
+	_pointer(filled.plugin, true, Vector2(15, 15), filled.viewport)
+	_pointer(filled.plugin, false, Vector2(15, 15), filled.viewport)
+	support.expect_equal(filled.store.get_corrected_record(0).regions[0].filled, true, "Fill should toggle the hit region")
+	support.expect_equal(filled.history.get_undo_count(), 1, "Fill should create exactly one command")
+
+	var deleted := _fixture(plugin_script)
+	deleted.plugin.activate(deleted.context)
+	deleted.plugin.set_active_tool(&"delete")
+	_pointer(deleted.plugin, true, Vector2(15, 15), deleted.viewport)
+	_pointer(deleted.plugin, false, Vector2(15, 15), deleted.viewport)
+	support.expect_equal(deleted.store.get_corrected_record(0).regions.size(), 1, "Delete should remove exactly the hit region")
+	support.expect_equal(deleted.selected[0], "", "Delete should clear the removed selection")
+	support.expect_equal(deleted.history.get_undo_count(), 1, "Delete should create exactly one command")
+
+
 static func _test_pointer_selection_and_single_move(plugin_script: Script, support: TestSupport) -> void:
 	var fixture := _fixture(plugin_script)
 	fixture.plugin.activate(fixture.context)
+	fixture.plugin.set_active_tool(&"move")
 	_pointer(fixture.plugin, true, Vector2(15, 15), fixture.viewport)
 	_pointer(fixture.plugin, false, Vector2(15, 15), fixture.viewport)
 	support.expect_equal(fixture.selected[0], "box-1", "click should select the hit region")
@@ -150,6 +218,7 @@ static func _test_pointer_selection_and_single_move(plugin_script: Script, suppo
 static func _test_resize_uses_viewport_pixel_handles(plugin_script: Script, support: TestSupport) -> void:
 	var fixture := _fixture(plugin_script)
 	fixture.plugin.activate(fixture.context)
+	fixture.plugin.set_active_tool(&"move")
 	fixture.selected[0] = "box-1"
 	fixture.viewport.transform.zoom_at(Vector2(100, 80), 3.0)
 	var handle := Vector2(30, 25)
@@ -183,6 +252,7 @@ static func _test_add_cancel_and_invalid_pointer_restore(plugin_script: Script, 
 
 	var invalid := _fixture(plugin_script)
 	invalid.plugin.activate(invalid.context)
+	invalid.plugin.set_active_tool(&"move")
 	invalid.selected[0] = "box-1"
 	_pointer(invalid.plugin, true, Vector2(15, 15), invalid.viewport)
 	_motion(invalid.plugin, Vector2(-20, 15), invalid.viewport)
@@ -258,6 +328,7 @@ static func _test_keyboard_only_add(plugin_script: Script, support: TestSupport)
 static func _test_pointer_interrupts_keyboard_add(plugin_script: Script, support: TestSupport) -> void:
 	var fixture := _fixture(plugin_script)
 	fixture.plugin.activate(fixture.context)
+	fixture.plugin.set_active_tool(&"move")
 	fixture.plugin.handle_key(_key(KEY_A))
 	support.expect_equal(fixture.viewport.records.back().regions.size(), 3, "keyboard add should begin with a transient preview")
 	_pointer(fixture.plugin, true, Vector2(15, 15), fixture.viewport)
@@ -272,6 +343,7 @@ static func _test_pointer_interrupts_keyboard_add(plugin_script: Script, support
 static func _test_pointer_drag_blocks_command_keys(plugin_script: Script, support: TestSupport) -> void:
 	var fixture := _fixture(plugin_script)
 	fixture.plugin.activate(fixture.context)
+	fixture.plugin.set_active_tool(&"move")
 	fixture.selected[0] = "box-1"
 	fixture.plugin.handle_key(_key(KEY_RIGHT))
 	fixture.plugin.handle_key(_key(KEY_Z, false, true))
@@ -303,6 +375,7 @@ static func _test_pointer_drag_blocks_command_keys(plugin_script: Script, suppor
 
 	var resize := _fixture(plugin_script)
 	resize.plugin.activate(resize.context)
+	resize.plugin.set_active_tool(&"move")
 	resize.selected[0] = "box-1"
 	_pointer(resize.plugin, true, Vector2(30, 25), resize.viewport)
 	_motion(resize.plugin, Vector2(35, 29), resize.viewport)
@@ -329,6 +402,7 @@ static func _test_pointer_drag_blocks_command_keys(plugin_script: Script, suppor
 static func _test_pointer_motion_loss_and_repress_cancel(plugin_script: Script, support: TestSupport) -> void:
 	var fixture := _fixture(plugin_script)
 	fixture.plugin.activate(fixture.context)
+	fixture.plugin.set_active_tool(&"move")
 	_pointer(fixture.plugin, true, Vector2(15, 15), fixture.viewport)
 	var lost_motion := InputEventMouseMotion.new()
 	lost_motion.position = fixture.viewport.transform.image_to_viewport(Vector2(20, 15))
@@ -357,6 +431,7 @@ static func _test_pointer_motion_loss_and_repress_cancel(plugin_script: Script, 
 static func _test_cross_frame_restore_and_selection(plugin_script: Script, support: TestSupport) -> void:
 	var cancel_fixture := _two_frame_fixture(plugin_script)
 	cancel_fixture.plugin.activate(cancel_fixture.context)
+	cancel_fixture.plugin.set_active_tool(&"move")
 	_pointer(cancel_fixture.plugin, true, Vector2(15, 15), cancel_fixture.viewport)
 	_motion(cancel_fixture.plugin, Vector2(18, 15), cancel_fixture.viewport)
 	cancel_fixture.frame[0] = 1
@@ -366,6 +441,7 @@ static func _test_cross_frame_restore_and_selection(plugin_script: Script, suppo
 
 	var release_fixture := _two_frame_fixture(plugin_script)
 	release_fixture.plugin.activate(release_fixture.context)
+	release_fixture.plugin.set_active_tool(&"move")
 	_pointer(release_fixture.plugin, true, Vector2(15, 15), release_fixture.viewport)
 	_motion(release_fixture.plugin, Vector2(18, 15), release_fixture.viewport)
 	release_fixture.frame[0] = 1
@@ -377,6 +453,7 @@ static func _test_cross_frame_restore_and_selection(plugin_script: Script, suppo
 
 	var invalid_release := _two_frame_fixture(plugin_script)
 	invalid_release.plugin.activate(invalid_release.context)
+	invalid_release.plugin.set_active_tool(&"move")
 	_pointer(invalid_release.plugin, true, Vector2(15, 15), invalid_release.viewport)
 	_motion(invalid_release.plugin, Vector2(-20, 15), invalid_release.viewport)
 	invalid_release.frame[0] = 1
@@ -423,10 +500,12 @@ static func _test_reactivation_cancels_and_rewires(plugin_script: Script, suppor
 	var old_fixture := _fixture(plugin_script)
 	var plugin = old_fixture.plugin
 	plugin.activate(old_fixture.context)
+	plugin.set_active_tool(&"move")
 	_pointer(plugin, true, Vector2(15, 15), old_fixture.viewport)
 	_motion(plugin, Vector2(19, 15), old_fixture.viewport)
 	var new_fixture := _fixture(plugin_script)
 	support.expect(plugin.activate(new_fixture.context).is_empty(), "valid reactivation should succeed after cancelling old preview")
+	plugin.set_active_tool(&"move")
 	support.expect_equal(old_fixture.viewport.records.back(), old_fixture.store.get_corrected_record(0), "valid reactivation should restore the old viewport before replacing context")
 	_pointer(plugin, true, Vector2(15, 15), new_fixture.viewport)
 	_motion(plugin, Vector2(18, 15), new_fixture.viewport)
@@ -437,6 +516,7 @@ static func _test_reactivation_cancels_and_rewires(plugin_script: Script, suppor
 	support.expect_equal(new_fixture.viewport.records.back(), new_fixture.store.get_corrected_record(0), "new viewport cancellation signal should cancel the current preview")
 
 	plugin.activate(new_fixture.context)
+	plugin.set_active_tool(&"move")
 	_pointer(plugin, true, Vector2(15, 15), new_fixture.viewport)
 	_motion(plugin, Vector2(19, 15), new_fixture.viewport)
 	var invalid_context: Dictionary = new_fixture.context.duplicate()
@@ -477,6 +557,7 @@ static func _test_pointer_noops_are_numeric_and_cross_frame_safe(plugin_script: 
 		record.regions[0].box = box.duplicate()
 		var fixture := _fixture_with_records(plugin_script, [record])
 		fixture.plugin.activate(fixture.context)
+		fixture.plugin.set_active_tool(&"move")
 		fixture.selected[0] = "box-1"
 		_pointer(fixture.plugin, true, Vector2(30, 25), fixture.viewport)
 		_pointer(fixture.plugin, false, Vector2(30, 25), fixture.viewport)
@@ -485,6 +566,7 @@ static func _test_pointer_noops_are_numeric_and_cross_frame_safe(plugin_script: 
 
 	var zero_move := _two_frame_fixture(plugin_script)
 	zero_move.plugin.activate(zero_move.context)
+	zero_move.plugin.set_active_tool(&"move")
 	_pointer(zero_move.plugin, true, Vector2(15, 15), zero_move.viewport)
 	zero_move.frame[0] = 1
 	zero_move.selected[0] = "frame-1-box"
@@ -500,6 +582,7 @@ static func _test_pointer_noops_are_numeric_and_cross_frame_safe(plugin_script: 
 	second.regions[1].id = "frame-1-poly"
 	var zero_resize := _fixture_with_records(plugin_script, [float_zero_resize, second])
 	zero_resize.plugin.activate(zero_resize.context)
+	zero_resize.plugin.set_active_tool(&"move")
 	zero_resize.selected[0] = "box-1"
 	_pointer(zero_resize.plugin, true, Vector2(30, 25), zero_resize.viewport)
 	zero_resize.frame[0] = 1
@@ -627,3 +710,10 @@ static func _contains_error(errors: PackedStringArray, fragment: String) -> bool
 		if fragment in error:
 			return true
 	return false
+
+
+static func _find_region(record: Dictionary, region_id: String) -> Dictionary:
+	for value: Variant in record.get("regions", []):
+		if value is Dictionary and value.get("id") == region_id:
+			return value
+	return {}

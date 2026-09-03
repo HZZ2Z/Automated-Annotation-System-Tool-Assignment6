@@ -1,8 +1,137 @@
 # Automated Annotation System Design Specification
 
+> **Revision 2 — corrective baseline.** This revision preserves the approved frontend,
+> restores direct image opening, and makes the teacher's MITK, componentization, interface,
+> maintainability, and evidence requirements binding before any further feature work.
+
+## 0. Binding development charter
+
+This section overrides any conflicting interpretation later in this document or in the
+implementation plan. It exists because passing internal tests is not sufficient when the
+visible reviewer workflow or the teacher's required boundary has regressed.
+
+The teacher explicitly requires study of MITK's interaction paradigm, a clean componentized
+plugin pipeline, documented extension interfaces, human-readable AI-assisted code, and subsequent
+extensibility. The precise naming, line-length, protected-node, and acceptance rules below are this
+project's approved implementation rules derived from those requirements; they are not presented as
+verbatim teacher instructions.
+
+### 0.1 Source-of-truth order
+
+Every design and implementation decision follows this precedence:
+
+1. the teacher's original assignment,
+   `docs/Project_6_Automated_Annotation_System_Assignment.md`
+2. the user's explicit scope decisions and the approved frontend baseline
+3. this design specification
+4. the implementation plan
+5. task-local implementation choices
+
+A lower-priority source cannot silently remove, rename, move, or reinterpret a higher-priority
+requirement. A conflict stops at the design/review gate and requires explicit user approval.
+The teacher's assignment is a read-only requirement source, not an implementation file.
+
+### 0.2 MITK-first 2D interaction style
+
+Before changing edit behavior, study the relevant manual-interaction patterns in the official
+[MITK repository](https://github.com/MITK/MITK) and its interaction/segmentation documentation.
+Adopt only the 2D behaviors that serve this assignment:
+
+- keep a visible tool palette and show the active tool as pressed
+- make tool switching explicit; `Select` is the safe default
+- treat mouse press, move, and release as one interaction
+- show a transient preview while dragging and commit one undoable command on release
+- show selection clearly before move, resize, relabel, fill, or delete
+- provide keyboard access and application-wide bounded undo/redo
+- cancel transient state safely when the tool, frame, source, or focus changes
+
+MITK is a design reference, not a dependency. Volumetric, 3D, multi-planar, advanced contour,
+and full MITK behavior remain outside scope. Polygon drawing and vertex editing are optional in
+the assignment and are deliberately excluded from the first version.
+
+### 0.3 Structured components and explicit interfaces
+
+- Each scene, script, service, command, and plugin has one primary responsibility.
+- UI scenes emit intent; domain commands validate and mutate; services own reusable state or IO;
+  plugins implement documented stage contracts. UI nodes do not absorb domain logic.
+- Every public boundary documents exact method names, argument and return types, emitted signals,
+  lifecycle, validation failures, and ownership of mutable state.
+- Required dependencies are injected through activation context or explicit setters. Components
+  communicate by interfaces and signals, not hidden sibling-node lookups.
+- New plugins are added by adding a plugin directory and manifest; the registry core is not
+  edited for each plugin.
+- Interface version 1 is stabilized before `docs/plugin-api.md` is accepted. Later incompatible
+  changes require a version bump and compatibility tests.
+- Existing large scripts are not rewritten merely for style. Extract a focused component only
+  when a required feature exposes a stable responsibility and test boundary.
+
+### 0.4 Maintainability and code style
+
+- Preserve the approved scene-node contract and existing behavior unless the active requirement
+  explicitly changes them.
+- Avoid broad refactors inside feature tasks; compose existing scenes, services, commands, and
+  plugins first.
+- Use `snake_case` for files, functions, signals, and variables; use `PascalCase` for named classes
+  and scene nodes; use tabs in GDScript and typed public boundaries.
+- Keep new or modified code lines at 100 characters or fewer where practical. Do not run a
+  repository-wide formatter to satisfy a local change.
+- Show concise, actionable errors in the UI and keep raw stack traces in developer output only.
+- Keep model records immutable, frame indices zero-based, and image-pixel coordinates explicit.
+- Any interface change updates its contract tests and documentation in the same reviewed task.
+
+### 0.5 Scope, testing, and acceptance discipline
+
+- Required teacher deliverables take priority over optional features. No optional extension starts
+  while a required phase gate is incomplete.
+- Every behavior-bearing change starts with a failing test and ends with focused tests, the full
+  relevant suite, and product-level acceptance evidence.
+- A green automated suite proves only the assertions it contains. It cannot overrule the approved
+  visible workflow or replace manual reviewer checks.
+- A phase is complete only when its code, tests, documentation, manual reviewer steps, and required
+  artifacts all pass and are linked in the requirements traceability table.
+- Model training/inference, cloud services, accounts, collaboration, Web/mobile clients, 3D,
+  optical flow, and unrelated polish remain outside the first-version boundary.
+
+### 0.6 Protected product contract
+
+The following visible shell is protected from deletion, renaming, or relocation without explicit
+user approval:
+
+- top toolbar: `Open`, `Save`, `Undo`, `Redo`, `Export`
+- left tool panel: `Select`, `Move`, `Box`, `Fill`, `Delete`
+- center: the real `AnnotationViewport`
+- right: `InspectorPanel`
+- bottom: previous, play/pause, next, frame/time display, and `Timeline`
+- status bar: current tool, source state, save state, and recoverable errors
+
+Buttons may be disabled until their required backend exists, but they remain visible. Tool buttons
+are mutually exclusive, the active button remains pressed, and `Select` is active after startup.
+
+The `Open` action must accept these three teacher-aligned source forms:
+
+- PNG/JPG/JPEG: open as a one-frame source at frame 0; use an empty region list when no annotation
+  accompanies the image
+- normalized image-sequence directory: open its manifest and annotations through the existing
+  source plugin
+- video: normalize asynchronously through `ProcessService`, then open the resulting frame source
+
+An invalid replacement source must not discard the currently loaded valid dataset. Changes to
+`main.tscn` or this source-opening contract require structure tests, direct-image and directory-open
+tests, and a manual 1280 x 800 visual check.
+
+### 0.7 Mandatory recovery gate
+
+The current Task 9 implementation is technically integrated but product-rejected: it removed the
+protected left tool panel and top-level `Save`/`Export` controls, and it rejects a direct image file.
+No Task 10 or later feature work may begin until Task 9R restores those behaviors and the Part 1
+closure gate confirms all mandatory Part 1 artifacts.
+
 ## 1. Purpose
 
-Build a reliable, local, single-user 2D annotation application that lets a reviewer load model-produced annotations for an image sequence or decoded video, correct those annotations, propagate a keyframe correction across a contiguous run of similar frames, verify the result, and export a versioned training-update package.
+Build a reliable, local, single-user 2D annotation application that lets a reviewer open a single
+image, an image sequence, or a decoded video; load model-produced annotations when present; correct
+those annotations; propagate a keyframe correction across a contiguous run of similar frames;
+verify the result; and export a versioned training-update package.
 
 The product is an annotation and feedback tool. It does not train or run a perception model.
 
@@ -13,7 +142,8 @@ The product is an annotation and feedback tool. It does not train or run a perce
 - A Godot 4.x desktop client implemented in GDScript.
 - A Python 3.10+ support toolchain for deterministic sample generation, video-to-frame decoding, schema validation, similarity calculation, and export verification.
 - One local dataset open at a time.
-- Image-sequence sources and arbitrary FFmpeg-supported videos converted into the same indexed image-sequence representation.
+- Single-image sources, image-sequence sources, and arbitrary FFmpeg-supported videos represented
+  through the same indexed-frame source contract.
 - Rendering of box and polygon regions over a 2D image.
 - Complete box editing: select, move, resize, keyboard nudge, relabel, track-ID correction, add, delete, and fill.
 - Polygon display, selection, move, delete, relabel, and fill. Polygon vertex editing and polygon drawing are not included.
@@ -53,12 +183,17 @@ The product is an annotation and feedback tool. It does not train or run a perce
 - Godot testing: repository-owned headless GDScript test runner; no test framework plugin is required.
 - Documentation diagrams: Mermaid committed as text.
 
-The current development machine has Python 3.14.7 but does not yet have Godot or FFmpeg. Installing and pinning those prerequisites is an implementation setup task, not a reason to change the architecture.
+The current shell has Python 3.14.7. The Godot GUI reports 4.7.2-stable, but its executable is not
+yet available on the shell path; FFmpeg is also unavailable on the shell path. Resolving and
+documenting those executable paths is an environment acceptance task, not a reason to change the
+architecture or count skipped checks as passing.
 
 ## 4. User workflow
 
-1. The reviewer selects an image-sequence directory or a video.
-2. If the input is a video, the Python frame-source tool decodes it to an indexed image sequence and writes a manifest. The client then treats it identically to an existing image sequence.
+1. The reviewer selects a PNG/JPG/JPEG image, a normalized image-sequence directory, or a video.
+2. A single image becomes a one-frame source. If the input is a video, the Python frame-source tool
+   decodes it to an indexed image sequence and writes a manifest. The client then treats every
+   accepted input through the same indexed-frame contract.
 3. The client validates the manifest and annotation records. Invalid input produces a readable error and does not replace the currently open dataset.
 4. The first frame appears with immutable model annotations overlaid.
 5. The reviewer navigates, plays, pauses, seeks, and corrects regions.
@@ -70,13 +205,20 @@ The current development machine has Python 3.14.7 but does not yet have Godot or
 
 ## 5. UI boundary
 
-The application has one fixed main layout:
+The application has one fixed, protected main layout:
 
-- Top toolbar: open, play/pause, previous/next frame, frame/time display, zoom controls, annotation opacity, undo, and redo.
-- Center viewport: image, region overlays, selection state, resize handles, and pan/zoom interaction.
-- Right inspector: selected region ID, class, kind, confidence, track ID, geometry values, fill control, add/delete actions, and validation messages.
-- Bottom timeline: frame positions, current frame, similar-run indication, batch marker, and verified/unverified state.
+- Top toolbar: Open, Save, Undo, Redo, and Export.
+- Left tool panel: mutually exclusive Select, Move, Box, Fill, and Delete modes.
+- Center viewport: image, region overlays, selected state, resize handles, and pan/zoom interaction.
+- Right inspector: selected region ID, class, kind, confidence, track ID, geometry values,
+  annotation opacity, relabel controls, and validation messages.
+- Bottom transport and timeline: previous, play/pause, next, explicit frame/time display, frame
+  positions, current frame, similar-run indication, batch marker, and verified/unverified state.
 - Status bar: active tool, autosave state, source state, and non-fatal errors.
+
+Save and Export remain visible before their later-stage implementations and are disabled with a
+clear status until their services are available. Resize remains a selected-box handle interaction;
+polygon drawing does not appear as a first-version tool.
 
 No docking system, theming system, animation framework, or alternative layout is included.
 
@@ -189,9 +331,16 @@ Generated binary sample frames are reproducible artifacts and are not committed 
 
 `python/frame_source.py` accepts a video path and output directory. It uses FFmpeg to produce ordered frame images and derives explicit frame timestamps for the manifest. A validation pass rejects missing frames, duplicate indices, non-contiguous indices, invalid dimensions, or annotation/frame-count mismatch.
 
+A dedicated `single_image_source` plugin adapts PNG/JPG/JPEG files to the same Source-stage
+interface with one manifest entry at frame 0. It returns one valid empty annotation record when no
+annotation accompanies the image. The existing `image_sequence_source` continues to own normalized
+directories; neither plugin changes the canonical annotation schema.
+
 When a video is selected in the client, the Source plugin launches this tool as a child process and monitors it without blocking the UI. Progress and failure are reported in the status bar. The normalized source replaces the current source only after conversion and validation succeed.
 
-The Godot source plugin consumes only the normalized manifest representation. It loads frames on demand through a bounded least-recently-used cache and never loads the full source into memory.
+Godot selects the source plugin from the candidate path before committing replacement state. Source
+plugins expose the same indexed-frame interface, load through the bounded least-recently-used cache,
+and never load a full sequence into memory.
 
 Out-of-range seeks, missing frame files, corrupt images, and empty annotations produce visible recoverable errors.
 
@@ -209,6 +358,11 @@ All persistent annotation changes use commands:
 - delete region
 - toggle fill
 - propagate batch
+
+The edit plugin exposes one explicit active mode from `select`, `move`, `box`, `fill`, and `delete`.
+Changing mode cancels any transient preview, updates the pressed state in `ToolPanel`, and does not
+itself create a history entry. `ToolPanel` emits intent only; the edit plugin owns tool behavior and
+produces domain commands.
 
 Each command implements `apply`, including validation before mutation, and `revert`. Undo/redo stores the last 200 accepted commands. A new command after undo clears the redo branch.
 
@@ -296,6 +450,7 @@ Required extension points:
 
 The initial working plugins are:
 
+- `single_image_source`
 - `image_sequence_source`
 - `canvas_region_renderer`
 - `basic_edit_tools`
@@ -343,10 +498,15 @@ Godot headless tests cover:
 - plugin discovery and plugin failure isolation
 - frame-cache bounds
 - autosave recovery behavior
+- protected toolbar, tool-panel, inspector, transport, timeline, and status-bar nodes
+- mutually exclusive edit-tool state and transient-preview cancellation
+- direct PNG/JPG/JPEG opening, normalized-directory opening, and transactional failure recovery
 
 The headless smoke test performs an end-to-end scripted session: load sample, select a frame, move/resize/relabel/add/delete, undo/redo, propagate a keyframe, verify frames, autosave, export, and compare generated diff/package expectations.
 
-Manual reviewer testing covers pointer interaction, keyboard-only interaction, visual correctness, playback, error messages, and the final handoff workflow.
+Manual reviewer testing covers the protected layout at 1280 x 800, direct-image and sample-directory
+opening, pointer interaction, keyboard-only interaction, focus traversal, visual correctness,
+playback, error messages, and the final handoff workflow.
 
 ## 17. Documentation and measurements
 
@@ -383,5 +543,13 @@ The project is complete only when:
 - all Python, Godot headless, and smoke tests pass
 - `RESULTS.md`, reviewer runbook, interface agreement, architecture diagram, and demonstration are complete
 - the private submission repository contains no credentials, private configuration, build outputs, or large reproducible assets, and the required reviewers can be added as collaborators
+- the protected UI shell and all three source-opening routes pass their automated and manual checks
+- every teacher requirement has a traceability row linking implementation, automated evidence,
+  manual evidence where required, status, and the next corrective task
+
+Part 1 is complete only when the schema and validators, deterministic sample, video frame source,
+plugin registry, working Source/Render/Edit/Feedback plugins, architecture diagram, plugin API,
+README, and zero-error sample validation are all present and verified. Later implementation does
+not retroactively waive a missing Part 1 artifact.
 
 Anything outside this specification is deferred until after the assignment has been accepted.

@@ -10,8 +10,85 @@
 
 **Spec:** docs/superpowers/specs/2026-09-03-automated-annotation-system-design.md
 
+## Teacher-aligned engineering charter — read before every task
+
+The assignment explicitly requires MITK study, a clean componentized plugin pipeline, documented
+interfaces, human-readable AI-assisted work, and maintainable extension. The exact code-style,
+protected-node, and evidence rules below are approved project controls derived from those goals,
+not quotations from the assignment.
+
+### Authority and change control
+
+1. The teacher's original assignment is the highest requirement source.
+2. The user's explicit boundary decisions and approved frontend are next.
+3. The design specification governs architecture; this plan governs execution.
+4. Task-local convenience cannot override any item above it.
+
+If two sources conflict, stop at the review gate and request explicit approval. Never treat a
+green internal test as permission to remove a user-approved workflow. Keep the teacher's assignment
+file unchanged and use `docs/Project_6_Automated_Annotation_System_Assignment.md` only as a
+read-only requirement source.
+
+### MITK interaction reference
+
+- Read the relevant official MITK interaction and segmentation material before changing edit
+  behavior. Translate only the useful 2D interaction paradigm; do not reproduce MITK or add 3D.
+- Keep a visible toolbox, a pressed active tool, explicit mode switching, obvious selection,
+  press/move/release previews, and one undoable command per completed gesture.
+- `Select` is the default mode. Switching tool, source, frame, or focus cancels transient preview
+  state without committing an edit.
+- All editing operations remain keyboard reachable and share one bounded 200-command history.
+
+### Structure, interfaces, and maintenance
+
+- Give every scene, script, service, command, and plugin one primary responsibility.
+- UI scenes emit intent; edit plugins translate interaction into commands; domain objects validate
+  and mutate; services own reusable state or IO. Do not hide domain logic in `main.gd` or UI nodes.
+- Document exact public method signatures, signals, return values, error behavior, lifecycle, and
+  mutable-state ownership before implementing a boundary.
+- Inject dependencies through activation context or explicit setters and use signals for events;
+  avoid hidden sibling-node paths outside each scene's own composition boundary.
+- Add plugins by adding directories and manifests, not by special-casing registry core behavior.
+- Stabilize plugin API version 1 before accepting `docs/plugin-api.md`. Incompatible later changes
+  require an API-version bump and compatibility tests.
+- Preserve existing working components. No broad refactor or repository-wide formatting is allowed
+  inside a feature task. Extract only a focused, required boundary with its own tests.
+- Use `snake_case` for files/functions/variables/signals, `PascalCase` for named classes and scene
+  nodes, tabs in GDScript, typed public boundaries, and lines of 100 characters or fewer where
+  practical.
+- Update interface tests and documentation in the same reviewed task as an interface change.
+
+### Protected product contract
+
+The following nodes and placements cannot be deleted, renamed, or moved without explicit user
+approval:
+
+- top toolbar: Open, Save, Undo, Redo, Export
+- left tool panel: Select, Move, Box, Fill, Delete
+- center: real AnnotationViewport
+- right: InspectorPanel
+- bottom: previous, play/pause, next, explicit frame/time, Timeline
+- status bar: active tool, source/save state, and recoverable errors
+
+Save and Export may remain disabled until their backend task is complete, but they remain visible.
+Open must accept a PNG/JPG/JPEG as a one-frame source, a normalized source directory, and a video
+through asynchronous normalization. A failed candidate source must preserve the active dataset.
+
+### Scope and evidence gates
+
+- Required assignment behavior comes before every optional extension. Do not start optional work
+  while any required gate is incomplete.
+- Use test-first development for behavior changes. Run focused tests, the full relevant suite, and
+  the specified manual reviewer check before acceptance.
+- A task is not accepted merely because the code exists or automated tests are green.
+- A phase is complete only when code, automated tests, manual checks, documentation, and required
+  artifacts are linked in `docs/requirements-traceability.md` and all show `PASS`.
+- Do not add model inference/training, cloud services, accounts, collaboration, Web/mobile clients,
+  3D, optical flow, polygon drawing, polygon vertex editing, or unrelated polish.
+
 ## Global Constraints
 
+- Apply the authority order and protected product contract above to every task.
 - Implement only the approved specification and the teacher's mandatory requirements.
 - Do not add model inference/training, HTTP services, databases, cloud features, accounts, collaboration, Web/mobile clients, optical flow, polygon drawing, or polygon vertex editing.
 - The original model-output files and in-memory model records are immutable.
@@ -23,7 +100,42 @@
 - Long sources use a bounded cache and are never fully loaded into RAM.
 - Python and Godot run the same valid/invalid contract fixtures.
 - Tests are written before implementation for every behavior-bearing task.
+- Changes to `client/app/main.tscn` require protected-node tests and a manual 1280 x 800 visual check.
+- Source-opening changes require direct-image, normalized-directory, and failed-replacement tests.
+- No phase may be marked complete without an evidence-backed traceability review.
 - Generated samples, Godot imports, Python environments, build outputs, and credentials are not committed.
+
+---
+
+## Current implementation status and mandatory correction order
+
+This table records the repository state at revision 2 of this plan. “Implemented” describes code
+presence only; it does not waive missing teacher deliverables or product acceptance. The unchecked
+boxes in the original task recipes are not a live progress record; this table and the evidence
+ledger are authoritative for current status.
+
+| Work item | Current state | Evidence still required |
+|---|---|---|
+| Tasks 1–3: scaffold, schemas, validators, sample | Code implemented; environment documentation incomplete | resolve the Godot 4.7.2 shell command, Part 1 docs, and traceability gate |
+| Task 4: video normalization and similarity | Code implemented; environment gate incomplete | FFmpeg available on the documented path and skipped checks rerun |
+| Tasks 5–6: store, registry, image-sequence source, cache | Implemented | Part 1 plugin/API/documentation gate |
+| Task 7: viewport and renderer | Implemented | measured 25–30 FPS result and manual visual check |
+| Task 8: commands and edit plugin | Core behavior implemented; visible UX incomplete | restored tool panel, active modes, focus/keyboard reviewer pass |
+| Task 9: main scene, playback, timeline | **Product-rejected** | protected UI restoration and direct-image opening in Task 9R |
+| Tasks 10–14 | Not accepted or not started | execute only after the gates below pass |
+
+**STOP:** Task 10 and every later feature task are blocked until Task 9R and Task 9P1 both pass.
+Part 1 is currently incomplete even though substantial code for later parts already exists.
+
+### Phase acceptance ledger
+
+| Assignment phase | Required acceptance | Current state | Next authoritative task |
+|---|---|---|---|
+| Part 1 | scaffold, schema/validators, deterministic sample, video frame source, registry, one working plugin per stage, architecture, plugin API, README, zero-error validation | Partial | Task 9R, then Task 9P1 |
+| Part 2 | image/region display, transforms, smooth rendering, MITK-style editing, keyboard reachability, reviewer script, MITK design note | Partial | Task 9R, then Tasks 13–14 |
+| Part 3 | indexed playback, bounded cache, similarity, propagate/verify UX, measurements | Partial | Task 10, then Tasks 13–14 |
+| Part 4 | autosave, corrected export, diff, versioned handoff, interface agreement, non-blocking IO | Not started | Tasks 11–12, then Task 14 |
+| Part 5 | full tests, robustness, measurements, honest failure analysis, clean runbook | Partial | Tasks 13–14 |
 
 ---
 
@@ -84,6 +196,7 @@ Each file has one primary responsibility.
 │   │   ├── plugin_api.gd
 │   │   └── plugin_registry.gd
 │   ├── plugins/
+│   │   ├── source/single_image_source/
 │   │   ├── source/image_sequence_source/
 │   │   ├── render/canvas_region_renderer/
 │   │   ├── edit/basic_edit_tools/
@@ -91,6 +204,8 @@ Each file has one primary responsibility.
 │   └── ui/
 │       ├── annotation_viewport.gd
 │       ├── annotation_viewport.tscn
+│       ├── tool_panel.gd
+│       ├── tool_panel.tscn
 │       ├── inspector_panel.gd
 │       ├── inspector_panel.tscn
 │       ├── timeline.gd
@@ -106,6 +221,7 @@ Each file has one primary responsibility.
 └── docs/
     ├── architecture.md
     ├── plugin-api.md
+    ├── requirements-traceability.md
     ├── model-team-interface.md
     └── reviewer-script.md
 ~~~
@@ -115,7 +231,7 @@ Each file has one primary responsibility.
 ### Task 1: Reproducible project foundation
 
 **Files:**
-- Track unchanged: Project_6_Automated_Annotation_System_Assignment.md
+- Track unchanged: docs/Project_6_Automated_Annotation_System_Assignment.md
 - Create: .gitignore
 - Create: pyproject.toml
 - Create: python/annotool/__init__.py
@@ -1240,6 +1356,10 @@ git commit -m "feat: edit regions with reversible commands"
 
 ### Task 9: Main application, playback, and timeline
 
+> **Corrective status:** the implementation commit for this task exists, but the task is not
+> product-accepted. Its former layout interpretation removed protected controls and its file route
+> rejected a direct image. The requirements below are corrected; Task 9R is the mandatory repair.
+
 **Files:**
 - Create: client/app/main.tscn
 - Create: client/app/main.gd
@@ -1268,13 +1388,17 @@ Test a 120-frame source:
 
 Construct the approved fixed layout:
 
-- top toolbar with open, play/pause, previous, next, frame/time, zoom, opacity, undo, redo
+- top toolbar with Open, Save, Undo, Redo, Export
+- left ToolPanel with Select, Move, Box, Fill, Delete
 - center AnnotationViewport
 - right InspectorPanel
-- bottom Timeline
+- bottom previous, play/pause, next, frame/time, and Timeline
 - status bar
 
-Use Godot FileDialog for source selection. Selecting a directory opens directly; selecting a video launches python/frame_source.py through ProcessService, displays progress/status, and opens the normalized output only after success.
+Use Godot FileDialog for source selection. Selecting PNG/JPG/JPEG uses the one-frame Source plugin;
+selecting a directory uses the normalized image-sequence Source plugin. Selecting a video launches
+`python/frame_source.py` through ProcessService, displays progress/status, and opens the normalized
+output only after success. Failed replacement preserves the active source.
 
 - [ ] **Step 3: Implement frame-index playback**
 
@@ -1290,7 +1414,10 @@ Timeline draws a compact frame strip using cached status arrays rather than crea
 
 - [ ] **Step 6: Wire editing and toolbar state**
 
-Selection updates InspectorPanel. Edit commands refresh only the current record and dirty/save indicators. Undo/redo buttons reflect history availability. Opacity updates only render state. Zoom buttons delegate to ViewportTransform. Source errors appear in the status bar without raw stack traces.
+Selection updates InspectorPanel. Edit commands refresh only the current record and dirty/save
+indicators. Undo/redo buttons reflect history availability. Save and Export remain visible and are
+disabled until their backing tasks are accepted. Opacity updates only render state. Zoom buttons
+delegate to ViewportTransform. Source errors appear in the status bar without raw stack traces.
 
 - [ ] **Step 7: Run application-state tests and a headless scene load**
 
@@ -1309,6 +1436,456 @@ Expected: playback/timeline tests pass and main scene loads without parser or mi
 git add client/app client/ui/timeline.gd client/ui/timeline.tscn tests/godot
 git commit -m "feat: assemble indexed playback and timeline"
 ~~~
+
+---
+
+### Task 9R: Restore the protected frontend and direct-image opening
+
+**Gate:** This task repairs an acceptance regression. Preserve the current renderer, viewport,
+inspector, store, command history, playback, timeline, and transactional source replacement. Do not
+rewrite them. Task 10 remains blocked until every step below passes.
+
+**Files:**
+- Create: client/ui/tool_panel.gd
+- Create: client/ui/tool_panel.tscn
+- Create: client/plugins/source/single_image_source/plugin.json
+- Create: client/plugins/source/single_image_source/plugin.gd
+- Create: tests/godot/test_tool_panel.gd
+- Create: tests/godot/test_single_image_source.gd
+- Modify: client/app/main.tscn
+- Modify: client/app/main.gd
+- Modify: client/pipeline/plugin_api.gd
+- Modify: client/plugins/edit/basic_edit_tools/plugin.gd
+- Modify: tests/godot/fixtures/integration_plugins/probe_edit.gd
+- Modify: tests/godot/test_frontend_structure.gd
+- Modify: tests/godot/test_playback.gd
+- Modify: tests/godot/test_plugin_registry.gd
+- Modify: tests/godot/test_runner.gd
+
+**Interfaces:**
+- Consumes: the current Main transactional-open path, AnnotationViewport, InspectorPanel,
+  CommandHistory, and Source/Edit API version 1.
+- Produces: `ToolPanel.tool_requested(tool_id: StringName)`,
+  `ToolPanel.set_active_tool(tool_id: StringName) -> bool`,
+  `ToolPanel.get_active_tool() -> StringName`,
+  `basic_edit_tools.set_active_tool(tool_id: StringName) -> PackedStringArray`,
+  `basic_edit_tools.get_active_tool() -> StringName`, and a `single_image_source` implementing the
+  existing Source interface: `open`, `get_frame_count`, `get_frame_entry`, `get_model_records`,
+  `get_manifest`, `load_texture`, and `close`.
+- Preserves: `Main.open_source(path: String) -> PackedStringArray`, `set_frame`, playback methods,
+  existing scene/service ownership, and failure-atomic source replacement.
+
+- [ ] **Step 1: Replace the regression assertions with failing protected-shell tests**
+
+In `tests/godot/test_frontend_structure.gd`, require these exact nodes:
+
+~~~gdscript
+const PROTECTED_PATHS := [
+	"MainVBox/TopToolbar/Open",
+	"MainVBox/TopToolbar/Save",
+	"MainVBox/TopToolbar/Undo",
+	"MainVBox/TopToolbar/Redo",
+	"MainVBox/TopToolbar/Export",
+	"MainVBox/Workspace/ToolPanel",
+	"MainVBox/Workspace/ViewportPanel/AnnotationViewport",
+	"MainVBox/Workspace/InspectorPanelContainer/InspectorColumn/InspectorPanel",
+	"MainVBox/TimelinePanel/TimelineColumn/Transport/Previous",
+	"MainVBox/TimelinePanel/TimelineColumn/Transport/PlayPause",
+	"MainVBox/TimelinePanel/TimelineColumn/Transport/Next",
+	"MainVBox/TimelinePanel/TimelineColumn/Transport/FrameLabel",
+	"MainVBox/TimelinePanel/TimelineColumn/Transport/TimeLabel",
+	"MainVBox/TimelinePanel/TimelineColumn/Timeline",
+	"MainVBox/StatusBar",
+]
+~~~
+
+Delete the assertions that call Save, Export, and ToolPanel obsolete. Assert Save and Export are
+visible but disabled, ToolPanel defaults to `&"select"`, and only Select is pressed.
+
+In `tests/godot/test_tool_panel.gd`, assert every button emits its exact StringName ID, one and only
+one button remains pressed, repeat-click keeps the active tool, and an unknown tool is rejected
+without changing state.
+
+- [ ] **Step 2: Run the structure test and verify the current regression is exposed**
+
+Run:
+
+~~~bash
+godot --headless --path . --script tests/godot/test_runner.gd
+~~~
+
+Expected: FAIL because Save, Export, ToolPanel, and bottom transport paths are not yet present.
+
+- [ ] **Step 3: Implement the focused ToolPanel scene**
+
+`tool_panel.gd` owns button grouping and active-state display only. It contains no annotation
+mutation logic:
+
+~~~gdscript
+class_name ToolPanel
+extends VBoxContainer
+
+signal tool_requested(tool_id: StringName)
+
+const TOOL_IDS: Array[StringName] = [
+	&"select", &"move", &"box", &"fill", &"delete",
+]
+
+var _active_tool: StringName = &"select"
+
+func set_active_tool(tool_id: StringName) -> bool:
+	if tool_id not in TOOL_IDS:
+		return false
+	_active_tool = tool_id
+	_sync_pressed_state()
+	return true
+
+func get_active_tool() -> StringName:
+	return _active_tool
+~~~
+
+`tool_panel.tscn` contains exactly five toggle buttons in one ButtonGroup. Each button emits its
+StringName ID through `tool_requested`; clicking the already active tool leaves it active.
+
+- [ ] **Step 4: Add explicit edit modes without changing command ownership**
+
+Add the mode boundary to `basic_edit_tools/plugin.gd`:
+
+~~~gdscript
+const TOOL_IDS: Array[StringName] = [
+	&"select", &"move", &"box", &"fill", &"delete",
+]
+
+var _active_tool: StringName = &"select"
+
+func set_active_tool(tool_id: StringName) -> PackedStringArray:
+	if tool_id not in TOOL_IDS:
+		return PackedStringArray(["Unknown edit tool: %s" % tool_id])
+	cancel()
+	_active_tool = tool_id
+	return PackedStringArray()
+
+func get_active_tool() -> StringName:
+	return _active_tool
+~~~
+
+Route pointer input by the active mode: Select changes selection, Move permits drag/resize, Box
+starts the existing add-box gesture, Fill selects and commits one ToggleFillCommand, and Delete
+selects and commits one DeleteRegionCommand. A tool change cancels drag/add previews and creates no
+history entry. Keep current commands and validation unchanged.
+
+Add `set_active_tool` and `get_active_tool` to the Edit-stage `REQUIRED_METHODS` in
+`client/pipeline/plugin_api.gd`. Update the probe edit fixture and registry contract test so every
+accepted Edit plugin exposes the same API before `docs/plugin-api.md` freezes version 1.
+
+- [ ] **Step 5: Write direct-image Source tests before its implementation**
+
+`tests/godot/test_single_image_source.gd` creates temporary PNG, JPG, and JPEG fixtures and asserts:
+
+- each supported extension opens with zero errors
+- frame count is 1; frame entry is frame 0 at time 0.0
+- manifest width/height and source hash match the image
+- the model record is valid, uses `model_output_v1`, has matching `image_size`, and has no regions
+- `load_texture(0)` succeeds and any other index fails readably
+- a missing, corrupt, directory, or unsupported file returns errors and leaves the plugin closed
+
+Add the plugin manifest contract:
+
+~~~json
+{
+  "id": "single_image_source",
+  "version": "1.0.0",
+  "api_version": 1,
+  "stage": "source",
+  "entry": "plugin.gd"
+}
+~~~
+
+- [ ] **Step 6: Implement the one-frame Source adapter**
+
+After loading and validating the image, create this in-memory contract without writing beside the
+user's image:
+
+~~~gdscript
+_manifest = {
+	"schema_version": 1,
+	"dataset_id": _safe_dataset_id(path.get_file().get_basename()),
+	"source_name": path.get_file(),
+	"source_sha256": FileAccess.get_sha256(path),
+	"width": image.get_width(),
+	"height": image.get_height(),
+	"frame_count": 1,
+	"nominal_fps": 1.0,
+	"frames": [{"frame": 0, "time_s": 0.0, "image_path": path.get_file()}],
+	"model_version": "model_output_v1",
+	"taxonomy_version": "v1",
+}
+_model_records = [{
+	"schema_version": 1,
+	"dataset_id": _manifest["dataset_id"],
+	"source": "model_output_v1",
+	"frame": 0,
+	"time_s": 0.0,
+	"image_size": [_manifest["width"], _manifest["height"]],
+	"regions": [],
+}]
+~~~
+
+Keep the absolute candidate path private in the plugin; return deep copies from public getters.
+`close()` clears image, texture, manifest, record, path, and last error.
+
+- [ ] **Step 7: Restore the scene by composition and route sources transactionally**
+
+Instantiate `ToolPanel` as the first workspace child. Reuse the existing ViewportPanel and
+InspectorPanelContainer. Restore Save and Export in TopToolbar. Reparent the existing transport
+controls into `TimelinePanel/TimelineColumn/Transport`; do not recreate playback state.
+
+Add only the routing boundary to Main:
+
+~~~gdscript
+@export var single_image_source_plugin_id := "single_image_source"
+
+func _source_plugin_id_for_path(path: String) -> String:
+	var absolute := ProjectSettings.globalize_path(path)
+	if DirAccess.dir_exists_absolute(absolute):
+		return source_plugin_id
+	if absolute.get_extension().to_lower() in ["png", "jpg", "jpeg"]:
+		return single_image_source_plugin_id
+	return ""
+~~~
+
+`open_source` obtains and instantiates the routed prototype, validates the entire candidate, loads
+frame 0, and only then swaps active state exactly as it does now. Unsupported/video files receive a
+concise status in this gate; Task 11 connects video selection to non-blocking conversion without
+changing the Source interface. FileDialog filters show images and common video extensions while
+retaining `FILE_MODE_OPEN_ANY` for directories.
+
+- [ ] **Step 8: Connect tool intent and preserve toolbar state**
+
+Main connects `ToolPanel.tool_requested` to the edit plugin. It updates the panel only after
+`set_active_tool` returns no errors, mirrors the active tool in StatusBar, and restores Select after
+a successful source replacement. Save and Export display an explanatory disabled tooltip until
+Tasks 11 and 12 provide their backends.
+
+- [ ] **Step 9: Run focused and full automated checks**
+
+Run:
+
+~~~bash
+godot --headless --path . --script tests/godot/test_runner.gd
+git diff --check
+~~~
+
+Expected: all Godot tests pass; the direct-image assertion now expects replacement and visible
+texture instead of rejection; normalized-directory and failed-replacement tests still pass.
+
+- [ ] **Step 10: Perform the product acceptance check**
+
+At 1280 x 800, record evidence that:
+
+1. Open, Save, Undo, Redo, Export remain visible at the top.
+2. Select, Move, Box, Fill, Delete remain visible on the left and show one pressed mode.
+3. A standalone PNG opens visibly; the deterministic sample directory opens afterward.
+4. Each tool can be activated and selection is visibly highlighted.
+5. Playback controls and Timeline remain at the bottom; Inspector remains at the right.
+6. Attempting an invalid replacement leaves the previously visible image usable.
+
+Any mismatch fails Task 9R even when headless tests pass.
+
+- [ ] **Step 11: Commit only the reviewed recovery change**
+
+~~~bash
+git add client/app client/ui/tool_panel.gd client/ui/tool_panel.tscn \
+  client/plugins/source/single_image_source client/pipeline/plugin_api.gd \
+  client/plugins/edit/basic_edit_tools/plugin.gd tests/godot
+git commit -m "fix: restore protected annotation workflow"
+~~~
+
+---
+
+### Task 9P1: Close every mandatory Part 1 deliverable
+
+**Gate:** This is the only task allowed after Task 9R and before declaring Part 1 complete. A
+Feedback plugin, README, architecture diagram, and plugin API are mandatory teacher deliverables,
+not documentation polish to defer until Task 14.
+
+**Files:**
+- Create: client/plugins/feedback/file_training_handoff/plugin.json
+- Create: client/plugins/feedback/file_training_handoff/plugin.gd
+- Create: tests/godot/test_feedback_plugin.gd
+- Create: README.md
+- Create: docs/architecture.md
+- Create: docs/plugin-api.md
+- Create: docs/requirements-traceability.md
+- Create: tests/python/test_documentation.py
+- Modify: tests/godot/test_frontend_structure.gd
+- Modify: tests/godot/test_runner.gd
+
+**Interfaces:**
+- Consumes: corrected snapshot records, canonical annotation validation, plugin registry API 1,
+  and the restored Export control.
+- Produces: feedback plugin
+  `export(context: Dictionary) -> PackedStringArray` and
+  `export_finished(success: bool, path_or_error: String)`; Part 1 writes a validated corrected
+  JSONL export. Task 12 extends the same plugin to diff and package generation without changing
+  the accepted `export(context)` boundary.
+- Documents: exact Source, Render, Edit, and Feedback method/signal/lifecycle contracts and one
+  add-plugin walkthrough that requires no registry-core edit.
+
+- [ ] **Step 1: Write the failing working-Feedback-plugin test**
+
+`tests/godot/test_feedback_plugin.gd` discovers `file_training_handoff`, supplies a corrected
+one-frame snapshot and a temporary output path, invokes `export`, and asserts:
+
+- the call accepts a complete context and rejects missing `records` or `output_path`
+- output is canonical UTF-8 JSONL with one compact object per frame and a final newline
+- every output record validates and uses `source: "human_corrected"`
+- output uses sibling temporary-file plus rename and never modifies the model fixture
+- export failure emits a readable path/error and preserves any prior valid output
+
+The manifest is:
+
+~~~json
+{
+  "id": "file_training_handoff",
+  "version": "1.0.0",
+  "api_version": 1,
+  "stage": "feedback",
+  "entry": "plugin.gd"
+}
+~~~
+
+- [ ] **Step 2: Implement the minimum real Feedback plugin**
+
+Keep Part 1 behavior narrow and useful:
+
+~~~gdscript
+signal export_finished(success: bool, path_or_error: String)
+
+func export(context: Dictionary) -> PackedStringArray:
+	var errors := _validate_context(context)
+	if not errors.is_empty():
+		export_finished.emit(false, "; ".join(errors))
+		return errors
+	var result := _write_jsonl_atomically(
+		context["records"], String(context["output_path"])
+	)
+	var outcome := String(context["output_path"]) if result.is_empty() else result[0]
+	export_finished.emit(result.is_empty(), outcome)
+	return result
+~~~
+
+Deep-copy input records before changing their source to `human_corrected`. Validate every copied
+record before writing. This Part 1 implementation is exercised headlessly and does not enable the
+Export button in Main, so synchronous small-fixture writing is not placed on the UI path. Task 12
+replaces it with the non-blocking ProcessService package workflow, enables Export, and preserves
+this public entry and signal.
+
+- [ ] **Step 3: Add documentation and interface-contract tests first**
+
+`tests/python/test_documentation.py` must fail until all Part 1 artifacts exist. Assert:
+
+- README includes exact Godot, Python, and FFmpeg versions; install/run/test commands; sample
+  regeneration; validation; reviewer opening steps; keyboard table; and plugin overview
+- `docs/architecture.md` contains the required Source → Render → Edit → Export/Feedback flow,
+  corrected store, and training handoff
+- `docs/plugin-api.md` lists every manifest field, required method, signal, lifecycle, error rule,
+  API-version rule, and add-plugin procedure
+- `docs/requirements-traceability.md` contains every Part 1 requirement and all evidence columns
+
+- [ ] **Step 4: Write the Part 1 README runbook**
+
+Document commands that run from repository root:
+
+~~~bash
+.venv/bin/python -m pytest tests/python -q
+.venv/bin/python python/make_sample_input.py --output sample/assignment_v1 --seed 6006
+.venv/bin/python python/validate_annotations.py sample/assignment_v1/model_output.jsonl
+.venv/bin/python python/validate_annotations.py \
+  --schema dataset-manifest-v1.schema.json sample/assignment_v1/manifest.json
+godot --headless --path . --script tests/godot/test_runner.gd
+godot --editor --path .
+~~~
+
+The documented Godot executable must resolve to the same 4.7.2-stable build used by the GUI. The
+README must state that FFmpeg is required for video tests and must not describe a skipped test as a
+pass. Include direct-image and normalized-directory reviewer steps and the current shortcut table.
+
+- [ ] **Step 5: Write the architecture diagram and stable plugin API**
+
+Use this Mermaid topology and explain ownership below it:
+
+~~~mermaid
+flowchart LR
+    Input[Image / sequence / video] --> Source[Source plugin]
+    Source --> Store[Immutable model + corrected store]
+    Store --> Render[Render plugin]
+    Render --> Viewport[AnnotationViewport]
+    Viewport --> Edit[Edit-tools plugin]
+    Edit --> Commands[Validated command history]
+    Commands --> Store
+    Store --> Feedback[Export / Feedback plugin]
+    Feedback --> Handoff[Corrected data / training handoff]
+~~~
+
+`docs/plugin-api.md` records API version 1 exactly as implemented, including deep-copy ownership,
+failure isolation, activation/deactivation, and compatibility tests. Verify that a new plugin is
+discoverable by adding only its directory and manifest.
+
+- [ ] **Step 6: Create the requirements traceability ledger**
+
+Use these exact columns:
+
+~~~markdown
+| Requirement source | Requirement | Implementation | Automated evidence | Manual evidence | Status | Next task |
+|---|---|---|---|---|---|---|
+~~~
+
+Add one row per Part 1 item from assignment lines 61–119. Use only `PASS`, `FAIL`, or `BLOCKED` in
+Status. Link exact files/tests and record the zero-error sample command. Add Part 2–5 rows as
+`BLOCKED` with their next authoritative tasks; never mark an unmeasured or manually unchecked item
+PASS.
+
+- [ ] **Step 7: Clear the environment and zero-error validation gates**
+
+Run:
+
+~~~bash
+python3 --version
+godot --version
+ffmpeg -version
+.venv/bin/python -m pytest tests/python -q
+godot --headless --path . --script tests/godot/test_runner.gd
+.venv/bin/python python/make_sample_input.py --output sample/part1_gate --seed 6006
+.venv/bin/python python/validate_annotations.py sample/part1_gate/model_output.jsonl
+.venv/bin/python python/validate_annotations.py \
+  --schema dataset-manifest-v1.schema.json sample/part1_gate/manifest.json
+git diff --check
+~~~
+
+Expected: Python is within 3.10–3.14, Godot is exactly 4.7.2-stable, FFmpeg is 6.1 or newer, no
+test is skipped for a missing executable, all Python and Godot tests pass, sample generation prints
+`Validation errors: 0`, both validation commands exit 0, and the diff has no whitespace errors.
+
+- [ ] **Step 8: Perform the Part 1 reviewer gate**
+
+From a clean checkout, follow only README instructions to generate the sample, validate it, launch
+Godot, open a standalone image, then open the generated directory. Confirm all four plugin stages
+are discovered and errors are readable. Update every Part 1 traceability row with captured evidence.
+Part 1 passes only when every Part 1 row says PASS.
+
+- [ ] **Step 9: Commit the reviewed Part 1 closure**
+
+~~~bash
+git add README.md docs/architecture.md docs/plugin-api.md \
+  docs/requirements-traceability.md client/plugins/feedback \
+  tests/godot/test_feedback_plugin.gd tests/godot/test_frontend_structure.gd \
+  tests/godot/test_runner.gd tests/python/test_documentation.py
+git commit -m "feat: close assignment part one"
+~~~
+
+**STOP AFTER THIS COMMIT:** report the Part 1 evidence and wait for explicit user approval. Do not
+start Task 10 in the same execution session.
 
 ---
 
@@ -1487,15 +2064,15 @@ git commit -m "feat: autosave safely without blocking the client"
 - Create: tests/python/test_diff.py
 - Create: tests/python/test_package.py
 - Create: tests/expected/diff-summary.json
-- Create: client/plugins/feedback/file_training_handoff/plugin.json
-- Create: client/plugins/feedback/file_training_handoff/plugin.gd
-- Create: tests/godot/test_feedback_plugin.gd
+- Modify: client/plugins/feedback/file_training_handoff/plugin.json
+- Modify: client/plugins/feedback/file_training_handoff/plugin.gd
+- Modify: tests/godot/test_feedback_plugin.gd
 - Modify: client/app/main.gd
 - Modify: tests/godot/test_runner.gd
 
 **Interfaces:**
 - Consumes: immutable model JSONL, corrected JSONL, review state, source manifest.
-- Produces: diff_records(model: dict, corrected: dict, tolerance_px: float = 1.0) -> dict; build_diff(model_records, corrected_records) -> dict; aggregate_diff(frame_diffs) -> dict; build_package(manifest_path, model_path, corrected_path, review_state_path, output_root) -> Path; feedback plugin export(context: Dictionary) -> int process ID and export_finished(success, path_or_error).
+- Produces: diff_records(model: dict, corrected: dict, tolerance_px: float = 1.0) -> dict; build_diff(model_records, corrected_records) -> dict; aggregate_diff(frame_diffs) -> dict; build_package(manifest_path, model_path, corrected_path, review_state_path, output_root) -> Path; feedback plugin `export(context: Dictionary) -> PackedStringArray` and `export_finished(success: bool, path_or_error: String)`.
 
 - [ ] **Step 1: Write failing diff tests**
 
@@ -1574,11 +2151,16 @@ Create python/build_update_package.py with four required input/output arguments 
 
 The CLI also allows --result-file to be omitted for direct terminal use. It prints exactly one success line containing the final package path. When --result-file is present it atomically writes JSON containing success plus path or error. On failure it prints one concise error to stderr and exits nonzero without a traceback.
 
-- [ ] **Step 6: Implement the feedback plugin**
+- [ ] **Step 6: Extend the accepted Part 1 feedback plugin**
 
-Create plugin.json with id file_training_handoff, version 1.0.0, api_version 1, stage feedback, entry plugin.gd.
+Keep plugin ID `file_training_handoff`, stage `feedback`, API version 1, the accepted `export`
+signature, and `export_finished` signal. Increase only the plugin implementation version.
 
-The plugin first requests an immediate autosave, then starts build_update_package.py through ProcessService. It disables duplicate export while running, returns progress through status messages, and emits the final path on success. It never performs hashing or directory copying on the main thread.
+The plugin first requests an immediate autosave, then starts build_update_package.py through
+ProcessService. `export` returns validation/startup errors immediately; accepted work returns an
+empty error list and later emits `export_finished`. It disables duplicate export while running,
+returns progress through status messages, and emits the final path on success. It never performs
+hashing or directory copying on the main thread.
 
 - [ ] **Step 7: Add feedback integration tests**
 
@@ -1720,26 +2302,27 @@ git commit -m "test: verify complete annotation workflow"
 
 ---
 
-### Task 14: Required documentation, reviewer runbook, and submission package
+### Task 14: Complete documentation, reviewer runbook, and submission package
 
 **Files:**
-- Create: README.md
+- Modify: README.md
 - Create: RESULTS.md
-- Create: docs/architecture.md
-- Create: docs/plugin-api.md
+- Modify: docs/architecture.md
+- Modify: docs/plugin-api.md
+- Modify: docs/requirements-traceability.md
 - Create: docs/model-team-interface.md
 - Create: docs/reviewer-script.md
 - Create: docs/demo-script.md
 - Modify: .gitignore if the final generated artifacts reveal an uncovered output path
-- Test: tests/python/test_documentation.py
+- Modify: tests/python/test_documentation.py
 
 **Interfaces:**
 - Consumes: verified commands, measured outputs, keyboard mappings, plugin manifests, package schema.
 - Produces: every written artifact and reviewer instruction required by the assignment.
 
-- [ ] **Step 1: Write failing documentation-presence tests**
+- [ ] **Step 1: Extend the Part 1 documentation tests for final artifacts**
 
-Create tests/python/test_documentation.py. Assert required files exist and contain:
+Extend tests/python/test_documentation.py. Assert required files exist and contain:
 
 - README: environment, install, run, sample regeneration, keyboard shortcuts, reviewer test sequence, plugin overview
 - RESULTS: MITK, coordinate transform, rendering performance, similarity threshold, batch coverage, manual baseline, boundary check, autosave, two or three failure-analysis entries
@@ -1748,13 +2331,13 @@ Create tests/python/test_documentation.py. Assert required files exist and conta
 - plugin API: manifest fields and one add-plugin walkthrough
 - demo script: duration limit and all required shots
 
-- [ ] **Step 2: Write README run commands**
+- [ ] **Step 2: Complete the README runbook**
 
 Document exact prerequisite versions, environment creation, dependency installation from requirements.lock, sample generation, frame-source conversion, validation, Godot launch, full test command, corrected-data packaging, and expected outputs. Include the complete keyboard table from the specification and link to docs/reviewer-script.md.
 
 Add a Submission section stating that the final repository is private and that Qingbiao LI (qingbiao.qli@gmail.com) and Tianci Yang (GitHub user PatchouliTC) are added as collaborators. State that secrets, private configuration, build outputs, and large reproducible assets are not committed.
 
-- [ ] **Step 3: Write architecture and plugin API**
+- [ ] **Step 3: Reconcile the implemented architecture and plugin API**
 
 docs/architecture.md contains one Mermaid diagram and explains immutable model store, corrected store, shared transform, command history, bounded cache, plugin registry, autosave, and file handoff.
 
@@ -1829,11 +2412,13 @@ git commit -m "docs: complete reviewer and model-team handoff"
 | Versioned contract, dual-runtime validation, immutable model output | Tasks 2 and 5 |
 | Deterministic sample and planted defects | Task 3 |
 | Arbitrary-video normalization and frame alignment | Task 4 |
-| Plugin registry and one plugin per required stage | Tasks 6, 7, 8, and 12 |
+| Protected frontend and direct single-image opening | Task 9R |
+| Plugin registry and one working plugin per required stage | Tasks 6, 7, 8, and 9P1; extended in Task 12 |
+| Part 1 architecture, plugin API, README, and traceability gate | Task 9P1 |
 | Image rendering, zoom/pan, transforms, picking, polygons, opacity, FPS | Tasks 7 and 13 |
-| Select/move/resize/nudge/relabel/add/delete/fill/track correction | Task 8 |
+| Select/move/resize/nudge/relabel/add/delete/fill/track correction | Tasks 8 and 9R |
 | Undo/redo and schema-invalid edit refusal | Tasks 5 and 8 |
-| Keyboard-only editing and shortcut documentation | Tasks 8 and 14 |
+| Visible MITK-style modes, keyboard editing, and shortcut documentation | Tasks 8, 9R, and 14 |
 | Playback, step, seek, explicit frame/time, bounded memory | Tasks 6 and 9 |
 | Similarity threshold and contiguous-run detection | Tasks 4 and 10 |
 | Merge/overwrite propagation, batch marker, drift mitigation | Task 10 |
@@ -1847,4 +2432,8 @@ git commit -m "docs: complete reviewer and model-team handoff"
 
 ## Final Acceptance Gate
 
-Before calling the assignment complete, run the full suite from a fresh checkout and regenerated sample, replay docs/reviewer-script.md, validate the exported package checksums, and compare every item in Section 18 of the design specification with a passing test or recorded manual check. Do not claim completion while any required item lacks evidence.
+Before calling any phase complete, check the charter, the phase ledger, and
+`docs/requirements-traceability.md`. Before calling the assignment complete, run the full suite from
+a fresh checkout and regenerated sample, replay docs/reviewer-script.md, validate the exported
+package checksums, and compare every item in Section 18 of the design specification with a passing
+test or recorded manual check. Do not claim completion while any required item lacks evidence.

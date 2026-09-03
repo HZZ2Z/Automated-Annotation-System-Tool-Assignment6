@@ -11,6 +11,7 @@ var cancel_signal_count := 0
 var _viewport: Variant
 var _connected := false
 var _active := false
+var _active_tool: StringName = &"select"
 var _saved_frame_getter := Callable()
 var _saved_selection_getter := Callable()
 var _saved_selection_setter := Callable()
@@ -41,6 +42,7 @@ func activate(context: Dictionary) -> PackedStringArray:
 	if mode == "fail_after_connect":
 		return PackedStringArray(["fixture edit activation failure"])
 	_active = true
+	_active_tool = &"select"
 	return PackedStringArray()
 
 
@@ -53,6 +55,19 @@ func deactivate() -> void:
 	_saved_selection_getter = Callable()
 	_saved_selection_setter = Callable()
 	_active = false
+	_active_tool = &"select"
+
+
+func set_active_tool(tool_id: StringName) -> PackedStringArray:
+	if tool_id not in [&"select", &"move", &"box", &"fill", &"delete"]:
+		return PackedStringArray(["unsupported fixture tool"])
+	cancel()
+	_active_tool = tool_id
+	return PackedStringArray()
+
+
+func get_active_tool() -> StringName:
+	return _active_tool
 
 
 func read_saved_frame() -> int:
@@ -76,6 +91,7 @@ func handle_key(_event: InputEvent) -> bool:
 
 
 func begin_add_box() -> void:
+	_active_tool = &"box"
 	transient_preview = true
 
 

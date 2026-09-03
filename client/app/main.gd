@@ -40,24 +40,25 @@ class StagedEditContextBridge:
 
 
 @export var source_plugin_id := "image_sequence_source"
+@export var single_image_source_plugin_id := "single_image_source"
 @export var render_plugin_id := "canvas_region_renderer"
 @export var edit_plugin_id := "basic_edit_tools"
 
 @onready var _open_button: Button = $MainVBox/TopToolbar/Open
-@onready var _previous_button: Button = $MainVBox/TopToolbar/Previous
-@onready var _play_pause_button: Button = $MainVBox/TopToolbar/PlayPause
-@onready var _next_button: Button = $MainVBox/TopToolbar/Next
-@onready var _frame_label: Label = $MainVBox/TopToolbar/FrameLabel
-@onready var _time_label: Label = $MainVBox/TopToolbar/TimeLabel
-@onready var _zoom_out_button: Button = $MainVBox/TopToolbar/ZoomOut
-@onready var _zoom_in_button: Button = $MainVBox/TopToolbar/ZoomIn
-@onready var _opacity_slider: HSlider = $MainVBox/TopToolbar/Opacity
 @onready var _undo_button: Button = $MainVBox/TopToolbar/Undo
 @onready var _redo_button: Button = $MainVBox/TopToolbar/Redo
+@onready var _tool_panel = $MainVBox/Workspace/ToolPanel
 @onready var _viewport = $MainVBox/Workspace/ViewportPanel/AnnotationViewport
 @onready var _inspector = $MainVBox/Workspace/InspectorPanelContainer/InspectorColumn/InspectorPanel
-@onready var _add_box_button: Button = $MainVBox/Workspace/InspectorPanelContainer/InspectorColumn/AddBox
-@onready var _timeline = $MainVBox/TimelinePanel/Timeline
+@onready var _previous_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/Previous
+@onready var _play_pause_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/PlayPause
+@onready var _next_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/Next
+@onready var _frame_label: Label = $MainVBox/TimelinePanel/TimelineColumn/Transport/FrameLabel
+@onready var _time_label: Label = $MainVBox/TimelinePanel/TimelineColumn/Transport/TimeLabel
+@onready var _zoom_out_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/ZoomOut
+@onready var _zoom_in_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/ZoomIn
+@onready var _opacity_slider: HSlider = $MainVBox/TimelinePanel/TimelineColumn/Transport/Opacity
+@onready var _timeline = $MainVBox/TimelinePanel/TimelineColumn/Timeline
 @onready var _status_bar: Label = $MainVBox/StatusBar
 @onready var _source_dialog: FileDialog = $SourceDialog
 @onready var _playback_timer: Timer = $PlaybackTimer
@@ -99,11 +100,16 @@ func get_discovered_plugin(stage: String, plugin_id: String) -> RefCounted:
 
 func open_source(path: String) -> PackedStringArray:
 	var candidate_errors := PackedStringArray()
-	var source_prototype = _plugin_registry.get_plugin("source", source_plugin_id)
+	var routed_source_plugin_id := _source_plugin_id_for_path(path)
+	if routed_source_plugin_id.is_empty():
+		candidate_errors.append("Unsupported source. Select PNG/JPG/JPEG or a normalized directory; convert video with python/frame_source.py")
+		_show_errors("Cannot open source", candidate_errors)
+		return candidate_errors
+	var source_prototype = _plugin_registry.get_plugin("source", routed_source_plugin_id)
 	var render_candidate = _plugin_registry.get_plugin("render", render_plugin_id)
 	var edit_prototype = _plugin_registry.get_plugin("edit", edit_plugin_id)
 	if source_prototype == null:
-		candidate_errors.append("Configured source plugin is unavailable: %s" % source_plugin_id)
+		candidate_errors.append("Configured source plugin is unavailable: %s" % routed_source_plugin_id)
 	if render_candidate == null:
 		candidate_errors.append("Configured render plugin is unavailable: %s" % render_plugin_id)
 	if edit_prototype == null:
@@ -111,13 +117,9 @@ func open_source(path: String) -> PackedStringArray:
 	if not candidate_errors.is_empty():
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
-	if not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(path)):
-		candidate_errors.append("Select a normalized directory containing manifest.json")
-		_show_errors("Cannot open source", candidate_errors)
-		return candidate_errors
 	var candidate = _new_plugin_instance(source_prototype)
 	if candidate == null:
-		candidate_errors.append("Configured source plugin cannot be instantiated: %s" % source_plugin_id)
+		candidate_errors.append("Configured source plugin cannot be instantiated: %s" % routed_source_plugin_id)
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
 	var open_result: Variant = candidate.open(path)
@@ -335,10 +337,7 @@ func _on_playback_timeout() -> void:
 
 
 func _on_file_selected(path: String) -> void:
-	if DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(path)):
-		open_source(path)
-		return
-	_set_status("Select a normalized directory containing manifest.json")
+	open_source(path)
 
 
 func _on_directory_selected(path: String) -> void:
@@ -383,15 +382,33 @@ func _on_image_pointer_event(event: InputEvent, image_position: Vector2) -> void
 	pause()
 	var before_record := _store.get_corrected_record(_current_frame) if _current_frame >= 0 else {}
 	_edit_plugin.handle_pointer(event, image_position)
-	if event is InputEventMouseButton and not event.pressed:
-		var after_record := _store.get_corrected_record(_current_frame) if _current_frame >= 0 else {}
-		_refresh_after_edit(before_record != after_record)
+	var after_record := _store.get_corrected_record(_current_frame) if _current_frame >= 0 else {}
+	if before_record != after_record:
+		_refresh_after_edit(true)
+	elif event is InputEventMouseButton and not event.pressed:
+		_refresh_after_edit(false)
+
+
+func _on_tool_requested(tool_id: StringName) -> void:
+	pause()
+	if _edit_plugin == null:
+		_tool_panel.set_active_tool(&"select")
+		_set_status("Open a source before choosing an edit tool")
+		return
+	var result: Variant = _edit_plugin.set_active_tool(tool_id)
+	var errors: PackedStringArray = result if result is PackedStringArray else PackedStringArray(["Edit plugin set_active_tool must return PackedStringArray"])
+	_sync_tool_panel()
+	if not errors.is_empty():
+		_show_errors("Tool change refused", errors)
+		return
+	_set_status("Tool: %s" % _tool_display_name(tool_id))
 
 
 func _on_add_box_pressed() -> void:
-	pause()
+	_on_tool_requested(&"box")
 	if _edit_plugin != null:
 		_edit_plugin.begin_add_box()
+		_sync_tool_panel()
 
 
 func _on_relabel_requested(region_id: String, class_label: String) -> void:
@@ -458,6 +475,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	var before_record := _store.get_corrected_record(_current_frame) if _current_frame >= 0 else {}
 	if _edit_plugin.handle_key(event):
 		get_viewport().set_input_as_handled()
+		_sync_tool_panel()
 		var after_record := _store.get_corrected_record(_current_frame) if _current_frame >= 0 else {}
 		if before_record != after_record:
 			_refresh_after_edit(true)
@@ -563,6 +581,15 @@ func _active_frame_count() -> int:
 	return int(value) if _logical_positive_integer(value) else 0
 
 
+func _source_plugin_id_for_path(path: String) -> String:
+	var absolute := ProjectSettings.globalize_path(path)
+	if DirAccess.dir_exists_absolute(absolute):
+		return source_plugin_id
+	if absolute.get_extension().to_lower() in ["png", "jpg", "jpeg"]:
+		return single_image_source_plugin_id
+	return ""
+
+
 func _connect_ui() -> void:
 	_open_button.pressed.connect(func(): _source_dialog.popup_centered_ratio(0.8))
 	_previous_button.pressed.connect(_on_previous_pressed)
@@ -573,7 +600,7 @@ func _connect_ui() -> void:
 	_opacity_slider.value_changed.connect(_on_opacity_changed)
 	_undo_button.pressed.connect(_on_undo_pressed)
 	_redo_button.pressed.connect(_on_redo_pressed)
-	_add_box_button.pressed.connect(_on_add_box_pressed)
+	_tool_panel.tool_requested.connect(_on_tool_requested)
 	_source_dialog.file_selected.connect(_on_file_selected)
 	_source_dialog.dir_selected.connect(_on_directory_selected)
 	_playback_timer.timeout.connect(_on_playback_timeout)
@@ -609,7 +636,33 @@ func _refresh_toolbar() -> void:
 	_play_pause_button.text = "Pause" if _playing else "Play"
 	_undo_button.disabled = not _history.can_undo()
 	_redo_button.disabled = not _history.can_redo()
-	_add_box_button.disabled = not has_source
+	_sync_tool_panel()
+
+
+func _sync_tool_panel() -> void:
+	if not is_node_ready():
+		return
+	var active_tool: StringName = &"select"
+	if _edit_plugin != null:
+		var value: Variant = _edit_plugin.get_active_tool()
+		if typeof(value) == TYPE_STRING or typeof(value) == TYPE_STRING_NAME:
+			active_tool = StringName(value)
+	_tool_panel.set_active_tool(active_tool)
+
+
+func _tool_display_name(tool_id: StringName) -> String:
+	match tool_id:
+		&"select":
+			return "Select"
+		&"move":
+			return "Move"
+		&"box":
+			return "Box"
+		&"fill":
+			return "Fill"
+		&"delete":
+			return "Delete"
+	return str(tool_id)
 
 
 func _format_timestamp(time_s: float) -> String:

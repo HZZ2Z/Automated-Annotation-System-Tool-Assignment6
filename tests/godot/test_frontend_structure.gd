@@ -18,21 +18,22 @@ func run(support, tree: SceneTree) -> void:
 	support.expect_equal(main.anchors_preset, Control.PRESET_FULL_RECT, "scene root should fill its parent")
 	for node_path in [
 		"MainVBox/TopToolbar/Open",
-		"MainVBox/TopToolbar/Previous",
-		"MainVBox/TopToolbar/PlayPause",
-		"MainVBox/TopToolbar/Next",
-		"MainVBox/TopToolbar/FrameLabel",
-		"MainVBox/TopToolbar/TimeLabel",
-		"MainVBox/TopToolbar/Spacer",
-		"MainVBox/TopToolbar/ZoomOut",
-		"MainVBox/TopToolbar/ZoomIn",
-		"MainVBox/TopToolbar/Opacity",
+		"MainVBox/TopToolbar/Save",
 		"MainVBox/TopToolbar/Undo",
 		"MainVBox/TopToolbar/Redo",
+		"MainVBox/TopToolbar/Export",
+		"MainVBox/Workspace/ToolPanel",
 		"MainVBox/Workspace/ViewportPanel/AnnotationViewport",
 		"MainVBox/Workspace/InspectorPanelContainer/InspectorColumn/InspectorPanel",
-		"MainVBox/Workspace/InspectorPanelContainer/InspectorColumn/AddBox",
-		"MainVBox/TimelinePanel/Timeline",
+		"MainVBox/TimelinePanel/TimelineColumn/Transport/Previous",
+		"MainVBox/TimelinePanel/TimelineColumn/Transport/PlayPause",
+		"MainVBox/TimelinePanel/TimelineColumn/Transport/Next",
+		"MainVBox/TimelinePanel/TimelineColumn/Transport/FrameLabel",
+		"MainVBox/TimelinePanel/TimelineColumn/Transport/TimeLabel",
+		"MainVBox/TimelinePanel/TimelineColumn/Transport/ZoomOut",
+		"MainVBox/TimelinePanel/TimelineColumn/Transport/ZoomIn",
+		"MainVBox/TimelinePanel/TimelineColumn/Transport/Opacity",
+		"MainVBox/TimelinePanel/TimelineColumn/Timeline",
 		"MainVBox/StatusBar",
 		"SourceDialog",
 		"PlaybackTimer",
@@ -40,9 +41,9 @@ func run(support, tree: SceneTree) -> void:
 		support.expect(main.get_node_or_null(node_path) != null, "required node should exist: %s" % node_path)
 
 	for removed_path in [
-		"MainVBox/TopToolbar/Save",
-		"MainVBox/TopToolbar/Export",
-		"MainVBox/Workspace/ToolPanel",
+		"MainVBox/TopToolbar/Previous",
+		"MainVBox/TopToolbar/PlayPause",
+		"MainVBox/TopToolbar/Next",
 		"MainVBox/Workspace/MainSplit/CenterPanel/AnnotationCanvas/ImageView",
 		"MainVBox/Workspace/MainSplit/RightPanel/RegionInspector",
 	]:
@@ -50,21 +51,37 @@ func run(support, tree: SceneTree) -> void:
 
 	var viewport = main.get_node_or_null("MainVBox/Workspace/ViewportPanel/AnnotationViewport")
 	var inspector = main.get_node_or_null("MainVBox/Workspace/InspectorPanelContainer/InspectorColumn/InspectorPanel")
-	var timeline = main.get_node_or_null("MainVBox/TimelinePanel/Timeline")
+	var tool_panel = main.get_node_or_null("MainVBox/Workspace/ToolPanel")
+	var timeline = main.get_node_or_null("MainVBox/TimelinePanel/TimelineColumn/Timeline")
 	support.expect(viewport != null and viewport.has_method("set_state") and viewport.has_method("set_renderer"), "workspace should instantiate the real AnnotationViewport API")
 	support.expect(inspector != null and inspector.has_method("populate"), "workspace should instantiate the real InspectorPanel API")
+	support.expect(tool_panel != null and tool_panel.has_method("set_active_tool") and tool_panel.has_method("get_active_tool"), "workspace should instantiate the focused ToolPanel API")
+	if tool_panel != null and tool_panel.has_method("get_active_tool"):
+		support.expect_equal(tool_panel.call("get_active_tool"), &"select", "Select should be the startup tool")
 	support.expect(timeline != null and timeline.has_method("configure"), "timeline panel should instantiate the real Timeline API")
 
+	var save_button := main.get_node_or_null("MainVBox/TopToolbar/Save") as Button
+	var export_button := main.get_node_or_null("MainVBox/TopToolbar/Export") as Button
+	support.expect(save_button != null and save_button.visible and save_button.disabled, "Save should remain visible and disabled until persistence is implemented")
+	support.expect(export_button != null and export_button.visible and export_button.disabled, "Export should remain visible and disabled until feedback wiring is implemented")
+
 	var source_plugin = main.call("get_discovered_plugin", "source", "image_sequence_source")
+	var single_image_plugin = main.call("get_discovered_plugin", "source", "single_image_source")
 	var render_plugin = main.call("get_discovered_plugin", "render", "canvas_region_renderer")
 	var edit_plugin = main.call("get_discovered_plugin", "edit", "basic_edit_tools")
-	support.expect(source_plugin != null and render_plugin != null and edit_plugin != null, "main startup should discover source, render, and edit plugins")
+	var feedback_plugin = main.call("get_discovered_plugin", "feedback", "file_training_handoff")
+	support.expect(source_plugin != null and single_image_plugin != null and render_plugin != null and edit_plugin != null and feedback_plugin != null, "main startup should discover every required plugin stage")
 	if viewport != null and render_plugin != null:
 		support.expect(viewport.get("_renderer") == render_plugin, "main should inject the registry-discovered renderer into AnnotationViewport")
 
 	var dialog := main.get_node_or_null("SourceDialog") as FileDialog
 	support.expect(dialog != null and dialog.file_mode == FileDialog.FILE_MODE_OPEN_ANY, "SourceDialog should accept directories while retaining a file signal")
 	support.expect(dialog != null and dialog.access == FileDialog.ACCESS_FILESYSTEM, "SourceDialog should browse the filesystem")
+	if dialog != null:
+		var filters := " ".join(dialog.filters).to_lower()
+		for extension in ["*.png", "*.jpg", "*.jpeg"]:
+			support.expect(extension in filters, "SourceDialog should expose %s files" % extension)
+		support.expect("*.mp4" in filters, "SourceDialog should expose common video selection for the documented conversion path")
 	var playback_timer := main.get_node_or_null("PlaybackTimer") as Timer
 	support.expect(playback_timer != null and playback_timer.one_shot == false and playback_timer.is_stopped(), "PlaybackTimer should start stopped and repeat")
 	var inspector_container := main.get_node_or_null("MainVBox/Workspace/InspectorPanelContainer") as PanelContainer

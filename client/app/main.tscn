@@ -1,9 +1,10 @@
-[gd_scene load_steps=4 format=3 uid="uid://cef6fvr8knfvm"]
+[gd_scene load_steps=5 format=3 uid="uid://cef6fvr8knfvm"]
 
 [ext_resource type="Script" path="res://client/app/main.gd" id="1_main"]
 [ext_resource type="PackedScene" path="res://client/ui/annotation_viewport.tscn" id="2_viewport"]
 [ext_resource type="PackedScene" path="res://client/ui/inspector_panel.tscn" id="3_inspector"]
 [ext_resource type="PackedScene" path="res://client/ui/timeline.tscn" id="4_timeline"]
+[ext_resource type="PackedScene" path="res://client/ui/tool_panel.tscn" id="5_tools"]
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -27,64 +28,40 @@ custom_minimum_size = Vector2(0, 42)
 layout_mode = 2
 
 [node name="Open" type="Button" parent="MainVBox/TopToolbar"]
+custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 text = "Open"
 
-[node name="Previous" type="Button" parent="MainVBox/TopToolbar"]
+[node name="Save" type="Button" parent="MainVBox/TopToolbar"]
+custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
-text = "Previous"
-
-[node name="PlayPause" type="Button" parent="MainVBox/TopToolbar"]
-layout_mode = 2
-text = "Play"
-
-[node name="Next" type="Button" parent="MainVBox/TopToolbar"]
-layout_mode = 2
-text = "Next"
-
-[node name="FrameLabel" type="Label" parent="MainVBox/TopToolbar"]
-layout_mode = 2
-text = "Frame - / -"
-vertical_alignment = 1
-
-[node name="TimeLabel" type="Label" parent="MainVBox/TopToolbar"]
-layout_mode = 2
-text = "--:--.---"
-vertical_alignment = 1
-
-[node name="Spacer" type="Control" parent="MainVBox/TopToolbar"]
-layout_mode = 2
-size_flags_horizontal = 3
-
-[node name="ZoomOut" type="Button" parent="MainVBox/TopToolbar"]
-layout_mode = 2
-text = "Zoom -"
-
-[node name="ZoomIn" type="Button" parent="MainVBox/TopToolbar"]
-layout_mode = 2
-text = "Zoom +"
-
-[node name="Opacity" type="HSlider" parent="MainVBox/TopToolbar"]
-custom_minimum_size = Vector2(110, 0)
-layout_mode = 2
-min_value = 0.0
-max_value = 1.0
-step = 0.05
-value = 0.35
-tooltip_text = "Annotation opacity"
+disabled = true
+text = "Save"
+tooltip_text = "Available after persistence is implemented"
 
 [node name="Undo" type="Button" parent="MainVBox/TopToolbar"]
+custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 text = "Undo"
 
 [node name="Redo" type="Button" parent="MainVBox/TopToolbar"]
+custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 text = "Redo"
 
-[node name="Workspace" type="HSplitContainer" parent="MainVBox"]
+[node name="Export" type="Button" parent="MainVBox/TopToolbar"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+disabled = true
+text = "Export"
+tooltip_text = "Available after feedback export is implemented"
+
+[node name="Workspace" type="HBoxContainer" parent="MainVBox"]
 layout_mode = 2
 size_flags_vertical = 3
-split_offset = 960
+
+[node name="ToolPanel" parent="MainVBox/Workspace" instance=ExtResource("5_tools")]
+layout_mode = 2
 
 [node name="ViewportPanel" type="PanelContainer" parent="MainVBox/Workspace"]
 custom_minimum_size = Vector2(500, 300)
@@ -105,15 +82,61 @@ layout_mode = 2
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="AddBox" type="Button" parent="MainVBox/Workspace/InspectorPanelContainer/InspectorColumn"]
-layout_mode = 2
-text = "Add box"
-
 [node name="TimelinePanel" type="PanelContainer" parent="MainVBox"]
-custom_minimum_size = Vector2(0, 72)
+custom_minimum_size = Vector2(0, 112)
 layout_mode = 2
 
-[node name="Timeline" parent="MainVBox/TimelinePanel" instance=ExtResource("4_timeline")]
+[node name="TimelineColumn" type="VBoxContainer" parent="MainVBox/TimelinePanel"]
+layout_mode = 2
+
+[node name="Transport" type="HBoxContainer" parent="MainVBox/TimelinePanel/TimelineColumn"]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+
+[node name="Previous" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+layout_mode = 2
+text = "Previous"
+
+[node name="PlayPause" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+layout_mode = 2
+text = "Play"
+
+[node name="Next" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+layout_mode = 2
+text = "Next"
+
+[node name="FrameLabel" type="Label" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+layout_mode = 2
+text = "Frame - / -"
+vertical_alignment = 1
+
+[node name="TimeLabel" type="Label" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+layout_mode = 2
+text = "--:--.---"
+vertical_alignment = 1
+
+[node name="Spacer" type="Control" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="ZoomOut" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+layout_mode = 2
+text = "Zoom -"
+
+[node name="ZoomIn" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+layout_mode = 2
+text = "Zoom +"
+
+[node name="Opacity" type="HSlider" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+custom_minimum_size = Vector2(110, 0)
+layout_mode = 2
+min_value = 0.0
+max_value = 1.0
+step = 0.05
+value = 0.35
+tooltip_text = "Annotation opacity"
+
+[node name="Timeline" parent="MainVBox/TimelinePanel/TimelineColumn" instance=ExtResource("4_timeline")]
 layout_mode = 2
 
 [node name="StatusBar" type="Label" parent="MainVBox"]
@@ -123,9 +146,10 @@ text = "Ready"
 text_overrun_behavior = 3
 
 [node name="SourceDialog" type="FileDialog" parent="."]
-title = "Open normalized annotation source"
+title = "Open image or normalized annotation source"
 file_mode = 3
 access = 2
+filters = PackedStringArray("*.png ; PNG Images", "*.jpg, *.jpeg ; JPEG Images", "*.mp4, *.mov, *.avi, *.mkv ; Video Files")
 
 [node name="PlaybackTimer" type="Timer" parent="."]
 wait_time = 0.0333333

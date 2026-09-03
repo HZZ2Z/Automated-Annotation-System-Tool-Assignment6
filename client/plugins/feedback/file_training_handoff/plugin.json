@@ -1,0 +1,7 @@
+{
+  "id": "file_training_handoff",
+  "version": "1.0.0",
+  "api_version": 1,
+  "stage": "feedback",
+  "entry": "plugin.gd"
+}
