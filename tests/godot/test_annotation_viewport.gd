@@ -10,6 +10,7 @@ func run(support, tree: SceneTree) -> void:
 	await _test_clearing_image_state_invalidates_transform(support, tree)
 	await _test_resize_preserves_user_view(support, tree)
 	await _test_transformed_selection_and_pointer_signal(support, tree)
+	await _test_edit_pointer_boundary_and_order(support, tree)
 	await _test_wheel_and_pan_controls(support, tree)
 	await _test_focus_out_clears_space_pan_state(support, tree)
 	await _test_space_pan_survives_focused_text_input(support, tree)
@@ -184,6 +185,54 @@ func _test_transformed_selection_and_pointer_signal(support, tree: SceneTree) ->
 	viewport.call("_gui_input", click)
 	support.expect_equal(selected_ids, ["box"], "selection should use the same transformed coordinates as drawing")
 	support.expect(pointer_positions.size() == 1 and pointer_positions[0].distance_to(image_point) < 0.00001, "pointer signal should expose image coordinates")
+	viewport.queue_free()
+	await tree.process_frame
+
+
+func _test_edit_pointer_boundary_and_order(support, tree: SceneTree) -> void:
+	var viewport := await _mounted_viewport(tree)
+	viewport.call("set_record", _record())
+	var events: Array[String] = []
+	viewport.region_selected.connect(func(_id: String): events.append("selection"))
+	viewport.image_pointer_event.connect(func(_event: InputEvent, _point: Vector2): events.append("pointer"))
+	_click(viewport, Vector2(25, 25))
+	support.expect_equal(events, ["selection", "pointer"], "ordinary left press should publish selection before the edit pointer event")
+
+	events.clear()
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel.pressed = true
+	wheel.position = Vector2(25, 25)
+	viewport.call("_gui_input", wheel)
+	var middle := InputEventMouseButton.new()
+	middle.button_index = MOUSE_BUTTON_MIDDLE
+	middle.pressed = true
+	middle.position = Vector2(25, 25)
+	viewport.call("_gui_input", middle)
+	var pan_motion := InputEventMouseMotion.new()
+	pan_motion.position = Vector2(30, 30)
+	pan_motion.relative = Vector2(5, 5)
+	pan_motion.button_mask = MOUSE_BUTTON_MASK_MIDDLE
+	viewport.call("_gui_input", pan_motion)
+	middle.pressed = false
+	viewport.call("_gui_input", middle)
+	var space := InputEventKey.new()
+	space.keycode = KEY_SPACE
+	space.pressed = true
+	viewport.call("_gui_input", space)
+	var left := InputEventMouseButton.new()
+	left.button_index = MOUSE_BUTTON_LEFT
+	left.pressed = true
+	left.position = Vector2(25, 25)
+	viewport.call("_gui_input", left)
+	var space_pan := InputEventMouseMotion.new()
+	space_pan.position = Vector2(33, 28)
+	space_pan.relative = Vector2(8, 3)
+	space_pan.button_mask = MOUSE_BUTTON_MASK_LEFT
+	viewport.call("_gui_input", space_pan)
+	left.pressed = false
+	viewport.call("_gui_input", left)
+	support.expect(events.is_empty(), "wheel, middle pan, and Space-left pan events must not reach edit tools")
 	viewport.queue_free()
 	await tree.process_frame
 

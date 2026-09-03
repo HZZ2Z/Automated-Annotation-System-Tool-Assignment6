@@ -19,6 +19,7 @@ static func run(support) -> void:
 	var production_errors: PackedStringArray = registry.discover("res://client/plugins")
 	support.expect_equal(production_errors, PackedStringArray(), "production plugin discovery should be clean")
 	support.expect(registry.get_plugin("source", "image_sequence_source") != null, "nested production source plugin should be discovered")
+	support.expect(registry.get_plugin("edit", "basic_edit_tools") != null, "production edit plugin should be discovered")
 	support.expect(registry.get_plugin("source", "fixture-source") == null, "discover should replace prior registry state")
 	support.expect(registry.get_plugin("source", "image_sequence_source") != registry.get_plugin("source", "missing"), "plugin lookup should return only the requested instance")
 

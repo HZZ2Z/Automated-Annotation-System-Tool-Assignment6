@@ -1,0 +1,90 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://client/ui/inspector_panel.gd" id="1_inspector"]
+
+[node name="InspectorPanel" type="VBoxContainer"]
+custom_minimum_size = Vector2(240, 0)
+script = ExtResource("1_inspector")
+
+[node name="Title" type="Label" parent="."]
+layout_mode = 2
+text = "Region Inspector"
+
+[node name="Fields" type="VBoxContainer" parent="."]
+layout_mode = 2
+
+[node name="RegionId" type="LineEdit" parent="Fields"]
+layout_mode = 2
+editable = false
+placeholder_text = "Region ID"
+tooltip_text = "Region ID (read-only)"
+
+[node name="ClassTaxonomy" type="OptionButton" parent="Fields"]
+layout_mode = 2
+focus_mode = 2
+tooltip_text = "Class taxonomy"
+
+[node name="ClassFreeText" type="LineEdit" parent="Fields"]
+layout_mode = 2
+focus_mode = 2
+placeholder_text = "Class (free text; Enter to apply)"
+
+[node name="Kind" type="LineEdit" parent="Fields"]
+layout_mode = 2
+editable = false
+placeholder_text = "Kind"
+tooltip_text = "Region kind (read-only)"
+
+[node name="Confidence" type="LineEdit" parent="Fields"]
+layout_mode = 2
+editable = false
+placeholder_text = "Confidence"
+tooltip_text = "Model confidence (read-only)"
+
+[node name="TrackId" type="LineEdit" parent="Fields"]
+layout_mode = 2
+focus_mode = 2
+placeholder_text = "Track ID (blank = none; Enter to apply)"
+
+[node name="BoxX" type="SpinBox" parent="Fields"]
+layout_mode = 2
+focus_mode = 2
+max_value = 1000000.0
+allow_greater = true
+tooltip_text = "Box x"
+
+[node name="BoxY" type="SpinBox" parent="Fields"]
+layout_mode = 2
+focus_mode = 2
+max_value = 1000000.0
+allow_greater = true
+tooltip_text = "Box y"
+
+[node name="BoxWidth" type="SpinBox" parent="Fields"]
+layout_mode = 2
+focus_mode = 2
+max_value = 1000000.0
+allow_greater = true
+tooltip_text = "Box width"
+
+[node name="BoxHeight" type="SpinBox" parent="Fields"]
+layout_mode = 2
+focus_mode = 2
+max_value = 1000000.0
+allow_greater = true
+tooltip_text = "Box height"
+
+[node name="Fill" type="CheckButton" parent="Fields"]
+layout_mode = 2
+focus_mode = 2
+text = "Fill region"
+
+[node name="Delete" type="Button" parent="Fields"]
+layout_mode = 2
+focus_mode = 2
+text = "Delete region"
+
+[node name="Status" type="Label" parent="."]
+layout_mode = 2
+autowrap_mode = 2
+text = "Select a region to inspect"

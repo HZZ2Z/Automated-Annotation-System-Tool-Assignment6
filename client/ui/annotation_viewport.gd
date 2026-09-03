@@ -136,7 +136,6 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
-	_emit_image_pointer(event)
 	if event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 		if event.pressed and _viewport_transform.is_configured():
 			var factor := WHEEL_ZOOM_FACTOR if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / WHEEL_ZOOM_FACTOR
@@ -158,17 +157,22 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		if _pan_button == MOUSE_BUTTON_LEFT:
 			_pan_button = MOUSE_BUTTON_NONE
 			accept_event()
+			return
+		_emit_image_pointer(event)
 		return
 	if not _viewport_transform.is_configured():
 		return
 	var hit: Dictionary = _renderer.hit_test(_viewport_transform.viewport_to_image(event.position))
 	if not hit.is_empty():
 		region_selected.emit(str(hit.get("id", "")))
+	_emit_image_pointer(event)
 
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
-	_emit_image_pointer(event)
-	if _pan_button == MOUSE_BUTTON_NONE or not _viewport_transform.is_configured():
+	if _pan_button == MOUSE_BUTTON_NONE:
+		_emit_image_pointer(event)
+		return
+	if not _viewport_transform.is_configured():
 		return
 	_viewport_transform.pan_by(event.relative)
 	notify_transform_changed()
