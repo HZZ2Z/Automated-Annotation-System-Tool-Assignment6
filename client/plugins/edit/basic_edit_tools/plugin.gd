@@ -32,10 +32,14 @@ var _keyboard_box: Array = []
 
 
 func activate(context: Dictionary) -> PackedStringArray:
+	if _active:
+		cancel()
+	_disconnect_viewport_cancel()
 	_clear_transient()
 	_active = false
-	_status_callback = _context_callable(context, ["status", "status_callback"])
 	var errors := PackedStringArray()
+	var status_candidate := _context_callable(context, ["status", "status_callback"])
+	_status_callback = Callable()
 	_store = context.get("store")
 	_history = context.get("history")
 	_viewport = context.get("viewport")
@@ -45,24 +49,25 @@ func activate(context: Dictionary) -> PackedStringArray:
 	var taxonomy_value: Variant = context.get("taxonomy")
 	_taxonomy = taxonomy_value.duplicate(true) if taxonomy_value is Dictionary else {}
 	_require_object_method(_store, "store", "get_corrected_record", errors)
+	_require_object_method(_store, "store", "replace_corrected_record", errors)
 	_require_object_method(_history, "history", "execute", errors)
+	_require_object_method(_history, "history", "undo", errors)
+	_require_object_method(_history, "history", "redo", errors)
 	_require_object_method(_viewport, "viewport", "set_record", errors)
 	_require_object_method(_viewport, "viewport", "set_selected_region_id", errors)
 	_require_object_method(_viewport, "viewport", "get_image_transform", errors)
-	if not _current_frame_getter.is_valid():
-		errors.append("context.current_frame: expected a valid Callable getter")
-	if not _selected_region_getter.is_valid():
-		errors.append("context.selected_region: expected a valid Callable getter")
-	if not _selected_region_setter.is_valid():
-		errors.append("context.set_selected_region: expected a valid Callable setter")
-	if not _status_callback.is_valid():
-		errors.append("context.status: expected a valid Callable callback")
+	_validate_callable_arity(_current_frame_getter, "current_frame", 0, errors)
+	_validate_callable_arity(_selected_region_getter, "selected_region", 0, errors)
+	_validate_callable_arity(_selected_region_setter, "set_selected_region", 1, errors)
+	if _validate_callable_arity(status_candidate, "status", 1, errors):
+		_status_callback = status_candidate
 	if not taxonomy_value is Dictionary:
 		errors.append("context.taxonomy: expected a Dictionary")
 	if not errors.is_empty():
 		_report_errors(errors)
 		return errors
 	_active = true
+	_connect_viewport_cancel()
 	return errors
 
 
@@ -77,7 +82,10 @@ func handle_pointer(event: InputEvent, image_position: Vector2) -> void:
 		else:
 			_finish_pointer_drag(image_position)
 		return
-	if event is InputEventMouseMotion and not _drag_kind.is_empty():
+	if event is InputEventMouseMotion and _is_pointer_drag():
+		if event.button_mask & MOUSE_BUTTON_MASK_LEFT == 0:
+			cancel()
+			return
 		_update_pointer_preview(image_position)
 
 
@@ -87,6 +95,8 @@ func handle_key(event: InputEvent) -> bool:
 	var key: Key = event.keycode if event.keycode != KEY_NONE else event.physical_keycode
 	if key == KEY_ESCAPE:
 		cancel()
+		return true
+	if _add_pointer_mode or _is_pointer_drag():
 		return true
 	if _drag_kind == "keyboard_add":
 		return _handle_keyboard_add_key(event, key)
@@ -150,7 +160,7 @@ func cancel() -> void:
 	var had_preview := not _drag_kind.is_empty() or _add_pointer_mode
 	_clear_transient()
 	if had_preview:
-		_refresh_frame(restore_frame if restore_frame >= 0 else _current_frame())
+		_refresh_visible_frame(restore_frame)
 
 
 func relabel_selected(class_label: String) -> PackedStringArray:
@@ -186,6 +196,8 @@ func delete_selected() -> PackedStringArray:
 
 
 func _begin_pointer_drag(event: InputEventMouseButton, image_position: Vector2) -> void:
+	if _is_pointer_drag():
+		cancel()
 	var frame := _current_frame()
 	var record := _record_for_frame(frame)
 	if frame < 0 or record.is_empty():
@@ -273,7 +285,7 @@ func _finish_pointer_drag(image_position: Vector2) -> void:
 			command = ADD_COMMAND.new(frame, before, _normalized_box(start, image_position), _default_class(), _default_kind())
 	var errors := _execute(command, frame)
 	if errors.is_empty() and kind == "add":
-		_set_selected_region(command.get_region_id())
+		_select_added_if_still_current(frame, command.get_region_id())
 
 
 func _begin_keyboard_add() -> void:
@@ -304,7 +316,7 @@ func _handle_keyboard_add_key(event: InputEventKey, key: Key) -> bool:
 		var command = ADD_COMMAND.new(frame, before, box, _default_class(), _default_kind())
 		var errors := _execute(command, frame)
 		if errors.is_empty():
-			_set_selected_region(command.get_region_id())
+			_select_added_if_still_current(frame, command.get_region_id())
 		return true
 	var direction := _arrow_direction(key)
 	if direction == Vector2.ZERO:
@@ -345,12 +357,20 @@ func _execute(command: Variant, frame: int) -> PackedStringArray:
 	var errors: PackedStringArray = _history.execute(command, _store)
 	if not errors.is_empty():
 		_report_errors(errors)
-	_refresh_frame(frame)
+	_refresh_visible_frame(frame)
 	return errors
 
 
 func _refresh_current_frame() -> void:
-	_refresh_frame(_current_frame())
+	_refresh_visible_frame(-1)
+
+
+func _refresh_visible_frame(fallback_frame: int) -> void:
+	var current := _current_frame()
+	if current >= 0 and not _record_for_frame(current).is_empty():
+		_refresh_frame(current)
+		return
+	_refresh_frame(fallback_frame)
 
 
 func _refresh_frame(frame: int) -> void:
@@ -385,6 +405,22 @@ func _cycle_selection(direction: int) -> void:
 func _set_selected_region(region_id: String) -> void:
 	_selected_region_setter.call(region_id)
 	_viewport.set_selected_region_id(region_id)
+
+
+func _select_added_if_still_current(frozen_frame: int, region_id: String) -> void:
+	if _current_frame() == frozen_frame:
+		_set_selected_region(region_id)
+		return
+	_validate_current_selection()
+
+
+func _validate_current_selection() -> void:
+	var current_record := _record_for_frame(_current_frame())
+	var selected_id := _selected_region_id()
+	if selected_id.is_empty():
+		return
+	if _find_region(current_record, selected_id).is_empty():
+		_set_selected_region("")
 
 
 func _current_frame() -> int:
@@ -571,6 +607,24 @@ func _clear_transient() -> void:
 	_keyboard_box = []
 
 
+func _is_pointer_drag() -> bool:
+	return _drag_kind == "move" or _drag_kind == "resize" or _drag_kind == "add"
+
+
+func _connect_viewport_cancel() -> void:
+	if _viewport is Object and _viewport.has_signal("edit_cancel_requested"):
+		var callback := Callable(self, "cancel")
+		if not _viewport.is_connected("edit_cancel_requested", callback):
+			_viewport.connect("edit_cancel_requested", callback)
+
+
+func _disconnect_viewport_cancel() -> void:
+	if _viewport is Object and _viewport.has_signal("edit_cancel_requested"):
+		var callback := Callable(self, "cancel")
+		if _viewport.is_connected("edit_cancel_requested", callback):
+			_viewport.disconnect("edit_cancel_requested", callback)
+
+
 func _report_errors(errors: PackedStringArray) -> void:
 	if not errors.is_empty():
 		_report("; ".join(errors))
@@ -592,3 +646,14 @@ func _context_callable(context: Dictionary, keys: Array[String]) -> Callable:
 func _require_object_method(value: Variant, field: String, method: String, errors: PackedStringArray) -> void:
 	if not value is Object or not value.has_method(method):
 		errors.append("context.%s: expected an object providing %s" % [field, method])
+
+
+func _validate_callable_arity(value: Callable, field: String, expected: int, errors: PackedStringArray) -> bool:
+	if not value.is_valid():
+		errors.append("context.%s: expected a valid Callable with %d argument(s)" % [field, expected])
+		return false
+	var actual := value.get_argument_count()
+	if actual != expected:
+		errors.append("context.%s: Callable must accept %d argument(s), got %d" % [field, expected, actual])
+		return false
+	return true

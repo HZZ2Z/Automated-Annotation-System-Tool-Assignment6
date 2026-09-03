@@ -11,6 +11,7 @@ const ANNOTATION_VIEWPORT_TEST = preload("res://tests/godot/test_annotation_view
 const EDIT_COMMANDS_TEST = preload("res://tests/godot/test_edit_commands.gd")
 const KEYBOARD_EDITING_TEST = preload("res://tests/godot/test_keyboard_editing.gd")
 const INSPECTOR_PANEL_TEST = preload("res://tests/godot/test_inspector_panel.gd")
+const EDIT_INTEGRATION_TEST = preload("res://tests/godot/test_edit_integration.gd")
 const TEST_SUPPORT = preload("res://tests/godot/test_support.gd")
 
 
@@ -31,6 +32,7 @@ func _run_tests() -> void:
 	EDIT_COMMANDS_TEST.run(support)
 	KEYBOARD_EDITING_TEST.run(support)
 	await INSPECTOR_PANEL_TEST.new().run(support, self)
+	await EDIT_INTEGRATION_TEST.new().run(support, self)
 	if support.failures.is_empty():
 		print("PASS: complete Godot test suite")
 		quit(0)

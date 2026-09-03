@@ -8,6 +8,8 @@ const TRANSFORM_SCRIPT := preload("res://client/services/viewport_transform.gd")
 
 
 class ViewportProbe extends RefCounted:
+	signal edit_cancel_requested
+
 	var records: Array[Dictionary] = []
 	var selected_ids: Array[String] = []
 	var transform = TRANSFORM_SCRIPT.new()
@@ -25,6 +27,16 @@ class ViewportProbe extends RefCounted:
 		return transform
 
 
+class ExecuteOnlyHistory extends RefCounted:
+	func execute(_command, _store) -> PackedStringArray:
+		return PackedStringArray()
+
+
+class ReadOnlyStore extends RefCounted:
+	func get_corrected_record(_frame: int) -> Dictionary:
+		return {}
+
+
 static func run(support: TestSupport) -> void:
 	var plugin_script: Script = ResourceLoader.load(PLUGIN_PATH)
 	support.expect(plugin_script != null, "basic edit-tools plugin should load")
@@ -37,6 +49,11 @@ static func run(support: TestSupport) -> void:
 	_test_keyboard_matrix(plugin_script, support)
 	_test_cycle_delete_undo_redo(plugin_script, support)
 	_test_keyboard_only_add(plugin_script, support)
+	_test_pointer_drag_blocks_command_keys(plugin_script, support)
+	_test_pointer_motion_loss_and_repress_cancel(plugin_script, support)
+	_test_cross_frame_restore_and_selection(plugin_script, support)
+	_test_reactivation_cancels_and_rewires(plugin_script, support)
+	_test_activation_dependency_surface_and_callable_arity(plugin_script, support)
 
 
 static func _test_activation_contract(plugin_script: Script, support: TestSupport) -> void:
@@ -179,9 +196,236 @@ static func _test_keyboard_only_add(plugin_script: Script, support: TestSupport)
 	support.expect_equal(fixture.store.get_corrected_record(0).regions.size(), 3, "keyboard-only add should create a valid box")
 
 
+static func _test_pointer_drag_blocks_command_keys(plugin_script: Script, support: TestSupport) -> void:
+	var fixture := _fixture(plugin_script)
+	fixture.plugin.activate(fixture.context)
+	fixture.selected[0] = "box-1"
+	fixture.plugin.handle_key(_key(KEY_RIGHT))
+	fixture.plugin.handle_key(_key(KEY_Z, false, true))
+	support.expect_equal(fixture.history.get_undo_count(), 0, "setup undo should leave no undo entry")
+	support.expect_equal(fixture.history.get_redo_count(), 1, "setup undo should leave one redo entry")
+	_pointer(fixture.plugin, true, Vector2(15, 15), fixture.viewport)
+	_motion(fixture.plugin, Vector2(18, 15), fixture.viewport)
+	for blocked_event in [_key(KEY_Z, true, true), _key(KEY_RIGHT), _key(KEY_DELETE), _key(KEY_TAB), _key(KEY_A)]:
+		support.expect(fixture.plugin.handle_key(blocked_event), "command and selection keys should be consumed during pointer drag")
+	support.expect_equal(fixture.store.get_corrected_record(0), _record(), "keys during pointer drag must not mutate the store")
+	support.expect_equal(fixture.history.get_undo_count(), 0, "keys during pointer drag must not mutate undo history")
+	support.expect_equal(fixture.history.get_redo_count(), 1, "keys during pointer drag must not mutate redo history")
+	support.expect_equal(fixture.selected[0], "box-1", "keys during pointer drag must not change selection")
+	_pointer(fixture.plugin, false, Vector2(18, 15), fixture.viewport)
+	support.expect_equal(fixture.store.get_corrected_record(0).regions[0].box, [13.0, 10.0, 20, 15], "release should commit only the explicit pointer edit")
+	support.expect_equal(fixture.history.get_undo_count(), 1, "pointer edit should be the sole undo entry")
+	support.expect_equal(fixture.history.get_redo_count(), 0, "successful pointer edit should clear the prior redo branch")
+
+	var armed := _fixture(plugin_script)
+	armed.plugin.activate(armed.context)
+	armed.selected[0] = "box-1"
+	armed.plugin.begin_add_box()
+	for blocked_event in [_key(KEY_RIGHT), _key(KEY_DELETE), _key(KEY_TAB), _key(KEY_A)]:
+		support.expect(armed.plugin.handle_key(blocked_event), "armed pointer add should consume command and selection keys")
+	support.expect_equal(armed.store.get_corrected_record(0), _record(), "armed add keys must not mutate the store")
+	support.expect_equal(armed.selected[0], "box-1", "armed add keys must not change selection")
+	armed.plugin.handle_key(_key(KEY_ESCAPE))
+	support.expect_equal(armed.viewport.records.back(), armed.store.get_corrected_record(0), "Escape should cancel armed add and restore the visible record")
+
+	var resize := _fixture(plugin_script)
+	resize.plugin.activate(resize.context)
+	resize.selected[0] = "box-1"
+	_pointer(resize.plugin, true, Vector2(30, 25), resize.viewport)
+	_motion(resize.plugin, Vector2(35, 29), resize.viewport)
+	for blocked_event in [_key(KEY_RIGHT), _key(KEY_DELETE), _key(KEY_TAB)]:
+		resize.plugin.handle_key(blocked_event)
+	support.expect_equal(resize.store.get_corrected_record(0), _record(), "keys during resize drag must not mutate the store")
+	support.expect_equal(resize.history.get_undo_count(), 0, "keys during resize drag must not enter history")
+	_pointer(resize.plugin, false, Vector2(35, 29), resize.viewport)
+	support.expect_equal(resize.history.get_undo_count(), 1, "resize release should remain one atomic command")
+
+	var add_drag := _fixture(plugin_script)
+	add_drag.plugin.activate(add_drag.context)
+	add_drag.plugin.begin_add_box()
+	_pointer(add_drag.plugin, true, Vector2(60, 50), add_drag.viewport)
+	_motion(add_drag.plugin, Vector2(70, 60), add_drag.viewport)
+	for blocked_event in [_key(KEY_RIGHT), _key(KEY_DELETE), _key(KEY_TAB), _key(KEY_A)]:
+		add_drag.plugin.handle_key(blocked_event)
+	support.expect_equal(add_drag.store.get_corrected_record(0), _record(), "keys during add drag must not mutate the store")
+	support.expect_equal(add_drag.history.get_undo_count(), 0, "keys during add drag must not enter history")
+	_pointer(add_drag.plugin, false, Vector2(70, 60), add_drag.viewport)
+	support.expect_equal(add_drag.history.get_undo_count(), 1, "add release should remain one atomic command")
+
+
+static func _test_pointer_motion_loss_and_repress_cancel(plugin_script: Script, support: TestSupport) -> void:
+	var fixture := _fixture(plugin_script)
+	fixture.plugin.activate(fixture.context)
+	_pointer(fixture.plugin, true, Vector2(15, 15), fixture.viewport)
+	var lost_motion := InputEventMouseMotion.new()
+	lost_motion.position = fixture.viewport.transform.image_to_viewport(Vector2(20, 15))
+	lost_motion.button_mask = 0
+	fixture.plugin.handle_pointer(lost_motion, Vector2(20, 15))
+	support.expect_equal(fixture.viewport.records.back(), fixture.store.get_corrected_record(0), "motion without left button should cancel and restore the real record")
+	_pointer(fixture.plugin, false, Vector2(20, 15), fixture.viewport)
+	support.expect_equal(fixture.history.get_undo_count(), 0, "lost-release cancellation must not commit on a later release")
+
+	_pointer(fixture.plugin, true, Vector2(15, 15), fixture.viewport)
+	_motion(fixture.plugin, Vector2(18, 15), fixture.viewport)
+	_pointer(fixture.plugin, true, Vector2(45, 45), fixture.viewport)
+	support.expect_equal(fixture.history.get_undo_count(), 0, "new left press should cancel rather than submit the abandoned drag")
+	support.expect_equal(fixture.selected[0], "poly-1", "new left press should be evaluated as a fresh selection")
+	_pointer(fixture.plugin, false, Vector2(45, 45), fixture.viewport)
+	support.expect_equal(fixture.store.get_corrected_record(0), _record(), "fresh click after abandoned drag should not apply stale preview")
+
+	_pointer(fixture.plugin, true, Vector2(15, 15), fixture.viewport)
+	_motion(fixture.plugin, Vector2(19, 15), fixture.viewport)
+	fixture.viewport.edit_cancel_requested.emit()
+	support.expect_equal(fixture.viewport.records.back(), fixture.store.get_corrected_record(0), "viewport cancellation signal should restore a suspended drag")
+	_pointer(fixture.plugin, false, Vector2(19, 15), fixture.viewport)
+	support.expect_equal(fixture.history.get_undo_count(), 0, "navigation cancellation should prevent a later stale release commit")
+
+
+static func _test_cross_frame_restore_and_selection(plugin_script: Script, support: TestSupport) -> void:
+	var cancel_fixture := _two_frame_fixture(plugin_script)
+	cancel_fixture.plugin.activate(cancel_fixture.context)
+	_pointer(cancel_fixture.plugin, true, Vector2(15, 15), cancel_fixture.viewport)
+	_motion(cancel_fixture.plugin, Vector2(18, 15), cancel_fixture.viewport)
+	cancel_fixture.frame[0] = 1
+	cancel_fixture.selected[0] = "frame-1-box"
+	cancel_fixture.plugin.cancel()
+	support.expect_equal(cancel_fixture.viewport.records.back(), cancel_fixture.store.get_corrected_record(1), "cross-frame cancel should render the valid current frame")
+
+	var release_fixture := _two_frame_fixture(plugin_script)
+	release_fixture.plugin.activate(release_fixture.context)
+	_pointer(release_fixture.plugin, true, Vector2(15, 15), release_fixture.viewport)
+	_motion(release_fixture.plugin, Vector2(18, 15), release_fixture.viewport)
+	release_fixture.frame[0] = 1
+	release_fixture.selected[0] = "frame-1-box"
+	_pointer(release_fixture.plugin, false, Vector2(18, 15), release_fixture.viewport)
+	support.expect_equal(release_fixture.store.get_corrected_record(0).regions[0].box, [13.0, 10.0, 20, 15], "cross-frame release may commit to its frozen press frame")
+	support.expect_equal(release_fixture.viewport.records.back(), release_fixture.store.get_corrected_record(1), "cross-frame release should render the current frame")
+	support.expect_equal(release_fixture.selected[0], "frame-1-box", "cross-frame move release should preserve current-frame selection")
+
+	var invalid_release := _two_frame_fixture(plugin_script)
+	invalid_release.plugin.activate(invalid_release.context)
+	_pointer(invalid_release.plugin, true, Vector2(15, 15), invalid_release.viewport)
+	_motion(invalid_release.plugin, Vector2(-20, 15), invalid_release.viewport)
+	invalid_release.frame[0] = 1
+	invalid_release.selected[0] = "frame-1-box"
+	_pointer(invalid_release.plugin, false, Vector2(-20, 15), invalid_release.viewport)
+	support.expect_equal(invalid_release.history.get_undo_count(), 0, "invalid cross-frame release should not enter history")
+	support.expect_equal(invalid_release.store.get_corrected_record(0), _record(), "invalid cross-frame release should preserve its frozen frame")
+	support.expect_equal(invalid_release.viewport.records.back(), invalid_release.store.get_corrected_record(1), "invalid cross-frame release should restore the current visible frame")
+
+	var pointer_add := _two_frame_fixture(plugin_script)
+	pointer_add.plugin.activate(pointer_add.context)
+	pointer_add.plugin.begin_add_box()
+	_pointer(pointer_add.plugin, true, Vector2(60, 50), pointer_add.viewport)
+	_motion(pointer_add.plugin, Vector2(70, 60), pointer_add.viewport)
+	pointer_add.frame[0] = 1
+	pointer_add.selected[0] = "frame-1-box"
+	_pointer(pointer_add.plugin, false, Vector2(70, 60), pointer_add.viewport)
+	support.expect_equal(pointer_add.store.get_corrected_record(0).regions.size(), 3, "cross-frame pointer add should apply only to its frozen frame")
+	support.expect_equal(pointer_add.viewport.records.back(), pointer_add.store.get_corrected_record(1), "cross-frame pointer add should leave the current frame visible")
+	support.expect_equal(pointer_add.selected[0], "frame-1-box", "cross-frame pointer add must not select an ID from the old frame")
+
+	var corrected_selection := _two_frame_fixture(plugin_script)
+	corrected_selection.plugin.activate(corrected_selection.context)
+	corrected_selection.plugin.begin_add_box()
+	_pointer(corrected_selection.plugin, true, Vector2(60, 50), corrected_selection.viewport)
+	_motion(corrected_selection.plugin, Vector2(70, 60), corrected_selection.viewport)
+	corrected_selection.frame[0] = 1
+	corrected_selection.selected[0] = "box-1"
+	_pointer(corrected_selection.plugin, false, Vector2(70, 60), corrected_selection.viewport)
+	support.expect_equal(corrected_selection.selected[0], "", "cross-frame add should clear a selection that is invalid on the current frame")
+
+	var keyboard_add := _two_frame_fixture(plugin_script)
+	keyboard_add.plugin.activate(keyboard_add.context)
+	keyboard_add.plugin.handle_key(_key(KEY_A))
+	keyboard_add.frame[0] = 1
+	keyboard_add.selected[0] = "frame-1-box"
+	keyboard_add.plugin.handle_key(_key(KEY_ENTER))
+	support.expect_equal(keyboard_add.store.get_corrected_record(0).regions.size(), 3, "cross-frame keyboard add should apply to its frozen frame")
+	support.expect_equal(keyboard_add.viewport.records.back(), keyboard_add.store.get_corrected_record(1), "keyboard add Enter should render the current frame")
+	support.expect_equal(keyboard_add.selected[0], "frame-1-box", "keyboard add Enter must not select an old-frame ID")
+
+
+static func _test_reactivation_cancels_and_rewires(plugin_script: Script, support: TestSupport) -> void:
+	var old_fixture := _fixture(plugin_script)
+	var plugin = old_fixture.plugin
+	plugin.activate(old_fixture.context)
+	_pointer(plugin, true, Vector2(15, 15), old_fixture.viewport)
+	_motion(plugin, Vector2(19, 15), old_fixture.viewport)
+	var new_fixture := _fixture(plugin_script)
+	support.expect(plugin.activate(new_fixture.context).is_empty(), "valid reactivation should succeed after cancelling old preview")
+	support.expect_equal(old_fixture.viewport.records.back(), old_fixture.store.get_corrected_record(0), "valid reactivation should restore the old viewport before replacing context")
+	_pointer(plugin, true, Vector2(15, 15), new_fixture.viewport)
+	_motion(plugin, Vector2(18, 15), new_fixture.viewport)
+	var new_preview: Dictionary = new_fixture.viewport.records.back()
+	old_fixture.viewport.edit_cancel_requested.emit()
+	support.expect_equal(new_fixture.viewport.records.back(), new_preview, "old viewport cancellation signal should be disconnected after reactivation")
+	new_fixture.viewport.edit_cancel_requested.emit()
+	support.expect_equal(new_fixture.viewport.records.back(), new_fixture.store.get_corrected_record(0), "new viewport cancellation signal should cancel the current preview")
+
+	plugin.activate(new_fixture.context)
+	_pointer(plugin, true, Vector2(15, 15), new_fixture.viewport)
+	_motion(plugin, Vector2(19, 15), new_fixture.viewport)
+	var invalid_context: Dictionary = new_fixture.context.duplicate()
+	invalid_context["history"] = RefCounted.new()
+	support.expect(not plugin.activate(invalid_context).is_empty(), "invalid reactivation should be rejected")
+	support.expect_equal(new_fixture.viewport.records.back(), new_fixture.store.get_corrected_record(0), "invalid reactivation should still restore the prior preview immediately")
+	plugin.handle_key(_key(KEY_ESCAPE))
+	support.expect_equal(new_fixture.viewport.records.back(), new_fixture.store.get_corrected_record(0), "Escape after failed reactivation should not be needed to repair ghost preview")
+
+
+static func _test_activation_dependency_surface_and_callable_arity(plugin_script: Script, support: TestSupport) -> void:
+	var fixture := _fixture(plugin_script)
+	var execute_only: Dictionary = fixture.context.duplicate()
+	execute_only["history"] = ExecuteOnlyHistory.new()
+	var errors: PackedStringArray = plugin_script.new().activate(execute_only)
+	support.expect(_contains_error(errors, "undo") and _contains_error(errors, "redo"), "activation should require the full history method surface")
+	var read_only: Dictionary = fixture.context.duplicate()
+	read_only["store"] = ReadOnlyStore.new()
+	errors = plugin_script.new().activate(read_only)
+	support.expect(_contains_error(errors, "replace_corrected_record"), "activation should require the store replacement boundary")
+
+	var wrong_callbacks := [
+		{"field": "current_frame", "value": func(_unused): return 0, "fragment": "current_frame"},
+		{"field": "selected_region", "value": func(_unused): return "", "fragment": "selected_region"},
+		{"field": "set_selected_region", "value": func(): pass, "fragment": "set_selected_region"},
+		{"field": "status", "value": func(): pass, "fragment": "status"},
+	]
+	for case: Dictionary in wrong_callbacks:
+		var context: Dictionary = fixture.context.duplicate()
+		context[case.field] = case.value
+		errors = plugin_script.new().activate(context)
+		support.expect(_contains_error(errors, case.fragment) and _contains_error(errors, "argument"), "%s callback with wrong arity should be rejected clearly" % case.field)
+
+
 static func _fixture(plugin_script: Script) -> Dictionary:
 	var store = STORE_SCRIPT.new()
 	store.load_model_records([_record()])
+	var history = HISTORY_SCRIPT.new()
+	var viewport := ViewportProbe.new()
+	var frame := [0]
+	var selected := [""]
+	var statuses: Array[String] = []
+	var context := {
+		"store": store,
+		"history": history,
+		"viewport": viewport,
+		"current_frame": func(): return frame[0],
+		"selected_region": func(): return selected[0],
+		"set_selected_region": func(value: String): selected[0] = value,
+		"status": func(message: String): statuses.append(message),
+		"taxonomy": {"classes": [{"id": "unknown", "kind": "region"}]},
+	}
+	return {"plugin": plugin_script.new(), "store": store, "history": history, "viewport": viewport, "frame": frame, "selected": selected, "statuses": statuses, "context": context}
+
+
+static func _two_frame_fixture(plugin_script: Script) -> Dictionary:
+	var store = STORE_SCRIPT.new()
+	var second := _record()
+	second["frame"] = 1
+	second["regions"][0]["id"] = "frame-1-box"
+	second["regions"][1]["id"] = "frame-1-poly"
+	store.load_model_records([_record(), second])
 	var history = HISTORY_SCRIPT.new()
 	var viewport := ViewportProbe.new()
 	var frame := [0]
@@ -237,3 +481,10 @@ static func _record() -> Dictionary:
 			{"id": "poly-1", "class": "gallbladder", "kind": "anatomy", "polygon": [[40, 40], [55, 40], [45, 55]], "filled": true},
 		],
 	}
+
+
+static func _contains_error(errors: PackedStringArray, fragment: String) -> bool:
+	for error: String in errors:
+		if fragment in error:
+			return true
+	return false

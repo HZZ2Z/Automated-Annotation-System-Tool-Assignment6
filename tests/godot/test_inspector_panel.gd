@@ -12,6 +12,7 @@ func run(support: TestSupport, tree: SceneTree) -> void:
 	await _test_empty_and_population_are_safe(packed, support, tree)
 	await _test_deep_snapshot_and_request_signals(packed, support, tree)
 	await _test_polygon_disables_box_geometry(packed, support, tree)
+	await _test_malformed_population_recovers_cleanly(packed, support, tree)
 
 
 func _test_empty_and_population_are_safe(packed: PackedScene, support: TestSupport, tree: SceneTree) -> void:
@@ -99,6 +100,43 @@ func _test_polygon_disables_box_geometry(packed: PackedScene, support: TestSuppo
 	panel.call("populate", _box_record())
 	for path in ["Fields/BoxX", "Fields/BoxY", "Fields/BoxWidth", "Fields/BoxHeight"]:
 		support.expect(panel.get_node(path).editable == true, "box selection should enable %s" % path)
+	panel.queue_free()
+	await tree.process_frame
+
+
+func _test_malformed_population_recovers_cleanly(packed: PackedScene, support: TestSupport, tree: SceneTree) -> void:
+	var panel := packed.instantiate()
+	tree.root.add_child(panel)
+	await tree.process_frame
+	var request_count := [0]
+	for signal_name in ["relabel_requested", "delete_requested", "fill_requested", "geometry_requested", "track_id_requested"]:
+		panel.connect(signal_name, func(_a = null, _b = null): request_count[0] += 1)
+	var malformed_cases := [
+		{"field": "box", "value": null, "geometry_editable": false},
+		{"field": "box", "value": [1, 2, 3], "geometry_editable": false},
+		{"field": "box", "value": [1, 2, null, 4], "geometry_editable": false},
+		{"field": "box", "value": [1, 2, "wide", 4], "geometry_editable": false},
+		{"field": "box", "value": [1, 2, NAN, 4], "geometry_editable": false},
+		{"field": "box", "value": [1, 2, INF, 4], "geometry_editable": false},
+		{"field": "filled", "value": "yes", "geometry_editable": true},
+		{"field": "conf", "value": "high", "geometry_editable": true},
+		{"field": "track_id", "value": 42, "geometry_editable": true},
+	]
+	for case: Dictionary in malformed_cases:
+		var malformed := _box_record()
+		malformed[case.field] = case.value
+		panel.call("populate", malformed)
+		support.expect_equal(panel.get_node("Fields/BoxWidth").editable, case.geometry_editable, "malformed %s should leave geometry in a deterministic enabled state" % case.field)
+		support.expect(not panel.get_node("Status").text.is_empty(), "malformed %s should show a clear status" % case.field)
+		if case.field == "filled":
+			support.expect_equal(panel.get_node("Fields/Fill").button_pressed, false, "non-boolean filled should use a safe false fallback")
+	support.expect_equal(request_count[0], 0, "malformed population must suppress every edit request")
+
+	panel.call("populate", _box_record())
+	support.expect(panel.get_node("Fields/BoxWidth").editable, "valid population after malformed input should restore geometry editing")
+	support.expect_equal(panel.get_node("Status").text, "", "valid population after malformed input should clear validation status")
+	panel.get_node("Fields/BoxWidth").value = 26
+	support.expect_equal(request_count[0], 1, "signal wiring should recover after malformed population without a stuck syncing guard")
 	panel.queue_free()
 	await tree.process_frame
 

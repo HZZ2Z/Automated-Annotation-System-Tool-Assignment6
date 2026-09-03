@@ -54,15 +54,42 @@ func populate(region: Dictionary, taxonomy: Variant = null) -> void:
 		_syncing = false
 		_sync_empty()
 		return
-	_region_id.text = str(_snapshot.get("id", ""))
-	_class_free_text.text = str(_snapshot.get("class", ""))
-	_kind.text = str(_snapshot.get("kind", ""))
-	_confidence.text = "%.2f" % float(_snapshot["conf"]) if _is_number(_snapshot.get("conf")) else ""
+	var validation_errors := PackedStringArray()
+	var id_value: Variant = _snapshot.get("id")
+	var class_value: Variant = _snapshot.get("class")
+	var kind_value: Variant = _snapshot.get("kind")
+	if typeof(id_value) != TYPE_STRING or String(id_value).is_empty():
+		validation_errors.append("Region ID must be a non-empty string")
+	if typeof(class_value) != TYPE_STRING or String(class_value).is_empty():
+		validation_errors.append("Class must be a non-empty string")
+	if typeof(kind_value) != TYPE_STRING or String(kind_value).is_empty():
+		validation_errors.append("Kind must be a non-empty string")
+	_region_id.text = id_value if typeof(id_value) == TYPE_STRING else ""
+	_class_free_text.text = class_value if typeof(class_value) == TYPE_STRING else ""
+	_kind.text = kind_value if typeof(kind_value) == TYPE_STRING else ""
+	var confidence_value: Variant = _snapshot.get("conf")
+	if _snapshot.has("conf") and not _is_number(confidence_value):
+		validation_errors.append("Confidence must be a finite number")
+	_confidence.text = "%.2f" % float(confidence_value) if _is_number(confidence_value) else ""
 	var track_value: Variant = _snapshot.get("track_id")
+	if _snapshot.has("track_id") and track_value != null and typeof(track_value) != TYPE_STRING:
+		validation_errors.append("Track ID must be a string or null")
 	_track_id.text = track_value if typeof(track_value) == TYPE_STRING else ""
-	_fill.button_pressed = bool(_snapshot.get("filled", false))
+	var fill_value: Variant = _snapshot.get("filled", false)
+	if typeof(fill_value) != TYPE_BOOL:
+		validation_errors.append("Filled must be a boolean")
+		fill_value = false
+	_fill.button_pressed = fill_value
 	var box: Variant = _snapshot.get("box")
-	var is_box: bool = box is Array and box.size() == 4
+	var has_box := _snapshot.has("box")
+	var has_polygon := _snapshot.has("polygon")
+	var is_box := has_box and _valid_box(box)
+	if has_box and not is_box:
+		validation_errors.append("Box must contain four finite values with positive size")
+	if has_polygon and not _snapshot.get("polygon") is Array:
+		validation_errors.append("Polygon must be an array")
+	if has_box == has_polygon:
+		validation_errors.append("Region must contain exactly one geometry")
 	if is_box:
 		_box_x.value = float(box[0])
 		_box_y.value = float(box[1])
@@ -74,8 +101,8 @@ func populate(region: Dictionary, taxonomy: Variant = null) -> void:
 		_box_width.value = 0.0
 		_box_height.value = 0.0
 	_select_current_class()
-	_set_controls_enabled(true, is_box)
-	_status.text = ""
+	_set_controls_enabled(typeof(id_value) == TYPE_STRING and not String(id_value).is_empty(), is_box)
+	_status.text = "; ".join(validation_errors)
 	_syncing = false
 
 
@@ -199,3 +226,12 @@ func _on_delete_pressed() -> void:
 
 func _is_number(value: Variant) -> bool:
 	return (typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT) and is_finite(float(value))
+
+
+func _valid_box(value: Variant) -> bool:
+	if not value is Array or value.size() != 4:
+		return false
+	for coordinate: Variant in value:
+		if not _is_number(coordinate):
+			return false
+	return float(value[0]) >= 0.0 and float(value[1]) >= 0.0 and float(value[2]) > 0.0 and float(value[3]) > 0.0

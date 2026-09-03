@@ -28,6 +28,8 @@ static func run(support: TestSupport) -> void:
 	_test_retained_inputs_are_snapshots(scripts, support)
 	_test_add_ids_are_unique_and_monotonic(scripts, support)
 	_test_history_regressions_with_real_commands(scripts, support)
+	_test_invalid_real_commands_preserve_redo_branch(scripts, support)
+	_test_add_id_collision_and_cross_frame_monotonicity(scripts, support)
 
 
 static func _test_round_trips(scripts: Dictionary, support: TestSupport) -> void:
@@ -120,6 +122,61 @@ static func _test_history_regressions_with_real_commands(scripts: Dictionary, su
 	support.expect_equal(history.get_redo_count(), 1, "undo should create a redo branch")
 	support.expect(history.execute(scripts.relabel.new(0, store.get_corrected_record(0), "box-1", "unknown"), store).is_empty(), "new real edit should apply on branch")
 	support.expect_equal(history.get_redo_count(), 0, "successful real edit should clear redo branch")
+
+
+static func _test_invalid_real_commands_preserve_redo_branch(scripts: Dictionary, support: TestSupport) -> void:
+	var store = _store()
+	var history = _history()
+	history.execute(scripts.relabel.new(0, store.get_corrected_record(0), "box-1", "unknown"), store)
+	history.undo(store)
+	var before: Dictionary = store.get_corrected_record(0)
+	var invalid_commands := [
+		scripts.resize.new(0, before, "box-1", [10, 10, 0, 15]),
+		scripts.resize.new(0, before, "box-1", [10, 10, NAN, 15]),
+		scripts.resize.new(0, before, "box-1", [10, 10, INF, 15]),
+		scripts.move.new(99, before, "box-1", Vector2(1, 0)),
+		scripts.move.new(0, before, "missing", Vector2(1, 0)),
+	]
+	for command: Variant in invalid_commands:
+		var errors: PackedStringArray = history.execute(command, store)
+		support.expect(not errors.is_empty(), "invalid real command should return validation errors on an existing redo branch")
+		support.expect_equal(store.get_corrected_record(0), before, "invalid real command should preserve corrected state on a redo branch")
+		support.expect_equal(history.get_undo_count(), 0, "invalid real command should preserve undo count")
+		support.expect_equal(history.get_redo_count(), 1, "invalid real command should preserve redo count")
+
+
+static func _test_add_id_collision_and_cross_frame_monotonicity(scripts: Dictionary, support: TestSupport) -> void:
+	var probe = scripts.add.new(0, _record(), [70, 60, 5, 5], "unknown", "region")
+	var probe_id: String = probe.get_region_id()
+	var number := int(probe_id.get_slice("-", probe_id.get_slice_count("-") - 1))
+	var collision_id := "frame-0-added-%d" % (number + 1)
+	var collision_record := _record()
+	collision_record.regions.append({"id": collision_id, "class": "unknown", "kind": "region", "box": [80, 60, 5, 5], "track_id": null, "filled": false})
+	var collision_store = load(STORE_PATH).new()
+	collision_store.load_model_records([collision_record])
+	var collision_history = _history()
+	var collided = scripts.add.new(0, collision_store.get_corrected_record(0), [90, 60, 5, 5], "unknown", "region")
+	support.expect(collision_history.execute(collided, collision_store).is_empty(), "add should skip a generated candidate already present in the frame")
+	support.expect(collided.get_region_id() != collision_id, "generated ID collision should advance rather than duplicate the candidate")
+
+	var frame_zero := _record()
+	var frame_one := _record()
+	frame_one.frame = 1
+	frame_one.regions[0].id = "frame-one-box"
+	frame_one.regions[1].id = "frame-one-poly"
+	var store = load(STORE_PATH).new()
+	store.load_model_records([frame_zero, frame_one])
+	var history = _history()
+	var added_zero = scripts.add.new(0, store.get_corrected_record(0), [70, 60, 5, 5], "unknown", "region")
+	history.execute(added_zero, store)
+	var zero_id: String = added_zero.get_region_id()
+	var added_one = scripts.add.new(1, store.get_corrected_record(1), [70, 60, 5, 5], "unknown", "region")
+	history.execute(added_one, store)
+	var one_id: String = added_one.get_region_id()
+	history.execute(scripts.delete.new(0, store.get_corrected_record(0), zero_id), store)
+	var next_zero = scripts.add.new(0, store.get_corrected_record(0), [75, 60, 5, 5], "unknown", "region")
+	history.execute(next_zero, store)
+	support.expect(zero_id != one_id and next_zero.get_region_id() != zero_id and next_zero.get_region_id() != one_id, "generated IDs should remain session-monotonic across frames and deletion")
 
 
 static func _store():

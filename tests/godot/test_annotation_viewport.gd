@@ -193,8 +193,10 @@ func _test_edit_pointer_boundary_and_order(support, tree: SceneTree) -> void:
 	var viewport := await _mounted_viewport(tree)
 	viewport.call("set_record", _record())
 	var events: Array[String] = []
+	var cancellation_count := [0]
 	viewport.region_selected.connect(func(_id: String): events.append("selection"))
 	viewport.image_pointer_event.connect(func(_event: InputEvent, _point: Vector2): events.append("pointer"))
+	viewport.connect("edit_cancel_requested", func(): cancellation_count[0] += 1)
 	_click(viewport, Vector2(25, 25))
 	support.expect_equal(events, ["selection", "pointer"], "ordinary left press should publish selection before the edit pointer event")
 
@@ -233,6 +235,10 @@ func _test_edit_pointer_boundary_and_order(support, tree: SceneTree) -> void:
 	left.pressed = false
 	viewport.call("_gui_input", left)
 	support.expect(events.is_empty(), "wheel, middle pan, and Space-left pan events must not reach edit tools")
+	space.pressed = false
+	viewport.call("_gui_input", space)
+	viewport.notification(Node.NOTIFICATION_WM_WINDOW_FOCUS_OUT)
+	support.expect_equal(cancellation_count[0], 4, "wheel, middle pan, Space-left pan, and focus loss should request transient edit cancellation")
 	viewport.queue_free()
 	await tree.process_frame
 

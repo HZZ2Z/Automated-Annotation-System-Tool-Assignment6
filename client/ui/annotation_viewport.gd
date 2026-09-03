@@ -4,6 +4,7 @@ extends Control
 signal region_selected(region_id: String)
 signal image_pointer_event(event: InputEvent, image_position: Vector2)
 signal transform_changed
+signal edit_cancel_requested
 
 const TRANSFORM_SCRIPT := preload("res://client/services/viewport_transform.gd")
 const RENDERER_SCRIPT := preload("res://client/plugins/render/canvas_region_renderer/plugin.gd")
@@ -103,6 +104,7 @@ func _draw() -> void:
 func _notification(what: int) -> void:
 	match what:
 		NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+			edit_cancel_requested.emit()
 			_space_held = false
 			_pan_button = MOUSE_BUTTON_NONE
 		NOTIFICATION_RESIZED:
@@ -138,18 +140,22 @@ func _unhandled_key_input(event: InputEvent) -> void:
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 		if event.pressed and _viewport_transform.is_configured():
+			edit_cancel_requested.emit()
 			var factor := WHEEL_ZOOM_FACTOR if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / WHEEL_ZOOM_FACTOR
 			_viewport_transform.zoom_at(event.position, factor)
 			notify_transform_changed()
 		accept_event()
 		return
 	if event.button_index == MOUSE_BUTTON_MIDDLE:
+		if event.pressed:
+			edit_cancel_requested.emit()
 		_pan_button = MOUSE_BUTTON_MIDDLE if event.pressed else MOUSE_BUTTON_NONE
 		accept_event()
 		return
 	if event.button_index != MOUSE_BUTTON_LEFT:
 		return
 	if event.pressed and _space_held:
+		edit_cancel_requested.emit()
 		_pan_button = MOUSE_BUTTON_LEFT
 		accept_event()
 		return
