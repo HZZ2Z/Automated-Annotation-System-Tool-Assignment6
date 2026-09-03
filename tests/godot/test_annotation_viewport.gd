@@ -11,6 +11,7 @@ func run(support, tree: SceneTree) -> void:
 	await _test_resize_preserves_user_view(support, tree)
 	await _test_transformed_selection_and_pointer_signal(support, tree)
 	await _test_wheel_and_pan_controls(support, tree)
+	await _test_focus_out_clears_space_pan_state(support, tree)
 	await _test_space_pan_survives_focused_text_input(support, tree)
 
 
@@ -242,6 +243,53 @@ func _test_wheel_and_pan_controls(support, tree: SceneTree) -> void:
 	await tree.process_frame
 
 
+func _test_focus_out_clears_space_pan_state(support, tree: SceneTree) -> void:
+	var viewport := await _mounted_viewport(tree)
+	viewport.call("set_record", _record())
+	await tree.process_frame
+	var transform = viewport.call("get_image_transform")
+	var transform_signal_count := [0]
+	var redraw_count := [0]
+	viewport.connect("transform_changed", func(): transform_signal_count[0] += 1)
+	viewport.draw.connect(func(): redraw_count[0] += 1)
+
+	var space_down := InputEventKey.new()
+	space_down.keycode = KEY_SPACE
+	space_down.pressed = true
+	Input.parse_input_event(space_down)
+	await tree.process_frame
+	var left_down := InputEventMouseButton.new()
+	left_down.button_index = MOUSE_BUTTON_LEFT
+	left_down.pressed = true
+	left_down.position = Vector2(100, 100)
+	viewport.call("_gui_input", left_down)
+
+	viewport.notification(Node.NOTIFICATION_WM_WINDOW_FOCUS_OUT)
+	var pan_before: Vector2 = transform.pan
+	viewport.call("_gui_input", left_down)
+	var ordinary_drag := InputEventMouseMotion.new()
+	ordinary_drag.position = Vector2(109, 104)
+	ordinary_drag.relative = Vector2(9, 4)
+	ordinary_drag.button_mask = MOUSE_BUTTON_MASK_LEFT
+	viewport.call("_gui_input", ordinary_drag)
+	support.expect_equal(transform.pan, pan_before, "window focus loss should clear Space and active pan before an ordinary left drag")
+	support.expect_equal(transform_signal_count[0], 0, "focus loss without a transform change should not emit transform_changed")
+	await tree.process_frame
+	support.expect_equal(redraw_count[0], 0, "focus loss without a transform change should not queue redraw")
+
+	var left_up := InputEventMouseButton.new()
+	left_up.button_index = MOUSE_BUTTON_LEFT
+	left_up.pressed = false
+	viewport.call("_gui_input", left_up)
+	var space_up := InputEventKey.new()
+	space_up.keycode = KEY_SPACE
+	space_up.pressed = false
+	Input.parse_input_event(space_up)
+	await tree.process_frame
+	viewport.queue_free()
+	await tree.process_frame
+
+
 func _test_space_pan_survives_focused_text_input(support, tree: SceneTree) -> void:
 	var viewport := await _mounted_viewport(tree)
 	viewport.call("set_record", _record())
@@ -290,6 +338,11 @@ func _test_space_pan_survives_focused_text_input(support, tree: SceneTree) -> vo
 	space_up.pressed = false
 	Input.parse_input_event(space_up)
 	await tree.process_frame
+	pan_before = transform.pan
+	viewport.call("_gui_input", left_down)
+	viewport.call("_gui_input", drag)
+	support.expect_equal(transform.pan, pan_before, "normal Space release should clear the modifier before an ordinary left drag")
+	viewport.call("_gui_input", left_up)
 	line_edit.release_focus()
 	line_edit.queue_free()
 	viewport.queue_free()

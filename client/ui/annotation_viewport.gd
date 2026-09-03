@@ -101,12 +101,17 @@ func _draw() -> void:
 
 
 func _notification(what: int) -> void:
-	if what != NOTIFICATION_RESIZED or _viewport_transform == null or _renderer == null:
-		return
-	if _configure_transform():
-		_sync_renderer()
-		queue_redraw()
-		transform_changed.emit()
+	match what:
+		NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+			_space_held = false
+			_pan_button = MOUSE_BUTTON_NONE
+		NOTIFICATION_RESIZED:
+			if _viewport_transform == null or _renderer == null:
+				return
+			if _configure_transform():
+				_sync_renderer()
+				queue_redraw()
+				transform_changed.emit()
 
 
 func _input(event: InputEvent) -> void:
