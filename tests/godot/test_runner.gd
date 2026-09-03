@@ -2,7 +2,7 @@ extends SceneTree
 
 const FRONTEND_STRUCTURE_TEST = preload("res://tests/godot/test_frontend_structure.gd")
 const TOOL_PANEL_TEST = preload("res://tests/godot/test_tool_panel.gd")
-const ANNOTATION_VALIDATOR_TEST = preload("res://tests/godot/test_annotation_validator.gd")
+const MODEL_OUTPUT_VALIDATOR_TEST = preload("res://tests/godot/test_model_output_validator.gd")
 const ANNOTATION_STORE_TEST = preload("res://tests/godot/test_annotation_store.gd")
 const PLUGIN_REGISTRY_TEST = preload("res://tests/godot/test_plugin_registry.gd")
 const SOURCE_PLUGIN_TEST = preload("res://tests/godot/test_source_plugin.gd")
@@ -29,7 +29,7 @@ func _run_tests() -> void:
 	var support = TEST_SUPPORT.new()
 	await TOOL_PANEL_TEST.new().run(support, self)
 	await FRONTEND_STRUCTURE_TEST.new().run(support, self)
-	ANNOTATION_VALIDATOR_TEST.run(support)
+	MODEL_OUTPUT_VALIDATOR_TEST.run(support)
 	ANNOTATION_STORE_TEST.run(support)
 	PLUGIN_REGISTRY_TEST.run(support)
 	SOURCE_PLUGIN_TEST.run(support)
