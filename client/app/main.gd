@@ -8,6 +8,37 @@ const TAXONOMY_PATH := "res://core/taxonomy/classes.json"
 const MAX_STATUS_LENGTH := 180
 const ZOOM_FACTOR := 1.2
 
+
+class StagedEditContextBridge:
+	extends RefCounted
+
+	var _main_ref: WeakRef
+	var _live := false
+	var _staged_selection := ""
+
+	func _init(main: AnnotationMain) -> void:
+		_main_ref = weakref(main)
+
+	func get_current_frame() -> int:
+		var main := _main_ref.get_ref() as AnnotationMain
+		return main.get_current_frame() if _live and main != null else 0
+
+	func get_selected_region() -> String:
+		var main := _main_ref.get_ref() as AnnotationMain
+		return main._get_selected_region_id() if _live and main != null else _staged_selection
+
+	func set_selected_region(region_id: String) -> void:
+		var main := _main_ref.get_ref() as AnnotationMain
+		if _live and main != null:
+			main._set_selected_region(region_id)
+		else:
+			_staged_selection = region_id
+
+	func switch_to_live() -> void:
+		_staged_selection = ""
+		_live = true
+
+
 @export var source_plugin_id := "image_sequence_source"
 @export var render_plugin_id := "canvas_region_renderer"
 @export var edit_plugin_id := "basic_edit_tools"
@@ -36,6 +67,7 @@ var _source: Variant
 var _store = STORE_SCRIPT.new()
 var _history = HISTORY_SCRIPT.new(200)
 var _edit_plugin: Variant
+var _edit_context_bridge: Variant
 var _render_plugin: Variant
 var _manifest: Dictionary = {}
 var _taxonomy: Dictionary = {}
@@ -135,6 +167,16 @@ func open_source(path: String) -> PackedStringArray:
 		candidate.close()
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
+	for index in range(candidate_frame_count):
+		var indexed_record: Dictionary = candidate_store.get_corrected_record(index)
+		var record_frame: Variant = indexed_record.get("frame")
+		if indexed_record.is_empty() or not _logical_integer(record_frame) or int(record_frame) != index:
+			candidate_errors.append("Source model records must contain contiguous frame %d" % index)
+			break
+	if not candidate_errors.is_empty():
+		candidate.close()
+		_show_errors("Cannot open source", candidate_errors)
+		return candidate_errors
 	var texture_value: Variant = candidate.load_texture(0)
 	var first_texture: Texture2D = texture_value if texture_value is Texture2D else null
 	var first_record: Dictionary = candidate_store.get_corrected_record(0)
@@ -165,7 +207,8 @@ func open_source(path: String) -> PackedStringArray:
 		candidate.close()
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
-	var edit_result: Variant = candidate_edit.activate(_edit_context(candidate_store, candidate_history))
+	var candidate_context_bridge := StagedEditContextBridge.new(self)
+	var edit_result: Variant = candidate_edit.activate(_edit_context(candidate_store, candidate_history, candidate_context_bridge))
 	var edit_errors := PackedStringArray()
 	if edit_result is PackedStringArray:
 		edit_errors = edit_result
@@ -185,11 +228,13 @@ func open_source(path: String) -> PackedStringArray:
 	_store = candidate_store
 	_history = candidate_history
 	_edit_plugin = candidate_edit
+	_edit_context_bridge = candidate_context_bridge
 	_render_plugin = render_candidate
 	_viewport.set_renderer(_render_plugin)
 	_manifest = candidate_manifest.duplicate(true)
 	_current_frame = 0
 	_selected_region_id = ""
+	candidate_context_bridge.switch_to_live()
 	_timeline.configure(candidate_frame_count)
 	_viewport.set_state(first_texture, first_record, "", _opacity_slider.value)
 	_inspector.populate({}, _taxonomy)
@@ -478,14 +523,14 @@ func _find_region(record: Dictionary, region_id: String) -> Dictionary:
 	return {}
 
 
-func _edit_context(store: Variant, history: Variant) -> Dictionary:
+func _edit_context(store: Variant, history: Variant, bridge: StagedEditContextBridge) -> Dictionary:
 	return {
 		"store": store,
 		"history": history,
 		"viewport": _viewport,
-		"get_current_frame": Callable(self, "get_current_frame"),
-		"get_selected_region": Callable(self, "_get_selected_region_id"),
-		"set_selected_region": Callable(self, "_set_selected_region"),
+		"get_current_frame": Callable(bridge, "get_current_frame"),
+		"get_selected_region": Callable(bridge, "get_selected_region"),
+		"set_selected_region": Callable(bridge, "set_selected_region"),
 		"status": Callable(self, "_set_status"),
 		"taxonomy": _taxonomy,
 	}
@@ -617,5 +662,6 @@ func _exit_tree() -> void:
 	if is_instance_valid(_playback_timer):
 		_playback_timer.stop()
 	_deactivate_edit(_edit_plugin)
+	_edit_context_bridge = null
 	if _source != null:
 		_source.close()

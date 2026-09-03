@@ -21,7 +21,7 @@ func open(_path: String):
 func get_frame_count():
 	if mode == "frame_count_wrong_type":
 		return "one"
-	if mode in ["frame_count_mismatch", "valid_two", "records_count_mismatch", "entry_second_bad_frame", "entry_second_bad_time"]:
+	if mode in ["frame_count_mismatch", "valid_two", "records_count_mismatch", "records_hole", "entry_second_bad_frame", "entry_second_bad_time"]:
 		return 2
 	return 1
 
@@ -50,12 +50,12 @@ func get_model_records():
 		"image_size": [40, 30],
 		"regions": [],
 	}]
-	if mode in ["valid_two", "entry_second_bad_frame", "entry_second_bad_time"]:
+	if mode in ["valid_two", "records_hole", "entry_second_bad_frame", "entry_second_bad_time"]:
 		records.append({
 			"schema_version": 1,
 			"dataset_id": "counting-source",
 			"source": "model_output_v1",
-			"frame": 1,
+			"frame": 2 if mode == "records_hole" else 1,
 			"time_s": 2.25,
 			"image_size": [40, 30],
 			"regions": [],
@@ -71,7 +71,7 @@ func get_manifest():
 	var fps: Variant = 20.0
 	if mode == "manifest_bad_fps":
 		fps = 0.0
-	var count := 2 if mode in ["valid_two", "records_count_mismatch", "entry_second_bad_frame", "entry_second_bad_time"] else 1
+	var count := 2 if mode in ["valid_two", "records_count_mismatch", "records_hole", "entry_second_bad_frame", "entry_second_bad_time"] else 1
 	return {"frame_count": count, "nominal_fps": fps}
 
 
