@@ -1,10 +1,19 @@
 import json
+import hashlib
+import subprocess
+import sys
 from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
 from annotool.contracts import validate_instance
+from validate_model_output import (
+    load_schema,
+    main,
+    validate_model_output,
+    validate_record,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -108,3 +117,65 @@ def test_assignment_does_not_add_project_only_fields() -> None:
             record[field] = value
             expected_path = f"{field}:"
         assert any(error.startswith(expected_path) for error in validate(record))
+
+
+def test_validator_public_api_uses_v1_schema() -> None:
+    assert load_schema()["$id"] == "model_output_v1.schema.json"
+    record = load(VALID / "assignment-model-output-v1.json")
+    assert validate_record(record) == []
+
+
+def test_jsonl_errors_include_record_index_and_field_path(tmp_path: Path) -> None:
+    valid = load(VALID / "model-output-v1-box-only.json")
+    invalid = deepcopy(valid)
+    del invalid["regions"][0]["class"]
+    path = tmp_path / "model_output_v1.jsonl"
+    path.write_text(
+        json.dumps(valid) + "\n" + json.dumps(invalid) + "\n",
+        encoding="utf-8",
+    )
+    errors = validate_model_output(path)
+    assert any(error.startswith("record 1: regions.0.class:") for error in errors)
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_non_finite_json_is_rejected_without_traceback(
+    tmp_path: Path, constant: str
+) -> None:
+    path = tmp_path / "model_output_v1.jsonl"
+    path.write_text(
+        '{"schema_version":1,"source":"sample_v1","frame":0,'
+        f'"time_s":{constant},"regions":[]}}\n',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "python/validate_model_output.py"), str(path)],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "non-finite JSON constant" in result.stdout
+    assert "Traceback" not in result.stdout + result.stderr
+
+
+def test_validator_does_not_modify_model_file(tmp_path: Path) -> None:
+    source = VALID / "assignment-model-output-v1.json"
+    path = tmp_path / "model_output_v1.json"
+    path.write_bytes(source.read_bytes())
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert validate_model_output(path) == []
+    after = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert after == before
+
+
+def test_main_returns_one_for_malformed_json_and_no_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "model_output_v1.json"
+    path.write_text("{bad", encoding="utf-8")
+    assert main([str(path)]) == 1
+    captured = capsys.readouterr()
+    assert str(path) in captured.out
+    assert "Traceback" not in captured.out + captured.err
