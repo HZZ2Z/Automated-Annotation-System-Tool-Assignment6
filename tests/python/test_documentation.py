@@ -14,34 +14,33 @@ def test_readme_is_a_complete_part1_runbook() -> None:
     readme = _read("README.md")
     lower = readme.lower()
 
-    principles = lower.index("development principles")
-    quick_start = lower.index("quick start")
+    principles = readme.index("开发原则")
+    quick_start = readme.index("快速开始")
     assert principles < quick_start
     for phrase in (
         "mitk",
-        "structured",
-        "clear interfaces",
-        "maintainable",
-        "part 1 boundary",
+        "所有权",
+        "清晰接口",
+        "可维护",
+        "part 1 边界",
     ):
         assert phrase in lower
 
     for version in ("Godot 4.7.2-stable", "Python 3.14.7", "FFmpeg 6.1+"):
         assert version in readme
     for command in (
+        ".venv/bin/python python/make_sample_input.py --output sample/assignment_v1 --seed 6006",
+        ".venv/bin/python python/validate_model_output.py sample/assignment_v1/model_output_v1.jsonl",
         ".venv/bin/python -m pytest tests/python -q",
-        "python/make_sample_input.py --output sample/assignment_v1 --seed 6006",
-        "python/validate_annotations.py sample/assignment_v1/model_output.jsonl",
-        "--schema dataset-manifest-v1.schema.json sample/assignment_v1/manifest.json",
         "tests/godot/test_runner.gd",
         "--editor --path .",
         "ffmpeg -version",
     ):
         assert command in readme
 
-    assert "standalone image" in lower
-    assert "normalized directory" in lower
-    assert "| action | shortcut |" in lower
+    assert "单张图像" in readme
+    assert "归一化目录" in readme
+    assert "| 操作 | 快捷键 |" in readme
     for shortcut in ("ctrl+z", "ctrl+shift+z", "shift+tab", "alt+arrow", "escape"):
         assert shortcut in lower
     for plugin_id in (
@@ -59,17 +58,17 @@ def test_architecture_document_contains_required_pipeline_and_ownership() -> Non
     lower = architecture.lower()
     assert "```mermaid" in architecture
     for node in (
-        "Source plugin",
-        "Immutable model + corrected store",
-        "Render plugin",
+        "数据源插件",
+        "不可变模型输出 + 修正副本",
+        "渲染插件",
         "AnnotationViewport",
-        "Edit-tools plugin",
-        "Validated command history",
-        "Export / Feedback plugin",
-        "Corrected data / training handoff",
+        "编辑工具插件",
+        "已验证命令历史",
+        "导出/回传插件",
+        "修正数据/训练交接",
     ):
         assert node in architecture
-    for concept in ("ownership", "immutable", "deep copy", "failure isolation"):
+    for concept in ("所有权", "不可变", "深拷贝", "故障隔离"):
         assert concept in lower
 
 
@@ -79,7 +78,7 @@ def test_plugin_api_documents_the_stable_version1_contract() -> None:
     for manifest_field in ("id", "version", "api_version", "stage", "entry"):
         assert f"`{manifest_field}`" in api
     for stage in ("source", "render", "edit", "feedback"):
-        assert f"## {stage.title()}" in api
+        assert stage in lower
     for method in (
         "open",
         "get_frame_count",
@@ -110,12 +109,12 @@ def test_plugin_api_documents_the_stable_version1_contract() -> None:
     for phrase in (
         "api version 1",
         "export_finished",
-        "lifecycle",
-        "deep copy",
-        "failure isolation",
+        "生命周期",
+        "深拷贝",
+        "故障隔离",
         "packedstringarray",
-        "add a plugin",
-        "without changing the registry",
+        "新增插件",
+        "不修改 registry",
     ):
         assert phrase in lower
 
@@ -123,8 +122,8 @@ def test_plugin_api_documents_the_stable_version1_contract() -> None:
 def test_traceability_covers_part1_and_blocks_later_scope() -> None:
     ledger = _read("docs/requirements-traceability.md")
     assert (
-        "| Requirement source | Requirement | Implementation | Automated evidence | "
-        "Manual evidence | Status | Next task |"
+        "| 要求来源 | 要求 | 实现 | 自动化证据 | "
+        "人工证据 | 状态 | 后续任务 |"
     ) in ledger
     for requirement in (
         "1.1 Data contract",
@@ -158,3 +157,33 @@ def test_traceability_covers_part1_and_blocks_later_scope() -> None:
         assert columns[5] in {"PASS", "FAIL", "BLOCKED"}
     for part in ("Part 2", "Part 3", "Part 4", "Part 5"):
         assert any(part in row and "| BLOCKED |" in row for row in table_rows)
+
+
+def test_part1_1_documents_match_the_implemented_contract() -> None:
+    documents = "\n".join(
+        _read(path)
+        for path in (
+            "README.md",
+            "docs/architecture.md",
+            "docs/plugin-api.md",
+            "docs/requirements-traceability.md",
+            "docs/part1-implementation-report.md",
+        )
+    )
+
+    for required in (
+        "core/schemas/model_output_v1.schema.json",
+        "python/validate_model_output.py",
+        "client/domain/model_output_validator.gd",
+        "model_output_v1.jsonl",
+        "sample_v1",
+        "SHA-256",
+    ):
+        assert required in documents
+
+    for obsolete in (
+        "core/schemas/annotation-v1.schema.json",
+        "python/validate_annotations.py",
+        "source = human_corrected",
+    ):
+        assert obsolete not in documents

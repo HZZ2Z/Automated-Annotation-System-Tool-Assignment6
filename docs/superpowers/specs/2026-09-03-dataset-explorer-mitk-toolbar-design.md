@@ -119,7 +119,7 @@ DATASET
     │   ├── <manifest frame path 1>
     │   └── ...
     ├── manifest.json
-    └── model_output.jsonl
+    └── model_output_v1.jsonl
 ```
 
 Only metadata files that actually exist are shown. For a standalone image, the tree contains the

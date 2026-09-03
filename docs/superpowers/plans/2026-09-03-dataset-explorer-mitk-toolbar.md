@@ -929,7 +929,11 @@ func _build_dataset_explorer_view_model(path: String, manifest: Dictionary) -> D
 			})
 	var artifacts: Array[Dictionary] = []
 	if is_directory:
-		for label: String in ["manifest.json", "model_output.jsonl"]:
+		var model_version := str(manifest.get("model_version", "none"))
+		var artifact_labels := ["manifest.json"]
+		if model_version == "model_output_v1":
+			artifact_labels.append("model_output_v1.jsonl")
+		for label: String in artifact_labels:
 			var artifact_path := absolute.path_join(label)
 			if FileAccess.file_exists(artifact_path):
 				artifacts.append({"label": label, "path": artifact_path})
@@ -1131,7 +1135,7 @@ modified in the isolated worktree.
   - the 2D palette remains fixed below the inspector.
 - [ ] Open a normalized dataset. Verify:
   - `Frames (<count>)` matches the accepted manifest;
-  - only real `manifest.json` and `model_output.jsonl` artifacts are shown;
+  - 只显示真实存在的 `manifest.json` 和版本化 `model_output_v1.jsonl`；
   - clicking a frame updates image, timeline, time label, and highlight once;
   - timeline, previous/next, playback, and direct seek update the same highlight.
 - [ ] Select a functional tool and click each reserved tool. Verify every click shows exactly

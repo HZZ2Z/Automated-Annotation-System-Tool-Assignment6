@@ -1,33 +1,33 @@
-# Automated Annotation System
+# 自动标注系统
 
-Godot client and Python tooling for a versioned, plugin-based surgical-image annotation workflow. This repository currently claims the assignment's **Part 1 foundation only**: reproducible inputs, shared contracts, source normalization, plugin discovery, one working plugin per required stage, and a runnable integration shell.
+本项目使用 Godot 客户端和 Python 工具链，实现版本化、插件化的手术图像标注工作流。当前仓库只声明完成作业的 **Part 1 基础部分**：可复现输入、共享数据契约、数据源归一化、插件发现、每个必需阶段的工作插件，以及可运行的集成外壳。
 
-## Development principles
+## 开发原则
 
-These rules come before feature work and are the guardrails for every later part:
+以下原则先于功能开发，也是后续各 Part 的约束：
 
-1. **Use MITK as the interaction reference.** Preserve its deliberate select/edit, visible state, cancellation, and undo/redo ideas when translating medical-image interaction to a 2D video tool. Do not copy unrelated 3D functions.
-2. **Keep code structured by ownership.** Scenes compose UI, domain objects own annotation state and commands, services own transforms/cache/process boundaries, and plugins own replaceable stage behavior.
-3. **Maintain clear interfaces.** Cross-module calls go through the documented Source, Render, Edit, and Export/Feedback contracts; the application must not depend on a plugin's private fields.
-4. **Prefer maintainable, testable changes.** Each state-changing edit is one validated command, inputs and outputs are defensively copied, and failures are readable and isolated.
-5. **Respect the Part 1 boundary.** This checkpoint does not claim batch propagation, autosave, diff generation, training submission, performance measurements, or the final MITK design evaluation. Save and Export remain visibly disabled in the UI until their later backends are integrated.
+1. **以 MITK 为交互参考。** 将其明确选择/编辑、可见状态、取消和 undo/redo 思路转化到 2D 视频工具，不复制无关的 3D 功能。
+2. **按所有权组织代码。** 场景组装界面，领域对象拥有标注状态和命令，服务负责变换、缓存与进程边界，插件负责可替换的阶段行为。
+3. **保持清晰接口。** 跨模块调用经过已记录的数据源、渲染、编辑和导出/回传契约；应用不得依赖插件私有字段。
+4. **优先可维护、可测试的变更。** 每个改变状态的编辑都是一条已验证命令；输入输出使用防御性拷贝，失败可读且相互隔离。
+5. **遵守 Part 1 边界。** 本检查点不声明批量传播、自动保存、差异报告、训练提交、性能测量或最终 MITK 设计评估已完成。在后续后端接入前，保存和导出按钮保持禁用。
 
-The detailed topology is in [docs/architecture.md](docs/architecture.md), and the stable extension contract is in [docs/plugin-api.md](docs/plugin-api.md).
+详细拓扑见 [docs/architecture.md](docs/architecture.md)，稳定扩展契约见 [docs/plugin-api.md](docs/plugin-api.md)。
 
-## Supported environment
+## 支持的环境
 
-The checked reference environment is:
+已核对的参考环境为：
 
-- **Godot 4.7.2-stable**, official build `ed1daf0bf`, using GDScript and the GL Compatibility renderer.
-- **Python 3.14.7**; the package supports Python `>=3.10,<3.15`.
-- **FFmpeg 6.1+**, with both `ffmpeg` and `ffprobe` on `PATH`. FFmpeg is mandatory for video integration tests and video normalization.
-- Python packages pinned in `requirements.lock`.
+- **Godot 4.7.2-stable**，官方构建号 `ed1daf0bf`，使用 GDScript 和 GL 兼容渲染器。
+- **Python 3.14.7**；软件包支持 Python `>=3.10,<3.15`。
+- **FFmpeg 6.1+**，要求 `ffmpeg` 和 `ffprobe` 都在 `PATH` 中。视频集成测试和视频归一化必须使用 FFmpeg。
+- Python 软件包版本锁定在 `requirements.lock`。
 
-An equivalent environment is acceptable only when its versions and commands are documented. A skipped FFmpeg test is an incomplete environment check, not a pass.
+只有在明确记录版本和命令时，才接受等价环境。FFmpeg 测试被跳过表示环境检查未完成，不算通过。
 
-## Quick start
+## 快速开始
 
-Run every command from the repository root.
+以下命令都必须从仓库根目录运行。
 
 ```bash
 python3 -m venv .venv
@@ -36,7 +36,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install --no-deps -e .
 ```
 
-Point `GODOT_BIN` at the official Godot 4.7.2 executable installed on the reviewer machine. If `godot` already resolves to that build, use `export GODOT_BIN=godot`.
+将 `GODOT_BIN` 指向评审机器上安装的官方 Godot 4.7.2 可执行文件。如果 `godot` 已指向该版本，使用 `export GODOT_BIN=godot`。
 
 ```bash
 export GODOT_BIN=/absolute/path/to/Godot_v4.7.2-stable_linux.x86_64
@@ -46,9 +46,9 @@ ffmpeg -version
 ffprobe -version
 ```
 
-The Godot version output must begin with `4.7.2.stable`. Both FFmpeg commands must succeed before the full test result is accepted.
+Godot 版本输出必须以 `4.7.2.stable` 开头。只有两条 FFmpeg 命令都成功后，才接受完整测试结果。
 
-On a machine without administrator access, Conda can provide the pinned video tools inside this checkout without changing the Python virtual environment:
+在没有管理员权限的机器上，可以使用 Conda 在当前 checkout 内提供锁定版本的视频工具，无需修改 Python 虚拟环境：
 
 ```bash
 CONDA_PKGS_DIRS="$PWD/.tools/conda-pkgs" conda create --yes \
@@ -59,89 +59,91 @@ ffmpeg -version
 ffprobe -version
 ```
 
-`.tools/` is ignored and must not be committed.
+`.tools/` 已被忽略，不得提交。
 
-## Generate and validate the required sample
+## 生成并验证必需样本
 
-The output directory must not already exist. Seed `6006` deterministically produces 120 frames at 640×360, model annotations, manifest metadata, hashes, and a defect ledger.
+输出目录必须不存在。种子 `6006` 会确定性生成 120 帧 640×360 图像、模型标注、数据清单、哈希和缺陷清单。
 
 ```bash
 .venv/bin/python python/make_sample_input.py --output sample/assignment_v1 --seed 6006
-.venv/bin/python python/validate_annotations.py sample/assignment_v1/model_output.jsonl
-.venv/bin/python python/validate_annotations.py \
-  --schema dataset-manifest-v1.schema.json sample/assignment_v1/manifest.json
+.venv/bin/python python/validate_model_output.py sample/assignment_v1/model_output_v1.jsonl
 ```
 
-The generator must print `Validation errors: 0`; both explicit validators must exit with status 0 and print no validation errors. The planted cases are drifted regions, a wrong class, a missed region, a hallucinated region, a track-id swap, and the near-identical frame run 40–59.
+生成器和独立验证器都必须输出 `Validation errors: 0` 并以状态 0 退出。`model_output_v1.jsonl` 的名称表示模型输出契约版本；每条记录里的 `source: "sample_v1"` 表示图像/帧来源，二者不能混用。生成器还会在 `hashes.json` 中记录包括模型输出在内的 SHA-256，用于证明输入文件未被验证器或客户端改写。
 
-To normalize any FFmpeg-readable video into the same indexed directory contract:
+Part 1.1 只有一个权威 Schema：`core/schemas/model_output_v1.schema.json`。Python 独立入口是 `python/validate_model_output.py`，客户端等价验证器是 `client/domain/model_output_validator.gd`。数据清单属于帧源内部契约，不是 Part 1.1 的模型输出 Schema，也没有对外提供混合验证命令。
+
+植入的样本情形包括区域漂移、错误类别、漏检区域、幻觉区域、track ID 交换和 40–59 近似相同帧段。
+
+要将任意 FFmpeg 可读视频归一化为相同的索引目录契约，运行：
 
 ```bash
 .venv/bin/python python/frame_source.py input.mp4 --output sample/normalized_video
 ```
 
-The client then treats `sample/normalized_video` exactly like the generated image sequence. It does not use codec playback as annotation truth; manifest frame indices and timestamps are authoritative.
+之后客户端会像处理生成图像序列一样处理 `sample/normalized_video`。系统不以编解码器播放位置作为标注真值；manifest 帧索引和时间戳才是权威值。
 
-## Run tests
+## 运行测试
 
 ```bash
 .venv/bin/python -m pytest tests/python -q
 "$GODOT_BIN" --headless --path . --script tests/godot/test_runner.gd
 ```
 
-Accept the Python gate only when the summary has no failures and no skipped FFmpeg checks. The Godot suite intentionally opens malformed image fixtures to verify recoverable errors, so engine decoder warnings may appear; the required final line is `PASS: complete Godot test suite` and the process exit status must be 0.
+只有在摘要中没有 failure，且没有跳过 FFmpeg 检查时，才接受 Python 门禁。Godot 测试会故意打开损坏的图像 fixture 来验证可恢复错误，因此可能出现引擎解码警告；最后必须输出 `PASS: complete Godot test suite`，且进程退出状态必须为 0。
 
-## Run the client
+## 运行客户端
 
 ```bash
 "$GODOT_BIN" --editor --path .
 ```
 
-Press Run in Godot, then use this Part 1 reviewer path:
+在 Godot 中点击 Run，然后按以下 Part 1 评审路径操作：
 
-1. Press **Open** and select a standalone image (`.png`, `.jpg`, or `.jpeg`). Confirm it appears as `Frame 0 (1 total)`.
-2. Activate Select, Move, Box, Fill, and Delete. Exactly one left-side tool remains pressed; switching tools cancels an unfinished preview.
-3. Press **Open** again and select the normalized directory `sample/assignment_v1`. Confirm frame 0 and its model regions appear, the Inspector stays on the right, and playback/timeline controls stay at the bottom.
-4. Try opening a corrupt or unsupported file. The status bar must explain the rejection and the previously loaded source must remain usable.
-5. Confirm the top row still contains Open, Save, Undo, Redo, and Export. Save and Export are intentionally disabled at the Part 1 boundary.
+1. 点击 **Open** 并选择单张图像（`.png`、`.jpg` 或 `.jpeg`）。确认它显示为 `Frame 0 (1 total)`。
+2. 依次激活 Select、Move、Box、Fill 和 Delete。左侧任意时刻只有一个工具保持按下；切换工具应取消未完成预览。
+3. 再次点击 **Open**，并选择归一化目录 `sample/assignment_v1`。确认第 0 帧和模型区域出现，属性面板位于右侧，播放/时间线控件位于底部。
+4. 尝试打开损坏或不支持的文件。状态栏必须说明拒绝原因，之前已加载的数据源仍可使用。
+5. 确认顶部仍包含打开、保存、撤销、重做和导出。保存和导出在 Part 1 边界中故意保持禁用。
 
-### Current keyboard shortcuts
+### 当前键盘快捷键
 
-| Action | Shortcut |
+| 操作 | 快捷键 |
 |---|---|
-| Cycle region selection forward/backward | `Tab` / `Shift+Tab` |
-| Move selected region by 1/5/10 image pixels | `Arrow` / `Shift+Arrow` / `Ctrl+Shift+Arrow` |
-| Resize selected box by 1/5/10 image pixels | `Alt+Arrow` / `Alt+Shift+Arrow` / `Alt+Ctrl+Shift+Arrow` |
-| Start keyboard box creation | `A` |
-| Confirm keyboard box | `Enter` |
-| Delete selected region | `Delete` or `Backspace` |
-| Undo / redo | `Ctrl+Z` / `Ctrl+Shift+Z` |
-| Cancel current preview or gesture | `Escape` |
-| Temporary viewport pan | hold `Space` and drag, or middle-drag |
-| Viewport zoom | mouse wheel or bottom `Zoom −` / `Zoom +` controls |
+| 向前/向后循环选择区域 | `Tab` / `Shift+Tab` |
+| 将选中区域移动 1/5/10 图像像素 | `Arrow` / `Shift+Arrow` / `Ctrl+Shift+Arrow` |
+| 将选中 box 缩放 1/5/10 图像像素 | `Alt+Arrow` / `Alt+Shift+Arrow` / `Alt+Ctrl+Shift+Arrow` |
+| 开始键盘创建 box | `A` |
+| 确认键盘 box | `Enter` |
+| 删除选中区域 | `Delete` 或 `Backspace` |
+| 撤销/重做 | `Ctrl+Z` / `Ctrl+Shift+Z` |
+| 取消当前预览或手势 | `Escape` |
+| 临时平移视口 | 按住 `Space` 并拖动，或中键拖动 |
+| 缩放视口 | 鼠标滚轮或底部 `Zoom −` / `Zoom +` 控件 |
 
-Text fields consume typing while focused, so editing an Inspector value does not trigger canvas shortcuts.
+文本字段获得焦点时会消费键盘输入，因此编辑 Inspector 值不会触发画布快捷键。
 
-## Plugin overview
+## 插件概览
 
-The registry scans `client/plugins` at startup and validates every manifest against API version 1.
+启动时，Registry 扫描 `client/plugins` 并按 API version 1 验证每个 manifest。
 
-- Source: `image_sequence_source` reads normalized directories; `single_image_source` adapts PNG/JPG/JPEG to one indexed frame.
-- Render: `canvas_region_renderer` draws the image-space regions through the shared viewport transform.
-- Edit: `basic_edit_tools` owns Select/Move/Box/Fill/Delete intent and submits validated commands to bounded history.
-- Export/Feedback: `file_training_handoff` validates a corrected snapshot and writes atomic `human_corrected` JSONL. Its UI button is not enabled in Part 1.
+- Source：`image_sequence_source` 读取归一化目录；`single_image_source` 将 PNG/JPG/JPEG 适配为一个索引帧。
+- Render：`canvas_region_renderer` 通过共享视口变换绘制图像坐标中的区域。
+- Edit：`basic_edit_tools` 拥有 Select/Move/Box/Fill/Delete 意图，并向有界 history 提交已验证命令。
+- 导出/回传：`file_training_handoff` 验证修正快照，保留每条记录原有的帧来源，并原子写入单独的 JSONL。它不会覆盖 `model_output_v1.jsonl`；Part 1 中不启用其界面按钮。
 
-Adding a plugin requires a new plugin directory and `plugin.json`; it must not require edits to the registry. See [docs/plugin-api.md](docs/plugin-api.md) for the exact methods, lifecycle, ownership rules, and compatibility test.
+新增插件需要新插件目录和 `plugin.json`，不应修改 Registry。精确方法、生命周期、所有权规则和兼容性测试见 [docs/plugin-api.md](docs/plugin-api.md)。
 
-## Repository layout
+## 仓库布局
 
 ```text
-client/                  Godot scenes, domain objects, services, and plugins
-core/                    JSON Schemas and shared taxonomy
-python/                  sample generation, validation, and video normalization
-tests/godot/             headless Godot contract and integration tests
-tests/python/            Python contract, sample, video, and documentation tests
-docs/                    architecture, plugin API, traceability, and assignment
+client/                  Godot 场景、domain object、service 和 plugin
+core/                    JSON Schema 和共享 taxonomy
+python/                  样本生成、验证和视频归一化
+tests/godot/             Godot headless 合同和集成测试
+tests/python/            Python 合同、样本、视频和文档测试
+docs/                    架构、插件 API、要求追踪和 Assignment
 ```
 
-Generated samples, Godot imports, virtual environments, and large assets are not source artifacts and must not be committed. The Part 1 evidence ledger is [docs/requirements-traceability.md](docs/requirements-traceability.md).
+生成样本、Godot import、虚拟环境和大型资产不是源码产物，不得提交。Part 1 证据台账见 [docs/requirements-traceability.md](docs/requirements-traceability.md)，完整开发过程、文件、脚本、函数和提交前风险见 [docs/part1-implementation-report.md](docs/part1-implementation-report.md)。

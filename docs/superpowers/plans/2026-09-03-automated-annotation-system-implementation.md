@@ -1,2439 +1,390 @@
-# Automated Annotation System Implementation Plan
+# 自动标注系统实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
+> 本计划供开发人员和自动化开发代理使用。按 Task 顺序执行，并使用 `- [ ]` 复选框记录实际进度。代码、接口签名、插件 ID、命令和路径保持原文，不作翻译。
 
-**Goal:** Build the assignment-scoped Godot annotation client and Python support tools as one reliable load → edit → batch → verify → autosave → export → handoff workflow.
+**目标：** 在老师 Assignment 规定的范围内，把 Godot 标注客户端和 Python 支持工具组成可靠的“加载 → 编辑 → 批处理 → 验证 → 自动保存 → 导出 → 训练交接”工作流。
 
-**Architecture:** JSON Schema and shared fixtures define the contract. Python owns deterministic data generation, video normalization, similarity calculation, validation, diffing, and package construction; Godot owns indexed playback, bounded frame loading, rendering, editing, review state, and the user workflow. Godot discovers four local plugin stages and invokes Python work asynchronously where file processing is required.
+**设计规范：** `docs/superpowers/specs/2026-09-03-automated-annotation-system-design.md`
 
-**Tech Stack:** Godot 4.7.2-stable with GDScript and Compatibility renderer; Python 3.10–3.14 (tested on 3.14.7); FFmpeg 6.1+; JSON Schema Draft 2020-12; NumPy; OpenCV headless; jsonschema; pytest; Mermaid.
+**技术栈：** Godot 4.7.2-stable、GDScript、Compatibility 渲染器、Python 3.10–3.14、FFmpeg 6.1+、JSON Schema Draft 2020-12、NumPy、OpenCV headless、jsonschema、pytest 和 Mermaid。
 
-**Spec:** docs/superpowers/specs/2026-09-03-automated-annotation-system-design.md
+## 1. 工程章程
 
-## Teacher-aligned engineering charter — read before every task
+### 1.1 约束优先级
 
-The assignment explicitly requires MITK study, a clean componentized plugin pipeline, documented
-interfaces, human-readable AI-assisted work, and maintainable extension. The exact code-style,
-protected-node, and evidence rules below are approved project controls derived from those goals,
-not quotations from the assignment.
+1. 老师的原始 Assignment 是最高优先级需求来源。
+2. 用户明确确认的范围和前端布局次之。
+3. 设计规范约束系统架构，本计划约束实施顺序。
+4. 单项开发任务的便利性不得覆盖以上约束。
 
-### Authority and change control
+如不同来源冲突，必须在审查门槛处停止并请求明确批准。内部测试通过不代表可以删除用户已批准的工作流。老师的文件 `docs/Project_6_Automated_Annotation_System_Assignment.md` 必须保持不变，只能作为只读需求来源。
 
-1. The teacher's original assignment is the highest requirement source.
-2. The user's explicit boundary decisions and approved frontend are next.
-3. The design specification governs architecture; this plan governs execution.
-4. Task-local convenience cannot override any item above it.
+### 1.2 MITK 交互参考
 
-If two sources conflict, stop at the review gate and request explicit approval. Never treat a
-green internal test as permission to remove a user-approved workflow. Keep the teacher's assignment
-file unchanged and use `docs/Project_6_Automated_Annotation_System_Assignment.md` only as a
-read-only requirement source.
+- 修改编辑行为前，阅读 MITK 官方交互与分割资料。
+- 只借鉴适合本项目的 2D 交互范式，不复刻 MITK，也不增加 3D 功能。
+- 保留可见工具箱、活动工具按下状态、明确模式切换、清晰选中状态，以及按下/移动/释放过程预览。
+- 每个完整手势只生成一条可撤销命令。
+- `Select` 是默认模式；切换工具、数据源、帧或焦点时取消临时预览，不提交编辑。
+- 所有编辑操作都应可由键盘触达，并共享容量为 200 的有界命令历史。
 
-### MITK interaction reference
+### 1.3 模块化与维护性
 
-- Read the relevant official MITK interaction and segmentation material before changing edit
-  behavior. Translate only the useful 2D interaction paradigm; do not reproduce MITK or add 3D.
-- Keep a visible toolbox, a pressed active tool, explicit mode switching, obvious selection,
-  press/move/release previews, and one undoable command per completed gesture.
-- `Select` is the default mode. Switching tool, source, frame, or focus cancels transient preview
-  state without committing an edit.
-- All editing operations remain keyboard reachable and share one bounded 200-command history.
+- 每个场景、脚本、服务、命令和插件只承担一个主要职责。
+- UI 场景只发出用户意图；Edit 插件把交互转换成命令；领域对象负责校验和变更；服务负责可复用状态或 IO。
+- 不得把领域逻辑塞入 `client/app/main.gd` 或 UI 节点。
+- 实现模块边界前，先记录公共方法签名、信号、返回值、错误行为、生命周期和可变状态所有权。
+- 通过激活上下文或显式 setter 注入依赖，使用信号传递事件。
+- 添加插件应新增插件目录和 `plugin.json`，不得修改注册表核心来特判某个插件。
+- `plugin API version 1` 一旦验收，不兼容修改必须提升 API 版本并补充兼容性测试。
+- 功能任务内不得进行大范围重构或全仓库格式化。
+- 文件、函数、变量和信号使用 `snake_case`；类与场景节点使用 `PascalCase`；公共边界带类型。
+- 接口变更必须在同一任务中同步更新测试和文档。
 
-### Structure, interfaces, and maintenance
+### 1.4 受保护的产品契约
 
-- Give every scene, script, service, command, and plugin one primary responsibility.
-- UI scenes emit intent; edit plugins translate interaction into commands; domain objects validate
-  and mutate; services own reusable state or IO. Do not hide domain logic in `main.gd` or UI nodes.
-- Document exact public method signatures, signals, return values, error behavior, lifecycle, and
-  mutable-state ownership before implementing a boundary.
-- Inject dependencies through activation context or explicit setters and use signals for events;
-  avoid hidden sibling-node paths outside each scene's own composition boundary.
-- Add plugins by adding directories and manifests, not by special-casing registry core behavior.
-- Stabilize plugin API version 1 before accepting `docs/plugin-api.md`. Incompatible later changes
-  require an API-version bump and compatibility tests.
-- Preserve existing working components. No broad refactor or repository-wide formatting is allowed
-  inside a feature task. Extract only a focused, required boundary with its own tests.
-- Use `snake_case` for files/functions/variables/signals, `PascalCase` for named classes and scene
-  nodes, tabs in GDScript, typed public boundaries, and lines of 100 characters or fewer where
-  practical.
-- Update interface tests and documentation in the same reviewed task as an interface change.
+未经用户明确批准，不得删除、重命名或移动下列节点及其布局位置：
 
-### Protected product contract
+- 顶部工具栏：Open、Save、Undo、Redo、Export
+- 左侧工具面板：Select、Move、Box、Fill、Delete
+- 中部：真实的 `AnnotationViewport`
+- 右侧：`InspectorPanel`
+- 底部：上一帧、播放/暂停、下一帧、明确帧号/时间、`Timeline`
+- 状态栏：活动工具、数据源/保存状态和可恢复错误
 
-The following nodes and placements cannot be deleted, renamed, or moved without explicit user
-approval:
+Save 和 Export 的后端完成前可以禁用，但必须保持可见。Open 必须支持 PNG/JPG/JPEG 单帧图像、标准化数据源目录，以及通过异步标准化打开的视频。候选数据源加载失败时，必须保留当前活动数据集。
 
-- top toolbar: Open, Save, Undo, Redo, Export
-- left tool panel: Select, Move, Box, Fill, Delete
-- center: real AnnotationViewport
-- right: InspectorPanel
-- bottom: previous, play/pause, next, explicit frame/time, Timeline
-- status bar: active tool, source/save state, and recoverable errors
+### 1.5 全局约束
 
-Save and Export may remain disabled until their backend task is complete, but they remain visible.
-Open must accept a PNG/JPG/JPEG as a one-frame source, a normalized source directory, and a video
-through asynchronous normalization. A failed candidate source must preserve the active dataset.
+- 只实现设计规范和老师要求的必需功能。
+- 不增加模型训练/推理、HTTP 服务、数据库、云功能、账号、协作、Web/移动客户端、3D、光流、绘制多边形或编辑多边形顶点。
+- 原始模型输出文件及内存中的模型记录不可变。
+- 图像坐标以左上角为原点；帧索引从零开始且连续。
+- 每个 region 恰好包含一种几何：`box` 或 `polygon`。
+- JSONL 是修正标注的标准导出格式。
+- 训练侧唯一交付方式是版本化文件包。
+- 所有持久化标注变更都必须经过容量为 200 的命令历史。
+- 长数据源使用有界缓存，禁止全部载入内存。
+- Python 与 Godot 必须运行同一组有效/无效契约夹具。
+- 行为变更必须先写测试。
+- 修改 `client/app/main.tscn` 时，必须运行受保护节点测试并进行 1280 × 800 人工视觉检查。
+- 修改数据源打开逻辑时，必须测试直接图像、标准化目录和失败替换。
+- 生成样例、Godot 导入文件、Python 环境、构建输出和凭据不得提交。
+- 只有代码、自动化测试、人工检查、文档和产物均在 `docs/requirements-traceability.md` 中有证据且标为 `PASS`，对应阶段才算完成。
 
-### Scope and evidence gates
+## 2. 当前状态与强制顺序
 
-- Required assignment behavior comes before every optional extension. Do not start optional work
-  while any required gate is incomplete.
-- Use test-first development for behavior changes. Run focused tests, the full relevant suite, and
-  the specified manual reviewer check before acceptance.
-- A task is not accepted merely because the code exists or automated tests are green.
-- A phase is complete only when code, automated tests, manual checks, documentation, and required
-  artifacts are linked in `docs/requirements-traceability.md` and all show `PASS`.
-- Do not add model inference/training, cloud services, accounts, collaboration, Web/mobile clients,
-  3D, optical flow, polygon drawing, polygon vertex editing, or unrelated polish.
+“已实现”只表示仓库中存在代码，不代表已完成老师要求或产品验收。当前状态以本表和需求可追溯性矩阵为准。
 
-## Global Constraints
-
-- Apply the authority order and protected product contract above to every task.
-- Implement only the approved specification and the teacher's mandatory requirements.
-- Do not add model inference/training, HTTP services, databases, cloud features, accounts, collaboration, Web/mobile clients, optical flow, polygon drawing, or polygon vertex editing.
-- The original model-output files and in-memory model records are immutable.
-- Image coordinates are top-left-origin pixel coordinates; frame indices are zero-based and contiguous.
-- A region contains exactly one geometry: box or polygon.
-- JSONL is the canonical corrected-annotation export.
-- The only training delivery is a versioned file-based handoff package.
-- All persistent annotation changes go through bounded command history with capacity 200.
-- Long sources use a bounded cache and are never fully loaded into RAM.
-- Python and Godot run the same valid/invalid contract fixtures.
-- Tests are written before implementation for every behavior-bearing task.
-- Changes to `client/app/main.tscn` require protected-node tests and a manual 1280 x 800 visual check.
-- Source-opening changes require direct-image, normalized-directory, and failed-replacement tests.
-- No phase may be marked complete without an evidence-backed traceability review.
-- Generated samples, Godot imports, Python environments, build outputs, and credentials are not committed.
-
----
-
-## Current implementation status and mandatory correction order
-
-This table records the repository state at revision 2 of this plan. “Implemented” describes code
-presence only; it does not waive missing teacher deliverables or product acceptance. The unchecked
-boxes in the original task recipes are not a live progress record; this table and the evidence
-ledger are authoritative for current status.
-
-| Work item | Current state | Evidence still required |
+| 工作项 | 当前状态 | 尚需证据 |
 |---|---|---|
-| Tasks 1–3: scaffold, schemas, validators, sample | Code implemented; environment documentation incomplete | resolve the Godot 4.7.2 shell command, Part 1 docs, and traceability gate |
-| Task 4: video normalization and similarity | Code implemented; environment gate incomplete | FFmpeg available on the documented path and skipped checks rerun |
-| Tasks 5–6: store, registry, image-sequence source, cache | Implemented | Part 1 plugin/API/documentation gate |
-| Task 7: viewport and renderer | Implemented | measured 25–30 FPS result and manual visual check |
-| Task 8: commands and edit plugin | Core behavior implemented; visible UX incomplete | restored tool panel, active modes, focus/keyboard reviewer pass |
-| Task 9: main scene, playback, timeline | **Product-rejected** | protected UI restoration and direct-image opening in Task 9R |
-| Tasks 10–14 | Not accepted or not started | execute only after the gates below pass |
+| Task 1–3：脚手架、schema、校验器、样例 | 代码已实现；环境文档尚不完整 | 明确 Godot 4.7.2 命令、补齐 Part 1 文档、通过可追溯性门槛 |
+| Task 4：视频标准化与相似度 | 代码已实现；环境门槛尚未完成 | 文档路径上的 FFmpeg 可用，并重跑此前跳过的检查 |
+| Task 5–6：存储、注册表、图像序列数据源、缓存 | 已实现 | 通过 Part 1 插件/API/文档门槛 |
+| Task 7：视口与渲染器 | 已实现 | 记录 25–30 FPS 实测结果并完成视觉检查 |
+| Task 8：命令与编辑插件 | 核心行为已实现；可见 UX 尚不完整 | 恢复工具面板和活动模式，通过焦点/键盘人工审查 |
+| Task 9：主场景、播放、时间线 | **产品验收拒绝** | 由 Task 9R 恢复受保护 UI 和直接图像打开能力 |
+| Task 10–14 | 未验收或尚未开始 | 只能在下列门槛通过后执行 |
 
-**STOP:** Task 10 and every later feature task are blocked until Task 9R and Task 9P1 both pass.
-Part 1 is currently incomplete even though substantial code for later parts already exists.
+**停止点：** Task 9R 与 Task 9P1 均通过前，不得开始 Task 10 或任何更后的功能任务。即使后续部分已有代码，Part 1 仍不能据此判定完成。
 
-### Phase acceptance ledger
-
-| Assignment phase | Required acceptance | Current state | Next authoritative task |
+| 作业阶段 | 必需验收内容 | 当前状态 | 下一项权威任务 |
 |---|---|---|---|
-| Part 1 | scaffold, schema/validators, deterministic sample, video frame source, registry, one working plugin per stage, architecture, plugin API, README, zero-error validation | Partial | Task 9R, then Task 9P1 |
-| Part 2 | image/region display, transforms, smooth rendering, MITK-style editing, keyboard reachability, reviewer script, MITK design note | Partial | Task 9R, then Tasks 13–14 |
-| Part 3 | indexed playback, bounded cache, similarity, propagate/verify UX, measurements | Partial | Task 10, then Tasks 13–14 |
-| Part 4 | autosave, corrected export, diff, versioned handoff, interface agreement, non-blocking IO | Not started | Tasks 11–12, then Task 14 |
-| Part 5 | full tests, robustness, measurements, honest failure analysis, clean runbook | Partial | Tasks 13–14 |
+| Part 1 | 脚手架、schema/校验器、确定性样例、视频帧数据源、注册表、每阶段一个可用插件、架构、插件 API、README、零错误校验 | 部分完成 | 先 Task 9R，再 Task 9P1 |
+| Part 2 | 图像/区域显示、坐标变换、流畅渲染、MITK 风格编辑、键盘可达性、审查脚本、MITK 设计说明 | 部分完成 | 先 Task 9R，再 Task 13–14 |
+| Part 3 | 按索引播放、有界缓存、相似度、传播/验证 UX、测量 | 部分完成 | 先 Task 10，再 Task 13–14 |
+| Part 4 | 自动保存、修正导出、差异、版本化交接、接口约定、非阻塞 IO | 尚未开始 | 先 Task 11–12，再 Task 14 |
+| Part 5 | 完整测试、健壮性、测量、真实失败分析、运行手册 | 部分完成 | Task 13–14 |
 
----
+## 3. 模块与目录规划
 
-## Planned Repository Map
+每个文件只承担一个主要职责；实际位置和修改入口以 `docs/architecture.md` 为准。
 
-Each file has one primary responsibility.
+| 层级 | 主要目录 | 职责 |
+|---|---|---|
+| 契约层 | `core/schemas/`、`core/fixtures/`、`core/taxonomy/` | schema、跨运行时夹具、类别体系 |
+| Python 支持层 | `python/annotool/`、`python/*.py` | 样例、视频标准化、相似度、校验、diff、交接包 |
+| Godot 领域层 | `client/domain/` | 不可变模型数据、修正数据、命令与历史 |
+| Godot 服务层 | `client/services/` | 坐标变换、缓存、传播、验证、自动保存、外部进程 |
+| 插件基础设施 | `client/pipeline/` | 插件 API 和注册表 |
+| 插件实现 | `client/plugins/{source,render,edit,feedback}/` | 四阶段可替换实现 |
+| UI 层 | `client/ui/`、`client/app/` | 视口、工具面板、检查器、时间线和应用编排 |
+| 测试层 | `tests/python/`、`tests/godot/`、`tests/smoke/` | 单元、契约、集成、烟雾与性能测试 |
+| 文档层 | `README.md`、`docs/`、`RESULTS.md` | 运行手册、架构、API、证据和结果 |
 
-~~~text
-.
-├── .gitignore
-├── project.godot
-├── pyproject.toml
-├── requirements.lock
-├── README.md
-├── RESULTS.md
-├── core/
-│   ├── schemas/
-│   │   ├── annotation-v1.schema.json
-│   │   ├── dataset-manifest-v1.schema.json
-│   │   ├── review-state-v1.schema.json
-│   │   └── training-package-v1.schema.json
-│   ├── fixtures/
-│   │   ├── valid/
-│   │   └── invalid/
-│   └── taxonomy/classes.json
-├── python/
-│   ├── annotool/
-│   │   ├── __init__.py
-│   │   ├── contracts.py
-│   │   ├── jsonl.py
-│   │   ├── sample.py
-│   │   ├── similarity.py
-│   │   ├── frame_source.py
-│   │   ├── diff.py
-│   │   └── package.py
-│   ├── make_sample_input.py
-│   ├── frame_source.py
-│   ├── validate_annotations.py
-│   └── build_update_package.py
-├── client/
-│   ├── app/
-│   │   ├── main.tscn
-│   │   └── main.gd
-│   ├── domain/
-│   │   ├── annotation_validator.gd
-│   │   ├── annotation_store.gd
-│   │   ├── command.gd
-│   │   ├── command_history.gd
-│   │   └── commands/
-│   ├── services/
-│   │   ├── viewport_transform.gd
-│   │   ├── frame_cache.gd
-│   │   ├── propagation_service.gd
-│   │   ├── verification_service.gd
-│   │   ├── autosave_service.gd
-│   │   └── process_service.gd
-│   ├── pipeline/
-│   │   ├── plugin_api.gd
-│   │   └── plugin_registry.gd
-│   ├── plugins/
-│   │   ├── source/single_image_source/
-│   │   ├── source/image_sequence_source/
-│   │   ├── render/canvas_region_renderer/
-│   │   ├── edit/basic_edit_tools/
-│   │   └── feedback/file_training_handoff/
-│   └── ui/
-│       ├── annotation_viewport.gd
-│       ├── annotation_viewport.tscn
-│       ├── tool_panel.gd
-│       ├── tool_panel.tscn
-│       ├── inspector_panel.gd
-│       ├── inspector_panel.tscn
-│       ├── timeline.gd
-│       └── timeline.tscn
-├── tests/
-│   ├── python/
-│   ├── godot/
-│   │   ├── test_runner.gd
-│   │   └── test_support.gd
-│   ├── smoke/
-│   │   └── edit_session.gd
-│   └── expected/
-└── docs/
-    ├── architecture.md
-    ├── plugin-api.md
-    ├── requirements-traceability.md
-    ├── model-team-interface.md
-    └── reviewer-script.md
-~~~
+## 4. 逐项实施任务
 
----
+### Task 1：可复现的项目基础
 
-### Task 1: Reproducible project foundation
+**主要文件：** `.gitignore`、`pyproject.toml`、`requirements.lock`、`project.godot`、`python/annotool/__init__.py`、`tests/python/test_environment.py`、`tests/godot/test_runner.gd`、`tests/godot/test_support.gd`。
 
-**Files:**
-- Track unchanged: docs/Project_6_Automated_Annotation_System_Assignment.md
-- Create: .gitignore
-- Create: pyproject.toml
-- Create: python/annotool/__init__.py
-- Create: project.godot
-- Create: tests/python/test_environment.py
-- Create: tests/godot/test_runner.gd
-- Create: tests/godot/test_support.gd
-- Create mechanically: requirements.lock
+**接口与产物：** 提供可导入的 `annotool` 包、pytest 命令、Godot 无头测试命令，以及后续任务共用的固定依赖版本。
 
-**Interfaces:**
-- Consumes: Python 3.10–3.14, Godot 4.7.2-stable, FFmpeg 6.1+.
-- Produces: the annotool Python package, pytest command, Godot headless test command, and pinned dependency lock used by every later task.
+- [ ] 检查 Python 3.10–3.14、Godot 4.7.2-stable、FFmpeg 6.1+ 和 Git。
+- [ ] 先编写会因包缺失而失败的 Python 环境测试。
+- [ ] 配置 `pyproject.toml`、`project.godot` 和 `.gitignore`。
+- [ ] 创建虚拟环境、安装依赖并生成 `requirements.lock`。
+- [ ] 运行 Python 与 Godot 两条基线测试命令。
 
-- [ ] **Step 1: Verify external executables**
-
-Run:
-
-~~~bash
+```bash
 python3 --version
 godot --version
 ffmpeg -version
-git --version
-~~~
-
-Expected: Python reports 3.10–3.14, Godot reports 4.7.2.stable, FFmpeg reports 6.1 or newer, and Git is available. If Godot is absent, install the official 4.7.2-stable Linux build. If FFmpeg is absent, install the distribution FFmpeg package and re-run the checks before continuing.
-
-- [ ] **Step 2: Write the failing Python environment test**
-
-Create tests/python/test_environment.py:
-
-~~~python
-from pathlib import Path
-
-import annotool
-
-
-def test_repository_layout_is_importable() -> None:
-    root = Path(__file__).resolve().parents[2]
-    assert annotool.__version__ == "0.1.0"
-    assert (root / "project.godot").is_file()
-~~~
-
-- [ ] **Step 3: Run the test and confirm the package is missing**
-
-Run:
-
-~~~bash
-python3 -m pytest tests/python/test_environment.py -v
-~~~
-
-Expected: collection fails because annotool and/or pytest is not installed.
-
-- [ ] **Step 4: Add the Python project metadata**
-
-Create pyproject.toml with:
-
-~~~toml
-[build-system]
-requires = ["setuptools>=75,<76"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "annotool"
-version = "0.1.0"
-requires-python = ">=3.10,<3.15"
-dependencies = [
-  "jsonschema>=4.26,<5",
-  "numpy>=2.2,<3",
-  "opencv-python-headless>=4.11,<5",
-]
-
-[project.optional-dependencies]
-dev = ["pytest>=8.3,<9"]
-
-[tool.setuptools]
-package-dir = {"" = "python"}
-
-[tool.pytest.ini_options]
-pythonpath = ["python"]
-testpaths = ["tests/python"]
-~~~
-
-Create python/annotool/__init__.py:
-
-~~~python
-"""Shared support code for the automated annotation tool."""
-
-__version__ = "0.1.0"
-~~~
-
-- [ ] **Step 5: Add Godot and ignore configuration**
-
-Create project.godot:
-
-~~~ini
-; Engine configuration file.
-config_version=5
-
-[application]
-config/name="Automated Annotation System"
-run/main_scene="res://client/app/main.tscn"
-
-[display]
-window/size/viewport_width=1280
-window/size/viewport_height=800
-window/size/window_width_override=1280
-window/size/window_height_override=800
-
-[rendering]
-renderer/rendering_method="gl_compatibility"
-renderer/rendering_method.mobile="gl_compatibility"
-~~~
-
-Create .gitignore:
-
-~~~gitignore
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.godot/
-.tools/
-sample/
-build/
-dist/
-exports/
-autosave/
-*.tmp
-*.log
-~~~
-
-Create tests/godot/test_support.gd:
-
-~~~gdscript
-class_name TestSupport
-extends RefCounted
-
-var failures: Array[String] = []
-
-func expect_true(value: bool, message: String) -> void:
-    if not value:
-        failures.append(message)
-~~~
-
-Create tests/godot/test_runner.gd:
-
-~~~gdscript
-extends SceneTree
-
-func _initialize() -> void:
-    print("No Godot tests registered yet.")
-    quit(0)
-~~~
-
-- [ ] **Step 6: Install and lock Python dependencies**
-
-Run:
-
-~~~bash
-python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -e '.[dev]'
-.venv/bin/python -m pip freeze --exclude-editable > requirements.lock
-~~~
-
-Expected: requirements.lock contains exact installed versions of jsonschema, NumPy, OpenCV headless, pytest, and their transitive dependencies.
-
-- [ ] **Step 7: Run both baseline test commands**
-
-Run:
-
-~~~bash
 .venv/bin/python -m pytest tests/python/test_environment.py -v
 godot --headless --path . --script tests/godot/test_runner.gd
-~~~
+```
 
-Expected: pytest passes; Godot prints the no-tests message and exits 0.
+### Task 2：Model Output V1 Schema 与 Python 校验
 
-- [ ] **Step 8: Commit**
+**主要文件：** `core/schemas/model_output_v1.schema.json`、`core/fixtures/{valid,invalid}/`、`python/annotool/contracts.py`、`python/annotool/jsonl.py`、`python/validate_model_output.py`、`tests/python/test_part1_1_data_contract.py`。
 
-~~~bash
-git add Project_6_Automated_Annotation_System_Assignment.md .gitignore project.godot pyproject.toml requirements.lock python/annotool/__init__.py tests/python/test_environment.py tests/godot
-git commit -m "chore: establish reproducible project foundation"
-~~~
+**公共接口：** `load_schema`、`validate_record`、`validate_model_output`、`validate_instance`、`read_jsonl`、`write_jsonl_atomic`。
 
----
+- [ ] 先编写有效/无效契约测试。
+- [ ] Model Output V1 Schema 声明 Draft 2020-12，拒绝未知字段，并要求 `schema_version = 1`。
+- [ ] `box` 宽高必须为正；`polygon` 至少三个二维顶点；通过 `oneOf` 保证二者只出现一种。
+- [ ] `conf` 限制为 0–1；`track_id` 允许字符串或 null。
+- [ ] 允许 box、polygon 或二者同时出现，与 Assignment 示例一致。
+- [ ] JSONL 写入采用同目录临时文件和原子替换。
+- [ ] CLI 按行输出字段路径；只有全部记录通过才以状态码 0 退出。
 
-### Task 2: Canonical schemas and Python validation
+```bash
+.venv/bin/python -m pytest tests/python/test_part1_1_data_contract.py -v
+.venv/bin/python python/validate_model_output.py core/fixtures/valid/assignment-model-output-v1.json
+```
 
-**Files:**
-- Create: core/schemas/annotation-v1.schema.json
-- Create: core/schemas/dataset-manifest-v1.schema.json
-- Create: core/schemas/review-state-v1.schema.json
-- Create: core/taxonomy/classes.json
-- Create: core/fixtures/valid/annotation-box.json
-- Create: core/fixtures/valid/annotation-polygon.json
-- Create: core/fixtures/valid/dataset-manifest.json
-- Create: core/fixtures/invalid/annotation-negative-width.json
-- Create: core/fixtures/invalid/annotation-both-geometries.json
-- Create: core/fixtures/invalid/annotation-bad-confidence.json
-- Create: core/fixtures/invalid/manifest-frame-gap.json
-- Create: python/annotool/contracts.py
-- Create: python/annotool/jsonl.py
-- Create: python/validate_annotations.py
-- Test: tests/python/test_contracts.py
+### Task 3：确定性合成样例
 
-**Interfaces:**
-- Consumes: repository root and JSON Schema Draft 2020-12.
-- Produces: load_schema(name: str) -> dict, validate_instance(data: dict, schema_name: str) -> list[str], validate_annotation_semantics(record: dict) -> list[str], read_jsonl(path: Path) -> list[dict], and write_jsonl_atomic(path: Path, records: list[dict]) -> None.
+**主要文件：** `python/annotool/sample.py`、`python/make_sample_input.py`、`tests/python/test_sample.py`、`tests/expected/sample-defects.json`。
 
-- [ ] **Step 1: Write failing contract tests**
+**公共接口：** `generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]`。
 
-Create tests/python/test_contracts.py:
+- [ ] 生成 120 帧、640×360、30 FPS 的确定性图像。
+- [ ] 使用 20 个 instrument/anatomy/region 区域；第 40–59 帧构成相似帧区间。
+- [ ] 在固定位置植入 geometry drift、wrong class、missed region、hallucinated region 和 track-id swap。
+- [ ] 模型输出必须从真实标注 deep copy 后修改，不得反向改变真实标注。
+- [ ] 写出 `frames/`、`model_output_v1.jsonl`、`manifest.json`、`expected_defects.json` 和 `hashes.json`。
+- [ ] 对所有输出进行 schema/语义校验和 SHA-256 哈希。
+- [ ] 目标目录已存在时拒绝覆盖并返回简短错误。
 
-~~~python
-import json
-from pathlib import Path
-
-from annotool.contracts import validate_instance
-
-
-FIXTURES = Path("core/fixtures")
-
-
-def load(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def test_valid_box_annotation_passes() -> None:
-    errors = validate_instance(
-        load(FIXTURES / "valid/annotation-box.json"),
-        "annotation-v1.schema.json",
-    )
-    assert errors == []
-
-
-def test_negative_box_width_is_rejected() -> None:
-    errors = validate_instance(
-        load(FIXTURES / "invalid/annotation-negative-width.json"),
-        "annotation-v1.schema.json",
-    )
-    assert any("exclusiveMinimum" in error or "greater than 0" in error for error in errors)
-
-
-def test_region_cannot_have_box_and_polygon() -> None:
-    errors = validate_instance(
-        load(FIXTURES / "invalid/annotation-both-geometries.json"),
-        "annotation-v1.schema.json",
-    )
-    assert errors
-~~~
-
-- [ ] **Step 2: Run the focused tests**
-
-Run:
-
-~~~bash
-.venv/bin/python -m pytest tests/python/test_contracts.py -v
-~~~
-
-Expected: import fails because annotool.contracts does not exist.
-
-- [ ] **Step 3: Create the annotation schema and fixtures**
-
-The annotation schema must declare Draft 2020-12, reject unknown top-level and region fields, require schema_version = 1, dataset_id, source, frame >= 0, image_size with two positive integers, and regions. Define box as four numbers with width and height strictly positive. Define polygon as at least three two-number vertices. Use oneOf so exactly one of box and polygon is present. Constrain confidence to 0–1 and allow track_id to be string or null.
-
-Create core/fixtures/valid/annotation-box.json with this exact minimal record:
-
-~~~json
-{
-  "schema_version": 1,
-  "dataset_id": "fixture-v1",
-  "source": "model_output_v1",
-  "frame": 0,
-  "time_s": 0.0,
-  "image_size": [640, 360],
-  "regions": [
-    {
-      "id": "fixture-r1",
-      "class": "grasper",
-      "kind": "instrument",
-      "box": [10, 20, 40, 30],
-      "conf": 0.9,
-      "track_id": "T01",
-      "filled": false
-    }
-  ]
-}
-~~~
-
-Create the polygon fixture with one polygon and no box. Derive the three invalid annotation fixtures by changing width to -1, adding a polygon alongside a box, and changing confidence to 1.5.
-
-- [ ] **Step 4: Create manifest, review-state, and taxonomy contracts**
-
-The manifest schema requires zero-based contiguous frame entries semantically, positive dimensions, positive frame_count, positive nominal_fps, model_version, and taxonomy_version. JSON Schema checks shapes; validate_manifest_semantics checks index continuity, count, unique frame paths, and monotonically non-decreasing timestamps.
-
-The review-state schema requires dataset_id, frames keyed by frame index with verified boolean, and batch markers containing keyframe, start_frame, end_frame, mode enum merge/overwrite, and threshold.
-
-Create core/taxonomy/classes.json:
-
-~~~json
-{
-  "taxonomy_version": "sample-taxonomy-v1",
-  "kinds": ["instrument", "anatomy", "region"],
-  "classes": [
-    {"id": "grasper", "kind": "instrument", "color": "#ef4444"},
-    {"id": "scissors", "kind": "instrument", "color": "#f59e0b"},
-    {"id": "cystic_duct", "kind": "anatomy", "color": "#22c55e"},
-    {"id": "gallbladder", "kind": "anatomy", "color": "#3b82f6"},
-    {"id": "unknown", "kind": "region", "color": "#a855f7"}
-  ]
-}
-~~~
-
-- [ ] **Step 5: Implement the validator**
-
-Create python/annotool/contracts.py around these signatures:
-
-~~~python
-from functools import lru_cache
-import json
-from pathlib import Path
-from typing import Any
-
-from jsonschema import Draft202012Validator
-
-ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_DIR = ROOT / "core/schemas"
-
-
-@lru_cache(maxsize=None)
-def load_schema(name: str) -> dict[str, Any]:
-    return json.loads((SCHEMA_DIR / name).read_text(encoding="utf-8"))
-
-
-def validate_instance(data: dict[str, Any], schema_name: str) -> list[str]:
-    validator = Draft202012Validator(load_schema(schema_name))
-    errors = sorted(validator.iter_errors(data), key=lambda item: list(item.path))
-    return [
-        f"{'.'.join(str(part) for part in error.absolute_path) or '$'}: {error.message}"
-        for error in errors
-    ]
-~~~
-
-Add validate_manifest_semantics(record) and validate_annotation_semantics(record). The annotation semantic validator rejects duplicate region IDs within one frame, boxes outside image bounds, and polygon vertices outside image bounds. The manifest semantic validator applies the exact continuity rules above. The CLI accepts one JSON object or JSONL records based on file suffix, prints one error per line, and exits 0 only when every record passes.
-
-- [ ] **Step 6: Implement atomic JSONL helpers**
-
-Create python/annotool/jsonl.py with:
-
-~~~python
-import json
-import os
-from pathlib import Path
-from typing import Iterable
-
-
-def read_jsonl(path: Path) -> list[dict]:
-    records: list[dict] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if line.strip():
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError as error:
-                    raise ValueError(f"{path}:{line_number}: {error.msg}") from error
-    return records
-
-
-def write_jsonl_atomic(path: Path, records: Iterable[dict]) -> None:
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-        for record in records:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    temp_path.replace(path)
-~~~
-
-- [ ] **Step 7: Run all contract tests**
-
-Run:
-
-~~~bash
-.venv/bin/python -m pytest tests/python/test_contracts.py -v
-.venv/bin/python python/validate_annotations.py core/fixtures/valid/annotation-box.json
-~~~
-
-Expected: tests pass and CLI exits 0 for the valid fixture. Run the CLI against a negative-width fixture and confirm it exits nonzero with a field path.
-
-- [ ] **Step 8: Commit**
-
-~~~bash
-git add core python/annotool/contracts.py python/annotool/jsonl.py python/validate_annotations.py tests/python/test_contracts.py
-git commit -m "feat: define and validate annotation contracts"
-~~~
-
----
-
-### Task 3: Deterministic synthetic sample
-
-**Files:**
-- Create: python/annotool/sample.py
-- Create: python/make_sample_input.py
-- Create: tests/python/test_sample.py
-- Create: tests/expected/sample-defects.json
-
-**Interfaces:**
-- Consumes: annotation and dataset manifest contracts from Task 2.
-- Produces: generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str] and a CLI that writes frames, model_output.jsonl, manifest.json, expected_defects.json, and hashes.json.
-
-- [ ] **Step 1: Write failing deterministic-sample tests**
-
-Create tests/python/test_sample.py:
-
-~~~python
-import json
-from pathlib import Path
-
-from annotool.sample import generate_sample
-
-
-def test_sample_is_deterministic(tmp_path: Path) -> None:
-    first = generate_sample(tmp_path / "first", seed=6006)
-    second = generate_sample(tmp_path / "second", seed=6006)
-    assert first == second
-
-
-def test_sample_contains_required_defects(tmp_path: Path) -> None:
-    generate_sample(tmp_path / "sample", seed=6006)
-    defects = json.loads((tmp_path / "sample/expected_defects.json").read_text())
-    assert set(defects["types"]) == {
-        "drift",
-        "wrong_class",
-        "missed_region",
-        "hallucinated_region",
-        "track_id_swap",
-    }
-    assert defects["similar_run"] == [40, 59]
-~~~
-
-- [ ] **Step 2: Run tests and confirm failure**
-
-Run:
-
-~~~bash
-.venv/bin/python -m pytest tests/python/test_sample.py -v
-~~~
-
-Expected: import fails because annotool.sample does not exist.
-
-- [ ] **Step 3: Implement clean frame and ground-truth generation**
-
-Implement 120 640×360 BGR frames at 30 FPS from NumPy arrays. Create colored rectangles and polygons with deterministic positions derived only from frame index and seed. Use 20 regions in the benchmark/sample view, with instrument, anatomy, and region kinds. Frames 40–59 use a constant background plus sub-threshold deterministic one-level intensity variation.
-
-The function starts with:
-
-~~~python
-FRAME_COUNT = 120
-WIDTH = 640
-HEIGHT = 360
-FPS = 30.0
-SIMILAR_START = 40
-SIMILAR_END = 59
-
-
-def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
-    rng = np.random.default_rng(seed)
-    output_dir.mkdir(parents=True, exist_ok=False)
-    frames_dir = output_dir / "frames"
-    frames_dir.mkdir()
-~~~
-
-Every frame file is named frame_000000.png through frame_000119.png.
-
-- [ ] **Step 4: Plant model-output defects without changing ground truth**
-
-Create model output as a deep copy of ground truth, then apply:
-
-- geometry drift to regions sample-r03 and sample-r04 on frames 12 and 13
-- wrong class on sample-r05 at frame 24
-- remove sample-r07 at frame 36
-- add hallucinated region hallucinated-f072 at frame 72
-- swap track IDs of sample-r01 and sample-r02 at frame 90
-
-Write these exact locations and region IDs to expected_defects.json. Do not commit a separate ground-truth annotation export; the expected-defects manifest is the test oracle.
-
-- [ ] **Step 5: Validate and hash all generated outputs**
-
-Validate manifest.json and every model_output.jsonl record before returning. Hash frame content, manifest, annotations, and defects using SHA-256. Return a mapping from relative path to digest so tests can compare two output directories without comparing paths.
-
-- [ ] **Step 6: Add the required CLI wrapper**
-
-Create python/make_sample_input.py with argparse options --output and --seed. It calls generate_sample and prints the output path and zero validation errors. A second run into an existing directory must exit nonzero with a concise message rather than overwrite files.
-
-- [ ] **Step 7: Run focused and full Python tests**
-
-Run:
-
-~~~bash
+```bash
 .venv/bin/python -m pytest tests/python/test_sample.py -v
 .venv/bin/python python/make_sample_input.py --output /tmp/annotool-sample --seed 6006
-.venv/bin/python python/validate_annotations.py /tmp/annotool-sample/model_output.jsonl
-~~~
+.venv/bin/python python/validate_model_output.py /tmp/annotool-sample/model_output_v1.jsonl
+```
 
-Expected: tests pass, 120 frames exist, and validation reports zero errors.
+### Task 4：视频标准化与相似度
 
-- [ ] **Step 8: Commit**
+**主要文件：** `python/annotool/similarity.py`、`python/annotool/frame_source.py`、`python/frame_source.py`、`tests/python/test_similarity.py`、`tests/python/test_frame_source.py`。
 
-~~~bash
-git add python/annotool/sample.py python/make_sample_input.py tests/python/test_sample.py tests/expected/sample-defects.json
-git commit -m "feat: generate deterministic annotated sample"
-~~~
+**公共接口：** `normalized_mad`、`contiguous_run`、`decode_video`。
 
----
+- [ ] 先测试相同帧距离为 0，以及相似区间在阈值处停止。
+- [ ] 用 ffprobe JSON 读取宽高、标称帧率和逐帧时间戳。
+- [ ] 以参数列表调用 FFmpeg，禁止 `shell=True`。
+- [ ] 提取无损 PNG，并把从 1 开始的文件名转换为从 0 开始的 manifest 索引。
+- [ ] 拒绝帧索引不连续或时间戳数量不匹配的输出。
+- [ ] `--result-file` 采用原子 JSON 结果，供 Godot 非阻塞监控。
+- [ ] 在 seed 6006 样例上确认阈值 0.02 得到区间 `(40, 59)`。
 
-### Task 4: Video normalization and similarity
-
-**Files:**
-- Create: python/annotool/similarity.py
-- Create: python/annotool/frame_source.py
-- Create: python/frame_source.py
-- Test: tests/python/test_similarity.py
-- Test: tests/python/test_frame_source.py
-
-**Interfaces:**
-- Consumes: FFmpeg, OpenCV, manifest validator.
-- Produces: normalized_mad(left: ndarray, right: ndarray) -> float, contiguous_run(scores: list[float], keyframe: int, threshold: float) -> tuple[int, int], and decode_video(input_path: Path, output_dir: Path) -> dict.
-
-- [ ] **Step 1: Write failing similarity tests**
-
-Create tests/python/test_similarity.py:
-
-~~~python
-import numpy as np
-
-from annotool.similarity import contiguous_run, normalized_mad
-
-
-def test_identical_frames_have_zero_distance() -> None:
-    frame = np.full((32, 32, 3), 64, dtype=np.uint8)
-    assert normalized_mad(frame, frame) == 0.0
-
-
-def test_contiguous_run_stops_at_threshold_boundaries() -> None:
-    scores = [0.4, 0.01, 0.01, 0.03, 0.01]
-    assert contiguous_run(scores, keyframe=2, threshold=0.02) == (1, 3)
-~~~
-
-The scores list uses scores[i] for the transition from frame i to frame i + 1, so a keyframe at 2 expands left through scores[1] and right through scores[2].
-
-- [ ] **Step 2: Implement similarity**
-
-Create python/annotool/similarity.py:
-
-~~~python
-import cv2
-import numpy as np
-
-
-def normalized_mad(left: np.ndarray, right: np.ndarray) -> float:
-    left_small = cv2.resize(left, (64, 64), interpolation=cv2.INTER_AREA)
-    right_small = cv2.resize(right, (64, 64), interpolation=cv2.INTER_AREA)
-    left_gray = cv2.cvtColor(left_small, cv2.COLOR_BGR2GRAY).astype(np.float32)
-    right_gray = cv2.cvtColor(right_small, cv2.COLOR_BGR2GRAY).astype(np.float32)
-    return float(np.mean(np.abs(left_gray - right_gray)) / 255.0)
-
-
-def contiguous_run(
-    scores: list[float],
-    keyframe: int,
-    threshold: float = 0.02,
-) -> tuple[int, int]:
-    start = keyframe
-    end = keyframe
-    while start > 0 and scores[start - 1] < threshold:
-        start -= 1
-    while end < len(scores) and scores[end] < threshold:
-        end += 1
-    return start, end
-~~~
-
-- [ ] **Step 3: Write a failing frame-source integration test**
-
-Generate a three-frame lossless test video with FFmpeg from temporary PNGs, call decode_video, and assert frame entries are [0, 1, 2], paths exist, timestamps are monotonic, and similarity_scores has length 2. Mark the test skipped only when shutil.which("ffmpeg") is None.
-
-- [ ] **Step 4: Implement video decoding**
-
-Use subprocess.run with an argument list, never shell=True. Probe width, height, nominal frame rate, and per-frame timestamps with ffprobe JSON. Extract lossless PNG frames with:
-
-~~~python
-command = [
-    "ffmpeg",
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-i",
-    str(input_path),
-    "-vsync",
-    "0",
-    str(frames_dir / "frame_%06d.png"),
-]
-~~~
-
-Rename or account for FFmpeg's one-based filenames so the manifest remains zero-based. Reject output if indices are not contiguous or if probed timestamp count does not match extracted frame count. Compute adjacent similarity scores and write them into manifest.json.
-
-- [ ] **Step 5: Add the required CLI**
-
-Create python/frame_source.py with input path, --output, and optional --result-file arguments. It exits nonzero for missing files, FFmpeg failure, invalid video, or output collision and prints concise errors without Python tracebacks. When --result-file is supplied, atomically write {"success": true, "path": "<normalized directory>"} or {"success": false, "error": "<message>"} so Godot can monitor the process without capturing stdout.
-
-- [ ] **Step 6: Verify sample similarity boundaries**
-
-Add a test that reads generated sample frames, computes scores, calls contiguous_run at keyframe 50 with threshold 0.02, and asserts (40, 59). Assert transitions 39→40 and 59→60 are at or above the threshold.
-
-- [ ] **Step 7: Run the frame-source suite**
-
-Run:
-
-~~~bash
+```bash
 .venv/bin/python -m pytest tests/python/test_similarity.py tests/python/test_frame_source.py -v
-~~~
+```
 
-Expected: all tests pass.
+### Task 5：Godot 契约校验与不可变标注存储
 
-- [ ] **Step 8: Commit**
+**主要文件：** `client/domain/model_output_validator.gd`、`client/domain/annotation_store.gd`、`client/domain/command.gd`、`client/domain/command_history.gd` 和对应 Godot 测试。
 
-~~~bash
-git add python/annotool/similarity.py python/annotool/frame_source.py python/frame_source.py tests/python/test_similarity.py tests/python/test_frame_source.py
-git commit -m "feat: normalize videos and measure frame similarity"
-~~~
+- [ ] Godot 对有效/无效夹具的判断必须与 Python 一致。
+- [ ] `get_model_record` 的返回值被外部修改后，内部模型记录保持不变。
+- [ ] 非法 corrected replacement 必须被拒绝且不改变现有状态。
+- [ ] `snapshot_corrected` 按帧索引返回记录并保留原始帧 `source`；修正内容与模型基线分开保存。
+- [ ] 成功的新命令清空 redo；超过 200 条时丢弃最早的 undo 项。
+- [ ] 命令失败时不得进入历史记录。
 
----
+### Task 6：插件注册表、Source 插件与有界帧缓存
 
-### Task 5: Godot contract validation and immutable annotation store
+**主要文件：** `client/pipeline/plugin_api.gd`、`client/pipeline/plugin_registry.gd`、`client/services/frame_cache.gd`、`client/plugins/source/image_sequence_source/` 和对应测试。
 
-**Files:**
-- Create: client/domain/annotation_validator.gd
-- Create: client/domain/annotation_store.gd
-- Create: client/domain/command.gd
-- Create: client/domain/command_history.gd
-- Create: tests/godot/test_annotation_validator.gd
-- Create: tests/godot/test_annotation_store.gd
-- Modify: tests/godot/test_runner.gd
+- [ ] 注册表扫描直接子目录中的 `plugin.json`。
+- [ ] 校验 `id`、`version`、`api_version`、`stage` 和 `entry`。
+- [ ] 同一阶段重复 ID 被拒绝；坏插件不得阻止其他插件加载。
+- [ ] LRU 缓存严格遵守 `max_size`。
+- [ ] 图像序列插件只在完整校验候选目录后替换当前状态。
+- [ ] 路径必须为相对路径并保持在数据源根目录内。
+- [ ] 缺失目录、越界帧或损坏输入返回可读错误，并保留原有有效状态。
 
-**Interfaces:**
-- Consumes: JSON fixtures and schema semantics from Task 2.
-- Produces: AnnotationValidator.validate_record(record: Dictionary) -> PackedStringArray; AnnotationStore.load_model_records(records: Array[Dictionary]) -> PackedStringArray; get_model_record(frame: int) -> Dictionary; get_corrected_record(frame: int) -> Dictionary; replace_corrected_record(frame: int, record: Dictionary) -> PackedStringArray; snapshot_corrected() -> Array[Dictionary]; Command.apply(store: AnnotationStore) -> PackedStringArray; Command.revert(store: AnnotationStore) -> void; CommandHistory.execute(command, store) -> PackedStringArray; undo(store) and redo(store).
+### Task 7：视口坐标变换与区域渲染器
 
-- [ ] **Step 1: Register failing Godot tests**
+**主要文件：** `client/services/viewport_transform.gd`、`client/plugins/render/canvas_region_renderer/`、`client/ui/annotation_viewport.*` 和对应测试。
 
-Update tests/godot/test_runner.gd to instantiate a shared TestSupport, execute static run(support) functions from the registered test scripts, print every failure, and exit 1 when failures is non-empty.
+- [ ] 坐标正反变换必须互为逆运算。
+- [ ] `zoom_at` 保持光标下图像点不动；`pan_by` 同时影响绘制与反向映射。
+- [ ] box 和凹 polygon 的命中测试在图像坐标中进行，视觉最上层区域优先。
+- [ ] 使用单个 canvas 绘制，不为每个区域创建节点。
+- [ ] `AnnotationViewport` 只在纹理、记录、选择、透明度或变换变化时重绘。
+- [ ] 本任务不得修改标注数据。
 
-Create tests/godot/test_annotation_validator.gd:
+### Task 8：标注命令与基础 Edit 插件
 
-~~~gdscript
-extends RefCounted
+**主要文件：** `client/domain/commands/`、`client/plugins/edit/basic_edit_tools/`、`client/ui/inspector_panel.*` 和对应测试。
 
-static func run(support: TestSupport) -> void:
-    var validator := AnnotationValidator.new()
-    var valid := _read_json("res://core/fixtures/valid/annotation-box.json")
-    var invalid := _read_json("res://core/fixtures/invalid/annotation-negative-width.json")
-    support.expect_true(validator.validate_record(valid).is_empty(), "valid box fixture rejected")
-    support.expect_true(not validator.validate_record(invalid).is_empty(), "negative width accepted")
+- [ ] 每类命令都测试 apply → undo → redo，且模型记录始终不变。
+- [ ] 宽度为 0 或越界移动必须被拒绝，且不进入历史。
+- [ ] 拖动只更新临时预览，释放时提交一条命令；Escape 取消。
+- [ ] AddBoxCommand 的 ID 在当前帧唯一，会话中不复用已删除 ID。
+- [ ] `SetTrackIdCommand` 是唯一允许修改 `track_id` 的编辑路径。
+- [ ] InspectorPanel 只发出请求，不直接修改记录。
+- [ ] 覆盖鼠标选择/拖动及 Tab、方向键、Delete、Ctrl+Z、Ctrl+Shift+Z 等键盘路径。
 
-static func _read_json(path: String) -> Dictionary:
-    return JSON.parse_string(FileAccess.get_file_as_string(path))
-~~~
+### Task 9：主应用、播放与时间线
 
-- [ ] **Step 2: Run the tests and confirm missing classes**
+> 修正状态：本任务已有实现提交，但产品验收未通过。旧布局删除了受保护控件，并拒绝直接打开图像。Task 9R 是强制修复任务。
 
-Run:
+**主要文件：** `client/app/main.*`、`client/ui/timeline.*` 和对应测试。
 
-~~~bash
-godot --headless --path . --script tests/godot/test_runner.gd
-~~~
+- [ ] 主场景保留顶部工具栏、左侧 ToolPanel、中间 AnnotationViewport、右侧 InspectorPanel、底部播放/时间线和状态栏。
+- [ ] PNG/JPG/JPEG 走单帧 Source；目录走图像序列 Source；视频走异步标准化。
+- [ ] 以 manifest 帧索引作为标注依据，不依赖编解码器播放时间。
+- [ ] 上一帧/下一帧在边界处钳制；越界 seek 不改变当前帧；最后一帧自动暂停。
+- [ ] Timeline 使用缓存状态数组，不为长视频的每一帧创建按钮。
+- [ ] 数据源错误显示在状态栏，不暴露原始堆栈。
 
-Expected: parse or identifier errors for AnnotationValidator and AnnotationStore.
+### Task 9R：恢复受保护前端与直接图像打开
 
-- [ ] **Step 3: Implement equivalent client validation**
+**门槛：** 保留现有 renderer、viewport、inspector、store、command history、playback、timeline 和事务式数据源替换，不得重写。全部步骤通过前，Task 10 继续阻塞。
 
-Create client/domain/annotation_validator.gd:
+**主要文件：** `client/ui/tool_panel.*`、`client/plugins/source/single_image_source/`、`client/app/main.*`、`client/pipeline/plugin_api.gd`、`client/plugins/edit/basic_edit_tools/plugin.gd` 及对应测试。
 
-~~~gdscript
-class_name AnnotationValidator
-extends RefCounted
+- [ ] 先用受保护节点测试暴露当前回归。
+- [ ] ToolPanel 只负责按钮分组和活动状态，不包含标注变更逻辑。
+- [ ] Select、Move、Box、Fill、Delete 五个按钮必须互斥，重复点击仍保持活动。
+- [ ] 工具切换取消临时拖动/添加状态，不创建历史记录。
+- [ ] 单图 Source 支持 PNG/JPG/JPEG，生成一帧、时间 0.0、空 regions 的有效内存契约。
+- [ ] 缺失、损坏、目录或不支持文件返回错误，插件保持关闭。
+- [ ] `open_source` 完整校验候选对象并成功加载第 0 帧后，才替换当前状态。
+- [ ] Save/Export 保持可见，在后端完成前禁用并提供说明 tooltip。
 
-func validate_record(record: Dictionary) -> PackedStringArray:
-    var errors := PackedStringArray()
-    for field in ["schema_version", "dataset_id", "source", "frame", "image_size", "regions"]:
-        if not record.has(field):
-            errors.append("%s: required field missing" % field)
-    if not errors.is_empty():
-        return errors
-    if record.schema_version != 1:
-        errors.append("schema_version: expected 1")
-    if not record.frame is int or record.frame < 0:
-        errors.append("frame: expected non-negative integer")
-    if not record.image_size is Array or record.image_size.size() != 2:
-        errors.append("image_size: expected [width, height]")
-        return errors
-    var ids := {}
-    for index in record.regions.size():
-        _validate_region(record.regions[index], index, record.image_size, ids, errors)
-    return errors
-~~~
+人工产品验收必须在 1280 × 800 下确认顶部五个按钮、左侧五种工具、单图和样例目录、活动工具与选择高亮、底部 Timeline、右侧 Inspector，以及无效替换后的原状态保留。
 
-Implement _validate_region so it applies the same required fields, exactly-one-geometry, confidence, unique ID, positive box size, bounds, polygon cardinality, and vertex bounds rules as Python. Read every fixture in core/fixtures/valid and core/fixtures/invalid in the test and assert parity by directory.
+### Task 9P1：补齐全部 Part 1 必需交付物
 
-- [ ] **Step 4: Write failing immutable-store tests**
+**门槛：** Task 9R 后、宣告 Part 1 完成前，只允许执行本任务。Feedback 插件、README、架构图和插件 API 都是老师要求的交付物。
 
-Create tests/godot/test_annotation_store.gd. Load two valid records, mutate the Dictionary returned by get_model_record, and assert a later get_model_record call remains unchanged. Replace a corrected record and assert the model record still matches its original JSON string. Also assert a schema-invalid replacement is rejected and does not mutate corrected state.
+**主要文件：** `client/plugins/feedback/file_training_handoff/`、`README.md`、`docs/architecture.md`、`docs/plugin-api.md`、`docs/requirements-traceability.md` 及文档/插件测试。
 
-- [ ] **Step 5: Implement AnnotationStore**
+- [ ] Feedback 插件输出标准 UTF-8 JSONL，每条记录通过 Model Output V1 校验并保留原始帧 `source`。
+- [ ] 输入记录先 deep copy；失败必须保留旧的有效输出。
+- [ ] 文档测试覆盖环境、命令、架构流、manifest 字段、插件方法、生命周期、错误规则和可追溯性列。
+- [ ] README 给出从仓库根目录运行的准确命令，不把跳过测试描述为通过。
+- [ ] Mermaid 图表达 Source → Render → Edit → Export/Feedback → corrected store → training handoff。
+- [ ] 新插件只需增加目录和 manifest，不修改注册表核心。
+- [ ] 可追溯性矩阵只使用 `PASS`、`FAIL` 或 `BLOCKED`。
+- [ ] 环境、测试、样例、双运行时校验和 whitespace 检查均通过。
+- [ ] 从干净检出只按 README 完成人工审查，并为每个 Part 1 行补充证据。
 
-Create client/domain/annotation_store.gd:
-
-~~~gdscript
-class_name AnnotationStore
-extends RefCounted
-
-var _model_records: Dictionary = {}
-var _corrected_records: Dictionary = {}
-var _dirty_frames: Dictionary = {}
-var _validator := AnnotationValidator.new()
-
-func load_model_records(records: Array[Dictionary]) -> PackedStringArray:
-    var errors := PackedStringArray()
-    var next_model := {}
-    for record in records:
-        var record_errors := _validator.validate_record(record)
-        if not record_errors.is_empty():
-            errors.append_array(record_errors)
-        else:
-            next_model[record.frame] = record.duplicate(true)
-    if not errors.is_empty():
-        return errors
-    _model_records = next_model
-    _corrected_records = next_model.duplicate(true)
-    _dirty_frames.clear()
-    return errors
-
-func get_model_record(frame: int) -> Dictionary:
-    return _model_records.get(frame, {}).duplicate(true)
-
-func get_corrected_record(frame: int) -> Dictionary:
-    return _corrected_records.get(frame, {}).duplicate(true)
-
-func replace_corrected_record(frame: int, record: Dictionary) -> PackedStringArray:
-    var errors := _validator.validate_record(record)
-    if errors.is_empty() and _corrected_records.has(frame):
-        _corrected_records[frame] = record.duplicate(true)
-        _dirty_frames[frame] = true
-    return errors
-~~~
-
-Add get_frame_count, get_dirty_frames, clear_dirty, snapshot_corrected, and model_digest. Return deep copies from every public read.
-
-snapshot_corrected returns all frames in index order and sets source to human_corrected in the returned copies. It never changes model records. Add a test asserting all exported snapshot sources are human_corrected while model sources remain model_output_v1.
-
-- [ ] **Step 6: Implement the command base and bounded history**
-
-Create client/domain/command.gd:
-
-~~~gdscript
-class_name EditCommand
-extends RefCounted
-
-func apply(_store: AnnotationStore) -> PackedStringArray:
-    return PackedStringArray(["command apply not implemented"])
-
-func revert(_store: AnnotationStore) -> void:
-    pass
-~~~
-
-Create CommandHistory with capacity default 200. execute applies a command and only pushes it when no errors are returned. undo reverts the last command and moves it to redo. redo applies the last redo command. A successful new command clears redo; exceeding capacity drops the oldest undo entry.
-
-- [ ] **Step 7: Run Godot contract/store tests**
-
-Run:
-
-~~~bash
-godot --headless --path . --script tests/godot/test_runner.gd
-~~~
-
-Expected: fixture parity, immutability, invalid replacement, and 200-command capacity tests pass.
-
-- [ ] **Step 8: Commit**
-
-~~~bash
-git add client/domain tests/godot
-git commit -m "feat: validate and store immutable annotation records"
-~~~
-
----
-
-### Task 6: Plugin registry, source plugin, and bounded frame cache
-
-**Files:**
-- Create: client/pipeline/plugin_api.gd
-- Create: client/pipeline/plugin_registry.gd
-- Create: client/services/frame_cache.gd
-- Create: client/plugins/source/image_sequence_source/plugin.json
-- Create: client/plugins/source/image_sequence_source/plugin.gd
-- Create: tests/godot/fixtures/plugins/valid/plugin.json
-- Create: tests/godot/fixtures/plugins/valid/plugin.gd
-- Create: tests/godot/fixtures/plugins/bad_api/plugin.json
-- Create: tests/godot/test_plugin_registry.gd
-- Create: tests/godot/test_source_plugin.gd
-- Modify: tests/godot/test_runner.gd
-
-**Interfaces:**
-- Consumes: normalized manifest and model-output JSONL.
-- Produces: PluginApi constants; PluginRegistry.discover(root: String) -> PackedStringArray; get_plugin(stage: String, id: String) -> RefCounted; FrameCache.get_value(index: int, loader: Callable) -> Variant; source plugin open(path: String) -> PackedStringArray, get_frame_count() -> int, get_frame_entry(index: int) -> Dictionary, get_model_records() -> Array[Dictionary], load_texture(index: int) -> Texture2D, and close().
-
-- [ ] **Step 1: Write failing registry tests**
-
-Create tests/godot/test_plugin_registry.gd:
-
-~~~gdscript
-extends RefCounted
-
-static func run(support: TestSupport) -> void:
-    var registry := PluginRegistry.new()
-    var errors := registry.discover("res://tests/godot/fixtures/plugins")
-    support.expect_true(registry.get_plugin("source", "fixture-source") != null, "valid plugin not loaded")
-    support.expect_true(errors.any(func(item: String) -> bool: return "api_version" in item), "bad API not reported")
-~~~
-
-Fixtures use api_version 1 for valid and 99 for invalid.
-
-- [ ] **Step 2: Implement API constants and registry**
-
-Create client/pipeline/plugin_api.gd:
-
-~~~gdscript
-class_name PluginApi
-extends RefCounted
-
-const API_VERSION := 1
-const STAGES := ["source", "render", "edit", "feedback"]
-~~~
-
-PluginRegistry scans immediate child directories, reads plugin.json, validates id/version/api_version/stage/entry, rejects duplicate IDs per stage, loads the entry script, instantiates it, and verifies the instance exposes the documented methods for its stage before storing it by stage and ID. One broken plugin appends a readable error and does not stop discovery of other plugins.
-
-- [ ] **Step 3: Write failing cache tests**
-
-In tests/godot/test_source_plugin.gd, create a FrameCache with max_size 3, load frames 0, 1, 2, touch 0, load 3, and assert frame 1 was evicted while 0, 2, 3 remain. Assert max_size never exceeds 3.
-
-- [ ] **Step 4: Implement the LRU cache**
-
-Create client/services/frame_cache.gd:
-
-~~~gdscript
-class_name FrameCache
-extends RefCounted
-
-var max_size := 12
-var _values: Dictionary = {}
-var _order: Array[int] = []
-
-func _init(size: int = 12) -> void:
-    max_size = maxi(1, size)
-
-func get_value(index: int, loader: Callable) -> Variant:
-    if _values.has(index):
-        _touch(index)
-        return _values[index]
-    var value: Variant = loader.call(index)
-    if value == null:
-        return null
-    _values[index] = value
-    _touch(index)
-    while _order.size() > max_size:
-        _values.erase(_order.pop_front())
-    return value
-~~~
-
-Add has(index), size(), clear(), and _touch(index).
-
-- [ ] **Step 5: Implement the normalized image-sequence source plugin**
-
-The plugin opens only a directory containing manifest.json, frames, and model_output.jsonl. It validates paths are relative and remain under the source root. It parses manifest and JSONL, checks frame counts and indices, and only then replaces its current state. load_texture uses Image.load followed by ImageTexture.create_from_image and the cache.
-
-Create plugin.json:
-
-~~~json
-{
-  "id": "image_sequence_source",
-  "version": "1.0.0",
-  "api_version": 1,
-  "stage": "source",
-  "entry": "plugin.gd"
-}
-~~~
-
-The plugin script exposes the exact source signatures in this task. Existing valid state remains intact when a replacement open fails.
-
-- [ ] **Step 6: Test real sample loading and recoverable errors**
-
-Generate a sample under /tmp, pass the path to the source plugin in a headless test, and assert 120 frames, frame 0 texture dimensions 640×360, and 120 model records. Then attempt to open a missing directory and assert errors are returned while the original sample remains open. Also test out-of-range texture requests return null plus a readable last_error.
-
-- [ ] **Step 7: Run registry/source tests**
-
-Run:
-
-~~~bash
-godot --headless --path . --script tests/godot/test_runner.gd
-~~~
-
-Expected: registry isolation, cache bound, sample loading, and replacement-failure tests pass.
-
-- [ ] **Step 8: Commit**
-
-~~~bash
-git add client/pipeline client/services/frame_cache.gd client/plugins/source tests/godot
-git commit -m "feat: load frame sources through plugin registry"
-~~~
-
----
-
-### Task 7: Viewport transform and region renderer
-
-**Files:**
-- Create: client/services/viewport_transform.gd
-- Create: client/plugins/render/canvas_region_renderer/plugin.json
-- Create: client/plugins/render/canvas_region_renderer/plugin.gd
-- Create: client/ui/annotation_viewport.gd
-- Create: client/ui/annotation_viewport.tscn
-- Create: tests/godot/test_viewport_transform.gd
-- Create: tests/godot/test_renderer.gd
-- Modify: tests/godot/test_runner.gd
-
-**Interfaces:**
-- Consumes: Texture2D, annotation record, taxonomy colors.
-- Produces: ViewportTransform.configure(image_size: Vector2, viewport_rect: Rect2); image_to_viewport(point: Vector2) -> Vector2; viewport_to_image(point: Vector2) -> Vector2; zoom_at(viewport_point: Vector2, factor: float); pan_by(delta: Vector2); render plugin set_state(texture, record, transform, selected_id, opacity), draw(canvas: CanvasItem), and hit_test(image_point: Vector2) -> Dictionary.
-
-- [ ] **Step 1: Write failing round-trip and letterbox tests**
-
-Create tests/godot/test_viewport_transform.gd:
-
-~~~gdscript
-extends RefCounted
-
-static func run(support: TestSupport) -> void:
-    var transform := ViewportTransform.new()
-    transform.configure(Vector2(640, 360), Rect2(0, 0, 1000, 800))
-    var image_point := Vector2(320, 180)
-    var viewport_point := transform.image_to_viewport(image_point)
-    support.expect_true(viewport_point.distance_to(Vector2(500, 400)) < 0.001, "center mapping wrong")
-    var round_trip := transform.viewport_to_image(viewport_point)
-    support.expect_true(round_trip.distance_to(image_point) < 0.001, "inverse mapping wrong")
-~~~
-
-Add tests that zoom_at keeps the image point under the cursor fixed and pan_by changes both drawing and inverse mapping consistently.
-
-- [ ] **Step 2: Implement ViewportTransform**
-
-Store image_size, viewport_rect, fit_scale, user_zoom clamped to 0.1–20.0, pan, and letterbox offset. configure recomputes fit scale as min(viewport width/image width, viewport height/image height). image_to_viewport and viewport_to_image are exact inverses.
-
-- [ ] **Step 3: Write failing geometry hit tests**
-
-Create tests/godot/test_renderer.gd with one box and one concave polygon. Assert points inside hit their region, points outside return an empty Dictionary, and reverse region order makes the visually topmost region win. Use image coordinates so tests remain independent of zoom.
-
-- [ ] **Step 4: Implement the render plugin**
-
-Create plugin.json with id canvas_region_renderer, version 1.0.0, api_version 1, stage render, entry plugin.gd.
-
-The plugin:
-
-- stores state but never owns annotation data
-- draws the image fitted through ViewportTransform
-- draws box outlines and optional fills
-- draws closed polygon outlines and fills
-- draws class color, label, optional confidence, selected emphasis, and box resize handles
-- performs box containment and point-in-polygon hit testing in image coordinates
-- iterates hit candidates in reverse draw order
-
-Use one canvas and cached Color/taxonomy lookups. Do not instantiate one node per region.
-
-- [ ] **Step 5: Implement AnnotationViewport interaction shell**
-
-The custom Control owns ViewportTransform, delegates drawing/hit testing to the render plugin, queues redraw only when texture, record, selection, opacity, or transform changes, supports wheel zoom around cursor, and supports middle-button or Space+left-button pan. It emits:
-
-~~~gdscript
-signal region_selected(region_id: String)
-signal image_pointer_event(event: InputEvent, image_position: Vector2)
-signal transform_changed
-~~~
-
-Do not mutate annotations in this task.
-
-- [ ] **Step 6: Add transformed selection test**
-
-Configure zoom and pan, map a known image point to viewport coordinates, feed that point into AnnotationViewport selection, and assert the correct region ID is emitted. This catches renderer/input transform divergence.
-
-- [ ] **Step 7: Run rendering tests**
-
-Run:
-
-~~~bash
-godot --headless --path . --script tests/godot/test_runner.gd
-~~~
-
-Expected: all coordinate, zoom-anchor, letterbox, box, polygon, and transformed hit tests pass.
-
-- [ ] **Step 8: Commit**
-
-~~~bash
-git add client/services/viewport_transform.gd client/plugins/render client/ui/annotation_viewport.gd client/ui/annotation_viewport.tscn tests/godot
-git commit -m "feat: render and pick transformed regions"
-~~~
-
----
-
-### Task 8: Annotation commands and basic edit-tools plugin
-
-**Files:**
-- Create: client/domain/commands/replace_frame_command.gd
-- Create: client/domain/commands/move_region_command.gd
-- Create: client/domain/commands/resize_box_command.gd
-- Create: client/domain/commands/add_box_command.gd
-- Create: client/domain/commands/delete_region_command.gd
-- Create: client/domain/commands/relabel_region_command.gd
-- Create: client/domain/commands/set_track_id_command.gd
-- Create: client/domain/commands/toggle_fill_command.gd
-- Create: client/plugins/edit/basic_edit_tools/plugin.json
-- Create: client/plugins/edit/basic_edit_tools/plugin.gd
-- Create: client/ui/inspector_panel.gd
-- Create: client/ui/inspector_panel.tscn
-- Create: tests/godot/test_edit_commands.gd
-- Create: tests/godot/test_keyboard_editing.gd
-- Modify: tests/godot/test_runner.gd
-
-**Interfaces:**
-- Consumes: AnnotationStore, CommandHistory, selected frame/region, image pointer events.
-- Produces: commands whose constructors capture frame, region ID, and requested change; edit plugin activate(context: Dictionary), handle_pointer(event, image_position) -> void, handle_key(event) -> bool, begin_add_box(), and cancel(); inspector emits relabel_requested, delete_requested, fill_requested, and geometry_requested.
-
-- [ ] **Step 1: Write failing command tests**
-
-Create table-driven tests that run move, resize, add, delete, relabel, track-ID change, and fill commands. For every command:
-
-1. snapshot corrected record
-2. apply through CommandHistory
-3. assert expected change
-4. undo and assert exact snapshot equality
-5. redo and assert expected change
-6. assert model record remains equal to its original snapshot
-
-Also assert resize to zero width and move outside image bounds return validation errors and are not added to history.
-
-- [ ] **Step 2: Implement ReplaceFrameCommand**
-
-This base concrete command captures deep copies of before and after records:
-
-~~~gdscript
-class_name ReplaceFrameCommand
-extends EditCommand
-
-var frame: int
-var before: Dictionary
-var after: Dictionary
-
-func _init(frame_index: int, old_record: Dictionary, new_record: Dictionary) -> void:
-    frame = frame_index
-    before = old_record.duplicate(true)
-    after = new_record.duplicate(true)
-
-func apply(store: AnnotationStore) -> PackedStringArray:
-    return store.replace_corrected_record(frame, after)
-
-func revert(store: AnnotationStore) -> void:
-    store.replace_corrected_record(frame, before)
-~~~
-
-- [ ] **Step 3: Implement focused edit-command constructors**
-
-Each focused command derives or delegates to ReplaceFrameCommand, locates the region by ID, creates a deep-copy after record, applies exactly one change, and lets AnnotationStore validation decide acceptance. AddBoxCommand creates an ID unique within the current frame using frame index and a monotonically increasing local counter; it never reuses a deleted ID during the session. SetTrackIdCommand accepts a non-empty string or null and is the only edit path that mutates track_id.
-
-- [ ] **Step 4: Write failing pointer and keyboard behavior tests**
-
-Cover:
-
-- click selection
-- drag commits one move command on release
-- resize-handle drag commits one resize command
-- add-box pointer drag
-- Tab and Shift+Tab region cycling
-- Arrow, Shift+Arrow, and Ctrl+Shift+Arrow movement by 1, 5, and 10 pixels
-- Alt variants resize by 1, 5, and 10 pixels
-- Delete removes selection
-- Ctrl+Z and Ctrl+Shift+Z
-- keyboard-only add-box workflow and Enter confirmation
-
-- [ ] **Step 5: Implement the basic edit-tools plugin**
-
-Create plugin.json with id basic_edit_tools, version 1.0.0, api_version 1, stage edit, entry plugin.gd.
-
-The context Dictionary contains store, history, viewport, current_frame getter, selected_region getter/setter, status callback, and taxonomy. The plugin translates pointer/keyboard actions into commands but never writes AnnotationStore directly. Dragging updates a transient preview; release executes one command. Escape cancels transient edits.
-
-- [ ] **Step 6: Implement InspectorPanel**
-
-Build controls for region ID, class OptionButton, free-text class LineEdit, kind, confidence, editable track ID, numeric box geometry, fill, and delete. Populate from a deep-copy record. Emit requests to the edit plugin instead of mutating records. Disable box geometry fields for polygons. All controls participate in normal keyboard focus order.
-
-- [ ] **Step 7: Run all edit tests**
-
-Run:
-
-~~~bash
-godot --headless --path . --script tests/godot/test_runner.gd
-~~~
-
-Expected: all command round trips, invalid-command refusal, pointer actions, and keyboard actions pass.
-
-- [ ] **Step 8: Commit**
-
-~~~bash
-git add client/domain/commands client/plugins/edit client/ui/inspector_panel.gd client/ui/inspector_panel.tscn tests/godot
-git commit -m "feat: edit regions with reversible commands"
-~~~
-
----
-
-### Task 9: Main application, playback, and timeline
-
-> **Corrective status:** the implementation commit for this task exists, but the task is not
-> product-accepted. Its former layout interpretation removed protected controls and its file route
-> rejected a direct image. The requirements below are corrected; Task 9R is the mandatory repair.
-
-**Files:**
-- Create: client/app/main.tscn
-- Create: client/app/main.gd
-- Create: client/ui/timeline.gd
-- Create: client/ui/timeline.tscn
-- Create: tests/godot/test_playback.gd
-- Create: tests/godot/test_timeline.gd
-- Modify: tests/godot/test_runner.gd
-
-**Interfaces:**
-- Consumes: plugin registry, source, renderer, edit tools, store, frame cache, viewport, inspector.
-- Produces: Main.open_source(path: String), set_frame(index: int), play(), pause(), step(delta: int), seek(index: int); Timeline.configure(frame_count: int), set_current_frame(index), set_verified(index, bool), set_batch_ranges(ranges), and frame_requested signal.
-
-- [ ] **Step 1: Write failing playback-state tests**
-
-Test a 120-frame source:
-
-- initial frame is 0
-- next/previous clamp at 119/0
-- seek rejects -1 and 120 without changing current frame
-- playback advances explicit indices
-- timestamp shown equals the manifest entry
-- reaching frame 119 pauses rather than wrapping
-
-- [ ] **Step 2: Build the main scene**
-
-Construct the approved fixed layout:
-
-- top toolbar with Open, Save, Undo, Redo, Export
-- left ToolPanel with Select, Move, Box, Fill, Delete
-- center AnnotationViewport
-- right InspectorPanel
-- bottom previous, play/pause, next, frame/time, and Timeline
-- status bar
-
-Use Godot FileDialog for source selection. Selecting PNG/JPG/JPEG uses the one-frame Source plugin;
-selecting a directory uses the normalized image-sequence Source plugin. Selecting a video launches
-`python/frame_source.py` through ProcessService, displays progress/status, and opens the normalized
-output only after success. Failed replacement preserves the active source.
-
-- [ ] **Step 3: Implement frame-index playback**
-
-Main stores current_frame and uses a Timer at the manifest nominal FPS. Every tick calls set_frame(current_frame + 1). set_frame validates bounds, asks the source for one texture, obtains corrected record, updates viewport/inspector/timeline labels, and prefetches only through the bounded cache. It never uses codec playback time as the annotation index.
-
-- [ ] **Step 4: Write failing timeline tests**
-
-Create tests that configure five frames, mark frames 0 and 2 verified, define a batch range 1–3, and assert the timeline state model returns distinct visual states for current, verified, unverified, and batch membership. Clicking a frame emits its zero-based index.
-
-- [ ] **Step 5: Implement Timeline**
-
-Timeline draws a compact frame strip using cached status arrays rather than creating one button per frame. It supports horizontal scrolling for long sources, click-to-seek, current-frame highlight, verified/unverified color, and batch-range outline.
-
-- [ ] **Step 6: Wire editing and toolbar state**
-
-Selection updates InspectorPanel. Edit commands refresh only the current record and dirty/save
-indicators. Undo/redo buttons reflect history availability. Save and Export remain visible and are
-disabled until their backing tasks are accepted. Opacity updates only render state. Zoom buttons
-delegate to ViewportTransform. Source errors appear in the status bar without raw stack traces.
-
-- [ ] **Step 7: Run application-state tests and a headless scene load**
-
-Run:
-
-~~~bash
-godot --headless --path . --script tests/godot/test_runner.gd
-godot --headless --path . --quit-after 2
-~~~
-
-Expected: playback/timeline tests pass and main scene loads without parser or missing-node errors.
-
-- [ ] **Step 8: Commit**
-
-~~~bash
-git add client/app client/ui/timeline.gd client/ui/timeline.tscn tests/godot
-git commit -m "feat: assemble indexed playback and timeline"
-~~~
-
----
-
-### Task 9R: Restore the protected frontend and direct-image opening
-
-**Gate:** This task repairs an acceptance regression. Preserve the current renderer, viewport,
-inspector, store, command history, playback, timeline, and transactional source replacement. Do not
-rewrite them. Task 10 remains blocked until every step below passes.
-
-**Files:**
-- Create: client/ui/tool_panel.gd
-- Create: client/ui/tool_panel.tscn
-- Create: client/plugins/source/single_image_source/plugin.json
-- Create: client/plugins/source/single_image_source/plugin.gd
-- Create: tests/godot/test_tool_panel.gd
-- Create: tests/godot/test_single_image_source.gd
-- Modify: client/app/main.tscn
-- Modify: client/app/main.gd
-- Modify: client/pipeline/plugin_api.gd
-- Modify: client/plugins/edit/basic_edit_tools/plugin.gd
-- Modify: tests/godot/fixtures/integration_plugins/probe_edit.gd
-- Modify: tests/godot/test_frontend_structure.gd
-- Modify: tests/godot/test_playback.gd
-- Modify: tests/godot/test_plugin_registry.gd
-- Modify: tests/godot/test_runner.gd
-
-**Interfaces:**
-- Consumes: the current Main transactional-open path, AnnotationViewport, InspectorPanel,
-  CommandHistory, and Source/Edit API version 1.
-- Produces: `ToolPanel.tool_requested(tool_id: StringName)`,
-  `ToolPanel.set_active_tool(tool_id: StringName) -> bool`,
-  `ToolPanel.get_active_tool() -> StringName`,
-  `basic_edit_tools.set_active_tool(tool_id: StringName) -> PackedStringArray`,
-  `basic_edit_tools.get_active_tool() -> StringName`, and a `single_image_source` implementing the
-  existing Source interface: `open`, `get_frame_count`, `get_frame_entry`, `get_model_records`,
-  `get_manifest`, `load_texture`, and `close`.
-- Preserves: `Main.open_source(path: String) -> PackedStringArray`, `set_frame`, playback methods,
-  existing scene/service ownership, and failure-atomic source replacement.
-
-- [ ] **Step 1: Replace the regression assertions with failing protected-shell tests**
-
-In `tests/godot/test_frontend_structure.gd`, require these exact nodes:
-
-~~~gdscript
-const PROTECTED_PATHS := [
-	"MainVBox/TopToolbar/Open",
-	"MainVBox/TopToolbar/Save",
-	"MainVBox/TopToolbar/Undo",
-	"MainVBox/TopToolbar/Redo",
-	"MainVBox/TopToolbar/Export",
-	"MainVBox/Workspace/ToolPanel",
-	"MainVBox/Workspace/ViewportPanel/AnnotationViewport",
-	"MainVBox/Workspace/InspectorPanelContainer/InspectorColumn/InspectorPanel",
-	"MainVBox/TimelinePanel/TimelineColumn/Transport/Previous",
-	"MainVBox/TimelinePanel/TimelineColumn/Transport/PlayPause",
-	"MainVBox/TimelinePanel/TimelineColumn/Transport/Next",
-	"MainVBox/TimelinePanel/TimelineColumn/Transport/FrameLabel",
-	"MainVBox/TimelinePanel/TimelineColumn/Transport/TimeLabel",
-	"MainVBox/TimelinePanel/TimelineColumn/Timeline",
-	"MainVBox/StatusBar",
-]
-~~~
-
-Delete the assertions that call Save, Export, and ToolPanel obsolete. Assert Save and Export are
-visible but disabled, ToolPanel defaults to `&"select"`, and only Select is pressed.
-
-In `tests/godot/test_tool_panel.gd`, assert every button emits its exact StringName ID, one and only
-one button remains pressed, repeat-click keeps the active tool, and an unknown tool is rejected
-without changing state.
-
-- [ ] **Step 2: Run the structure test and verify the current regression is exposed**
-
-Run:
-
-~~~bash
-godot --headless --path . --script tests/godot/test_runner.gd
-~~~
-
-Expected: FAIL because Save, Export, ToolPanel, and bottom transport paths are not yet present.
-
-- [ ] **Step 3: Implement the focused ToolPanel scene**
-
-`tool_panel.gd` owns button grouping and active-state display only. It contains no annotation
-mutation logic:
-
-~~~gdscript
-class_name ToolPanel
-extends VBoxContainer
-
-signal tool_requested(tool_id: StringName)
-
-const TOOL_IDS: Array[StringName] = [
-	&"select", &"move", &"box", &"fill", &"delete",
-]
-
-var _active_tool: StringName = &"select"
-
-func set_active_tool(tool_id: StringName) -> bool:
-	if tool_id not in TOOL_IDS:
-		return false
-	_active_tool = tool_id
-	_sync_pressed_state()
-	return true
-
-func get_active_tool() -> StringName:
-	return _active_tool
-~~~
-
-`tool_panel.tscn` contains exactly five toggle buttons in one ButtonGroup. Each button emits its
-StringName ID through `tool_requested`; clicking the already active tool leaves it active.
-
-- [ ] **Step 4: Add explicit edit modes without changing command ownership**
-
-Add the mode boundary to `basic_edit_tools/plugin.gd`:
-
-~~~gdscript
-const TOOL_IDS: Array[StringName] = [
-	&"select", &"move", &"box", &"fill", &"delete",
-]
-
-var _active_tool: StringName = &"select"
-
-func set_active_tool(tool_id: StringName) -> PackedStringArray:
-	if tool_id not in TOOL_IDS:
-		return PackedStringArray(["Unknown edit tool: %s" % tool_id])
-	cancel()
-	_active_tool = tool_id
-	return PackedStringArray()
-
-func get_active_tool() -> StringName:
-	return _active_tool
-~~~
-
-Route pointer input by the active mode: Select changes selection, Move permits drag/resize, Box
-starts the existing add-box gesture, Fill selects and commits one ToggleFillCommand, and Delete
-selects and commits one DeleteRegionCommand. A tool change cancels drag/add previews and creates no
-history entry. Keep current commands and validation unchanged.
-
-Add `set_active_tool` and `get_active_tool` to the Edit-stage `REQUIRED_METHODS` in
-`client/pipeline/plugin_api.gd`. Update the probe edit fixture and registry contract test so every
-accepted Edit plugin exposes the same API before `docs/plugin-api.md` freezes version 1.
-
-- [ ] **Step 5: Write direct-image Source tests before its implementation**
-
-`tests/godot/test_single_image_source.gd` creates temporary PNG, JPG, and JPEG fixtures and asserts:
-
-- each supported extension opens with zero errors
-- frame count is 1; frame entry is frame 0 at time 0.0
-- manifest width/height and source hash match the image
-- the model record is valid, uses `model_output_v1`, has matching `image_size`, and has no regions
-- `load_texture(0)` succeeds and any other index fails readably
-- a missing, corrupt, directory, or unsupported file returns errors and leaves the plugin closed
-
-Add the plugin manifest contract:
-
-~~~json
-{
-  "id": "single_image_source",
-  "version": "1.0.0",
-  "api_version": 1,
-  "stage": "source",
-  "entry": "plugin.gd"
-}
-~~~
-
-- [ ] **Step 6: Implement the one-frame Source adapter**
-
-After loading and validating the image, create this in-memory contract without writing beside the
-user's image:
-
-~~~gdscript
-_manifest = {
-	"schema_version": 1,
-	"dataset_id": _safe_dataset_id(path.get_file().get_basename()),
-	"source_name": path.get_file(),
-	"source_sha256": FileAccess.get_sha256(path),
-	"width": image.get_width(),
-	"height": image.get_height(),
-	"frame_count": 1,
-	"nominal_fps": 1.0,
-	"frames": [{"frame": 0, "time_s": 0.0, "image_path": path.get_file()}],
-	"model_version": "model_output_v1",
-	"taxonomy_version": "v1",
-}
-_model_records = [{
-	"schema_version": 1,
-	"dataset_id": _manifest["dataset_id"],
-	"source": "model_output_v1",
-	"frame": 0,
-	"time_s": 0.0,
-	"image_size": [_manifest["width"], _manifest["height"]],
-	"regions": [],
-}]
-~~~
-
-Keep the absolute candidate path private in the plugin; return deep copies from public getters.
-`close()` clears image, texture, manifest, record, path, and last error.
-
-- [ ] **Step 7: Restore the scene by composition and route sources transactionally**
-
-Instantiate `ToolPanel` as the first workspace child. Reuse the existing ViewportPanel and
-InspectorPanelContainer. Restore Save and Export in TopToolbar. Reparent the existing transport
-controls into `TimelinePanel/TimelineColumn/Transport`; do not recreate playback state.
-
-Add only the routing boundary to Main:
-
-~~~gdscript
-@export var single_image_source_plugin_id := "single_image_source"
-
-func _source_plugin_id_for_path(path: String) -> String:
-	var absolute := ProjectSettings.globalize_path(path)
-	if DirAccess.dir_exists_absolute(absolute):
-		return source_plugin_id
-	if absolute.get_extension().to_lower() in ["png", "jpg", "jpeg"]:
-		return single_image_source_plugin_id
-	return ""
-~~~
-
-`open_source` obtains and instantiates the routed prototype, validates the entire candidate, loads
-frame 0, and only then swaps active state exactly as it does now. Unsupported/video files receive a
-concise status in this gate; Task 11 connects video selection to non-blocking conversion without
-changing the Source interface. FileDialog filters show images and common video extensions while
-retaining `FILE_MODE_OPEN_ANY` for directories.
-
-- [ ] **Step 8: Connect tool intent and preserve toolbar state**
-
-Main connects `ToolPanel.tool_requested` to the edit plugin. It updates the panel only after
-`set_active_tool` returns no errors, mirrors the active tool in StatusBar, and restores Select after
-a successful source replacement. Save and Export display an explanatory disabled tooltip until
-Tasks 11 and 12 provide their backends.
-
-- [ ] **Step 9: Run focused and full automated checks**
-
-Run:
-
-~~~bash
-godot --headless --path . --script tests/godot/test_runner.gd
-git diff --check
-~~~
-
-Expected: all Godot tests pass; the direct-image assertion now expects replacement and visible
-texture instead of rejection; normalized-directory and failed-replacement tests still pass.
-
-- [ ] **Step 10: Perform the product acceptance check**
-
-At 1280 x 800, record evidence that:
-
-1. Open, Save, Undo, Redo, Export remain visible at the top.
-2. Select, Move, Box, Fill, Delete remain visible on the left and show one pressed mode.
-3. A standalone PNG opens visibly; the deterministic sample directory opens afterward.
-4. Each tool can be activated and selection is visibly highlighted.
-5. Playback controls and Timeline remain at the bottom; Inspector remains at the right.
-6. Attempting an invalid replacement leaves the previously visible image usable.
-
-Any mismatch fails Task 9R even when headless tests pass.
-
-- [ ] **Step 11: Commit only the reviewed recovery change**
-
-~~~bash
-git add client/app client/ui/tool_panel.gd client/ui/tool_panel.tscn \
-  client/plugins/source/single_image_source client/pipeline/plugin_api.gd \
-  client/plugins/edit/basic_edit_tools/plugin.gd tests/godot
-git commit -m "fix: restore protected annotation workflow"
-~~~
-
----
-
-### Task 9P1: Close every mandatory Part 1 deliverable
-
-**Gate:** This is the only task allowed after Task 9R and before declaring Part 1 complete. A
-Feedback plugin, README, architecture diagram, and plugin API are mandatory teacher deliverables,
-not documentation polish to defer until Task 14.
-
-**Files:**
-- Create: client/plugins/feedback/file_training_handoff/plugin.json
-- Create: client/plugins/feedback/file_training_handoff/plugin.gd
-- Create: tests/godot/test_feedback_plugin.gd
-- Create: README.md
-- Create: docs/architecture.md
-- Create: docs/plugin-api.md
-- Create: docs/requirements-traceability.md
-- Create: tests/python/test_documentation.py
-- Modify: tests/godot/test_frontend_structure.gd
-- Modify: tests/godot/test_runner.gd
-
-**Interfaces:**
-- Consumes: corrected snapshot records, canonical annotation validation, plugin registry API 1,
-  and the restored Export control.
-- Produces: feedback plugin
-  `export(context: Dictionary) -> PackedStringArray` and
-  `export_finished(success: bool, path_or_error: String)`; Part 1 writes a validated corrected
-  JSONL export. Task 12 extends the same plugin to diff and package generation without changing
-  the accepted `export(context)` boundary.
-- Documents: exact Source, Render, Edit, and Feedback method/signal/lifecycle contracts and one
-  add-plugin walkthrough that requires no registry-core edit.
-
-- [ ] **Step 1: Write the failing working-Feedback-plugin test**
-
-`tests/godot/test_feedback_plugin.gd` discovers `file_training_handoff`, supplies a corrected
-one-frame snapshot and a temporary output path, invokes `export`, and asserts:
-
-- the call accepts a complete context and rejects missing `records` or `output_path`
-- output is canonical UTF-8 JSONL with one compact object per frame and a final newline
-- every output record validates and uses `source: "human_corrected"`
-- output uses sibling temporary-file plus rename and never modifies the model fixture
-- export failure emits a readable path/error and preserves any prior valid output
-
-The manifest is:
-
-~~~json
-{
-  "id": "file_training_handoff",
-  "version": "1.0.0",
-  "api_version": 1,
-  "stage": "feedback",
-  "entry": "plugin.gd"
-}
-~~~
-
-- [ ] **Step 2: Implement the minimum real Feedback plugin**
-
-Keep Part 1 behavior narrow and useful:
-
-~~~gdscript
-signal export_finished(success: bool, path_or_error: String)
-
-func export(context: Dictionary) -> PackedStringArray:
-	var errors := _validate_context(context)
-	if not errors.is_empty():
-		export_finished.emit(false, "; ".join(errors))
-		return errors
-	var result := _write_jsonl_atomically(
-		context["records"], String(context["output_path"])
-	)
-	var outcome := String(context["output_path"]) if result.is_empty() else result[0]
-	export_finished.emit(result.is_empty(), outcome)
-	return result
-~~~
-
-Deep-copy input records before changing their source to `human_corrected`. Validate every copied
-record before writing. This Part 1 implementation is exercised headlessly and does not enable the
-Export button in Main, so synchronous small-fixture writing is not placed on the UI path. Task 12
-replaces it with the non-blocking ProcessService package workflow, enables Export, and preserves
-this public entry and signal.
-
-- [ ] **Step 3: Add documentation and interface-contract tests first**
-
-`tests/python/test_documentation.py` must fail until all Part 1 artifacts exist. Assert:
-
-- README includes exact Godot, Python, and FFmpeg versions; install/run/test commands; sample
-  regeneration; validation; reviewer opening steps; keyboard table; and plugin overview
-- `docs/architecture.md` contains the required Source → Render → Edit → Export/Feedback flow,
-  corrected store, and training handoff
-- `docs/plugin-api.md` lists every manifest field, required method, signal, lifecycle, error rule,
-  API-version rule, and add-plugin procedure
-- `docs/requirements-traceability.md` contains every Part 1 requirement and all evidence columns
-
-- [ ] **Step 4: Write the Part 1 README runbook**
-
-Document commands that run from repository root:
-
-~~~bash
-.venv/bin/python -m pytest tests/python -q
-.venv/bin/python python/make_sample_input.py --output sample/assignment_v1 --seed 6006
-.venv/bin/python python/validate_annotations.py sample/assignment_v1/model_output.jsonl
-.venv/bin/python python/validate_annotations.py \
-  --schema dataset-manifest-v1.schema.json sample/assignment_v1/manifest.json
-godot --headless --path . --script tests/godot/test_runner.gd
-godot --editor --path .
-~~~
-
-The documented Godot executable must resolve to the same 4.7.2-stable build used by the GUI. The
-README must state that FFmpeg is required for video tests and must not describe a skipped test as a
-pass. Include direct-image and normalized-directory reviewer steps and the current shortcut table.
-
-- [ ] **Step 5: Write the architecture diagram and stable plugin API**
-
-Use this Mermaid topology and explain ownership below it:
-
-~~~mermaid
-flowchart LR
-    Input[Image / sequence / video] --> Source[Source plugin]
-    Source --> Store[Immutable model + corrected store]
-    Store --> Render[Render plugin]
-    Render --> Viewport[AnnotationViewport]
-    Viewport --> Edit[Edit-tools plugin]
-    Edit --> Commands[Validated command history]
-    Commands --> Store
-    Store --> Feedback[Export / Feedback plugin]
-    Feedback --> Handoff[Corrected data / training handoff]
-~~~
-
-`docs/plugin-api.md` records API version 1 exactly as implemented, including deep-copy ownership,
-failure isolation, activation/deactivation, and compatibility tests. Verify that a new plugin is
-discoverable by adding only its directory and manifest.
-
-- [ ] **Step 6: Create the requirements traceability ledger**
-
-Use these exact columns:
-
-~~~markdown
-| Requirement source | Requirement | Implementation | Automated evidence | Manual evidence | Status | Next task |
-|---|---|---|---|---|---|---|
-~~~
-
-Add one row per Part 1 item from assignment lines 61–119. Use only `PASS`, `FAIL`, or `BLOCKED` in
-Status. Link exact files/tests and record the zero-error sample command. Add Part 2–5 rows as
-`BLOCKED` with their next authoritative tasks; never mark an unmeasured or manually unchecked item
-PASS.
-
-- [ ] **Step 7: Clear the environment and zero-error validation gates**
-
-Run:
-
-~~~bash
-python3 --version
-godot --version
-ffmpeg -version
-.venv/bin/python -m pytest tests/python -q
-godot --headless --path . --script tests/godot/test_runner.gd
-.venv/bin/python python/make_sample_input.py --output sample/part1_gate --seed 6006
-.venv/bin/python python/validate_annotations.py sample/part1_gate/model_output.jsonl
-.venv/bin/python python/validate_annotations.py \
-  --schema dataset-manifest-v1.schema.json sample/part1_gate/manifest.json
-git diff --check
-~~~
-
-Expected: Python is within 3.10–3.14, Godot is exactly 4.7.2-stable, FFmpeg is 6.1 or newer, no
-test is skipped for a missing executable, all Python and Godot tests pass, sample generation prints
-`Validation errors: 0`, both validation commands exit 0, and the diff has no whitespace errors.
-
-- [ ] **Step 8: Perform the Part 1 reviewer gate**
-
-From a clean checkout, follow only README instructions to generate the sample, validate it, launch
-Godot, open a standalone image, then open the generated directory. Confirm all four plugin stages
-are discovered and errors are readable. Update every Part 1 traceability row with captured evidence.
-Part 1 passes only when every Part 1 row says PASS.
-
-- [ ] **Step 9: Commit the reviewed Part 1 closure**
-
-~~~bash
-git add README.md docs/architecture.md docs/plugin-api.md \
-  docs/requirements-traceability.md client/plugins/feedback \
-  tests/godot/test_feedback_plugin.gd tests/godot/test_frontend_structure.gd \
-  tests/godot/test_runner.gd tests/python/test_documentation.py
-git commit -m "feat: close assignment part one"
-~~~
-
-**STOP AFTER THIS COMMIT:** report the Part 1 evidence and wait for explicit user approval. Do not
-start Task 10 in the same execution session.
-
----
-
-### Task 10: Similar-frame propagation and verification workflow
-
-**Files:**
-- Create: client/domain/commands/batch_replace_command.gd
-- Create: client/services/propagation_service.gd
-- Create: client/services/verification_service.gd
-- Create: tests/godot/test_propagation.gd
-- Create: tests/godot/test_verification.gd
-- Modify: client/plugins/edit/basic_edit_tools/plugin.gd
-- Modify: client/app/main.gd
-- Modify: client/ui/timeline.gd
-- Modify: tests/godot/test_runner.gd
-
-**Interfaces:**
-- Consumes: current keyframe, corrected records, manifest similarity scores, CommandHistory.
-- Produces: PropagationService.find_run(keyframe: int, scores: Array[float], threshold: float = 0.02) -> Vector2i; build_overwrite(store, keyframe, start_frame, end_frame) -> Dictionary; build_merge(store, keyframe, start_frame, end_frame) -> Dictionary; VerificationService.set_verified(frame, value), is_verified(frame), add_batch_marker(marker), next_unverified(current_frame) -> int, and serialize() -> Dictionary.
-
-- [ ] **Step 1: Write failing range and overwrite tests**
-
-Create tests/godot/test_propagation.gd. Use scores whose run around keyframe 2 is frames 1–3 and assert exact boundaries. Build three target records, overwrite frames 1–3 from corrected keyframe 2, and assert:
-
-- target regions equal keyframe regions apart from record frame/time/source fields
-- target source remains human_corrected in working state
-- model records remain unchanged
-- one undo restores every target record
-- one redo reapplies every target record
-
-- [ ] **Step 2: Implement BatchReplaceCommand**
-
-Capture before and after maps keyed by integer frame. apply first validates every after record; if any error exists, mutate none. When all pass, replace every corrected record. revert restores every before record. This is one history entry regardless of target range length.
-
-- [ ] **Step 3: Implement range detection and overwrite**
-
-PropagationService.find_run mirrors Python contiguous_run exactly. build_overwrite deep-copies the corrected keyframe regions into every target frame while retaining each target record's frame, time_s, image_size, dataset_id, and corrected source.
-
-- [ ] **Step 4: Write failing merge tests**
-
-Construct target cases for:
-
-- equal non-null track ID with wrong class
-- no track ID but same-class IoU 0.7
-- no track ID with IoU below 0.5
-- unmatched target region
-- unmatched keyframe region
-
-Assert track match wins before IoU, matched regions receive keyframe geometry/class, unmatched keyframe regions are added, unmatched target regions remain, and IDs are unique within each target frame.
-
-- [ ] **Step 5: Implement merge and IoU**
-
-Implement box IoU as intersection area divided by union area. Polygon regions without equal track IDs do not receive IoU fallback; they remain unmatched. For each keyframe region, consume at most one target match. When adding a keyframe region whose ID already exists in the target frame, suffix it deterministically with -p<keyframe>-<counter>.
-
-- [ ] **Step 6: Write and implement verification tests**
-
-Test default unverified state, explicit verification, propagated targets reset to unverified, batch marker serialization, and next_unverified search. Search starts after current frame, wraps once, and returns -1 only when all frames are verified.
-
-Create client/services/verification_service.gd with frame_count, a PackedByteArray verified bitmap, and Array[Dictionary] batch markers. Reject out-of-range state changes without mutation.
-
-- [ ] **Step 7: Wire the confirmation workflow**
-
-Add a propagation dialog showing keyframe, detected start/end, threshold 0.02, and merge/overwrite choice. Confirmation creates one BatchReplaceCommand, adds one marker only after command success, marks targets unverified, refreshes timeline, and displays affected-frame count. Cancel changes nothing.
-
-Add Mark Verified and Next Unverified actions. Timeline uses VerificationService state and batch markers.
-
-- [ ] **Step 8: Run propagation and verification tests**
-
-Run:
-
-~~~bash
-godot --headless --path . --script tests/godot/test_runner.gd
-~~~
-
-Expected: range, merge, overwrite, atomic failure, undo/redo, verification, and navigation tests pass.
-
-- [ ] **Step 9: Commit**
-
-~~~bash
-git add client/domain/commands/batch_replace_command.gd client/services/propagation_service.gd client/services/verification_service.gd client/plugins/edit/basic_edit_tools/plugin.gd client/app/main.gd client/ui/timeline.gd tests/godot
-git commit -m "feat: propagate and verify similar frame ranges"
-~~~
-
----
-
-### Task 11: Crash-safe autosave and external-process isolation
-
-**Files:**
-- Create: client/services/autosave_service.gd
-- Create: client/services/process_service.gd
-- Create: tests/godot/test_autosave.gd
-- Create: tests/godot/test_process_service.gd
-- Modify: client/app/main.gd
-- Modify: tests/godot/test_runner.gd
-
-**Interfaces:**
-- Consumes: corrected snapshot, review-state snapshot, dataset working directory.
-- Produces: AutosaveService.configure(directory, interval_seconds), mark_dirty(), save_now(snapshot, review_state), has_unsaved_changes(), recover() -> Dictionary; ProcessService.start(executable: String, arguments: PackedStringArray, result_file: String) -> int, poll() -> Dictionary, cancel().
-
-- [ ] **Step 1: Write failing atomic-save tests**
-
-Test static write helper behavior in a temporary directory:
-
-- writes corrected_autosave.jsonl and review_state_autosave.json
-- leaves no .tmp file after success
-- replacing an existing autosave yields the new complete content
-- simulated pre-rename failure leaves the previous formal autosave unchanged
-- recover returns both corrected records and review state
-
-- [ ] **Step 2: Implement atomic write helpers**
-
-AutosaveService serializes snapshots before starting worker work. The worker writes same-directory .tmp files, flushes and closes them, then uses DirAccess.rename_absolute to replace formal files. It reports success or a concise error through a signal:
-
-~~~gdscript
-signal save_finished(success: bool, message: String)
-
-func mark_dirty() -> void:
-    _dirty = true
-
-func has_unsaved_changes() -> bool:
-    return _dirty or _save_in_progress
-~~~
-
-Do not access scene nodes or mutate AnnotationStore from the worker thread.
-
-- [ ] **Step 3: Add autosave timer and recovery integration**
-
-Configure a 5-second default timer after a dataset opens. Dirty edits reset pending status but do not create overlapping save threads. Explicit save requests save immediately after any active write finishes. On open, detect matching autosave files and offer Recover or Ignore. On successful save, clear dirty only when no newer edit generation exists.
-
-- [ ] **Step 4: Write failing process-service tests**
-
-Launch the current Python executable with -c and a short script that writes {"success": true, "path": "/tmp/result"} to the requested result file and exits 0. Assert start returns a PID, polling keeps the UI loop responsive, and final result contains success true. Launch a script that writes {"success": false, "error": "fixture failure"} and exits 7; assert the failure is reported without a stack trace.
-
-- [ ] **Step 5: Implement ProcessService**
-
-Use OS.create_process for non-blocking launch and OS.is_process_running for polling. The invoked tool writes a JSON result file containing success plus path or error; read it after the process exits. Do not use OS.execute on the main thread and do not invoke a shell. Track exactly one child process per service instance and clean the result file after reading.
-
-- [ ] **Step 6: Wire video conversion and exit protection**
-
-Main uses ProcessService to invoke:
-
-~~~text
-.venv/bin/python python/frame_source.py <video> --output <normalized-directory> --result-file <result-json>
-~~~
-
-Disable a second open request while conversion runs, keep playback/UI responsive, and open the output only after exit 0 and validation. A failed conversion leaves the current dataset intact.
-
-On window close, allow immediate exit when clean. When dirty or save is active, show Save and Exit, Exit Without Saving, and Cancel.
-
-- [ ] **Step 7: Run autosave/process tests**
-
-Run:
-
-~~~bash
-godot --headless --path . --script tests/godot/test_runner.gd
-~~~
-
-Expected: atomic replacement, recovery, edit-generation safety, process success/failure, and exit-state tests pass.
-
-- [ ] **Step 8: Commit**
-
-~~~bash
-git add client/services/autosave_service.gd client/services/process_service.gd client/app/main.gd tests/godot
-git commit -m "feat: autosave safely without blocking the client"
-~~~
-
----
-
-### Task 12: Diff reports and file-based training handoff
-
-**Files:**
-- Create: core/schemas/training-package-v1.schema.json
-- Create: python/annotool/diff.py
-- Create: python/annotool/package.py
-- Create: python/build_update_package.py
-- Create: tests/python/test_diff.py
-- Create: tests/python/test_package.py
-- Create: tests/expected/diff-summary.json
-- Modify: client/plugins/feedback/file_training_handoff/plugin.json
-- Modify: client/plugins/feedback/file_training_handoff/plugin.gd
-- Modify: tests/godot/test_feedback_plugin.gd
-- Modify: client/app/main.gd
-- Modify: tests/godot/test_runner.gd
-
-**Interfaces:**
-- Consumes: immutable model JSONL, corrected JSONL, review state, source manifest.
-- Produces: diff_records(model: dict, corrected: dict, tolerance_px: float = 1.0) -> dict; build_diff(model_records, corrected_records) -> dict; aggregate_diff(frame_diffs) -> dict; build_package(manifest_path, model_path, corrected_path, review_state_path, output_root) -> Path; feedback plugin `export(context: Dictionary) -> PackedStringArray` and `export_finished(success: bool, path_or_error: String)`.
-
-- [ ] **Step 1: Write failing diff tests**
-
-Create tests/python/test_diff.py with records that isolate:
-
-- one added region
-- one deleted region
-- one label change
-- one box move greater than one pixel
-- one box move of exactly one pixel, which is ignored
-- one track ID change
-
-Assert per-frame categories and aggregate counts by change category and class. Assert model input dictionaries are unchanged after diffing.
-
-- [ ] **Step 2: Implement diff calculation**
-
-Match regions by ID within a frame. Deleted regions exist only in model; added regions exist only in corrected. For shared IDs compare class, track_id, geometry type, and coordinates. Treat a maximum absolute coordinate difference of 1.0 pixel as unchanged. If geometry type changes, report geometry_changed.
-
-Return:
-
-~~~python
-{
-    "frame": model["frame"],
-    "added": [],
-    "deleted": [],
-    "label_changed": [],
-    "geometry_changed": [],
-    "track_changed": [],
-}
-~~~
-
-Aggregate into total frames changed, category totals, and per-class totals.
-
-- [ ] **Step 3: Write failing package tests**
-
-Build a package under a temporary output root and assert:
-
-- directory name starts with training_update_v1__<dataset>__<model>
-- required files exist
-- package manifest validates
-- corrected JSONL validates
-- every checksums.sha256 entry matches actual content
-- original model file hash is unchanged
-- rebuilding uses a different UTC timestamp or deterministic collision suffix and never overwrites an existing package
-
-- [ ] **Step 4: Implement package schema and builder**
-
-The package manifest requires package_version = 1, dataset_id, source_model_version, annotation_schema_version, created_at_utc, frame_count, verified_frame_count, file entries with relative path/SHA-256/byte count, and diff summary.
-
-Package contents:
-
-~~~text
-manifest.json
-corrected.jsonl
-diff.json
-diff_summary.csv
-review_state.json
-batch_audit.json
-checksums.sha256
-~~~
-
-Write into a sibling temporary directory, validate all contents, then atomically rename to the final naming convention. Delete only that incomplete temporary package on handled failure.
-
-- [ ] **Step 5: Add the CLI**
-
-Create python/build_update_package.py with four required input/output arguments and one optional process-result argument:
-
-~~~text
---source-manifest
---model-output
---corrected
---review-state
---output-root
-[--result-file]
-~~~
-
-The CLI also allows --result-file to be omitted for direct terminal use. It prints exactly one success line containing the final package path. When --result-file is present it atomically writes JSON containing success plus path or error. On failure it prints one concise error to stderr and exits nonzero without a traceback.
-
-- [ ] **Step 6: Extend the accepted Part 1 feedback plugin**
-
-Keep plugin ID `file_training_handoff`, stage `feedback`, API version 1, the accepted `export`
-signature, and `export_finished` signal. Increase only the plugin implementation version.
-
-The plugin first requests an immediate autosave, then starts build_update_package.py through
-ProcessService. `export` returns validation/startup errors immediately; accepted work returns an
-empty error list and later emits `export_finished`. It disables duplicate export while running,
-returns progress through status messages, and emits the final path on success. It never performs
-hashing or directory copying on the main thread.
-
-- [ ] **Step 7: Add feedback integration tests**
-
-Use a generated sample plus corrected fixture to invoke the feedback plugin headlessly. Poll until completion, assert exit 0, validate package contents, and assert pointer/process polling loop iterations occurred while the child process ran. Also invoke with a missing corrected path and assert a readable error while the application remains usable.
-
-- [ ] **Step 8: Run Python and Godot export suites**
-
-Run:
-
-~~~bash
-.venv/bin/python -m pytest tests/python/test_diff.py tests/python/test_package.py -v
-godot --headless --path . --script tests/godot/test_runner.gd
-~~~
-
-Expected: diff, aggregate, package, checksum, plugin success, and plugin failure tests pass.
-
-- [ ] **Step 9: Commit**
-
-~~~bash
-git add core/schemas/training-package-v1.schema.json python/annotool/diff.py python/annotool/package.py python/build_update_package.py client/plugins/feedback client/app/main.gd tests
-git commit -m "feat: export auditable training handoff packages"
-~~~
-
----
-
-### Task 13: End-to-end smoke test, robustness, and measurements
-
-**Files:**
-- Create: tests/smoke/edit_session.gd
-- Create: tests/python/test_cli_failures.py
-- Create: tests/godot/test_error_recovery.gd
-- Create: tests/godot/test_performance.gd
-- Create: tests/run_all.sh
-- Create: tests/expected/smoke-diff.json
-- Modify: tests/godot/test_runner.gd
-
-**Interfaces:**
-- Consumes: the full sample and all client/service/plugin APIs.
-- Produces: one non-interactive acceptance command and machine-readable performance output for RESULTS.md.
-
-- [ ] **Step 1: Write the failing smoke script**
-
-The script must:
-
-1. open a generated sample
-2. select frame 12 and move/resize the drifted box
-3. relabel frame 24
-4. add the missed frame-36 region
-5. delete the hallucinated frame-72 region
-6. correct the frame-90 track swap
-7. undo and redo one edit
-8. propagate keyframe 50 across frames 40–59
-9. mark the propagated frames verified after scripted checks
-10. autosave
-11. export a training package
-12. compare resulting diff category/frame expectations
-
-Exit nonzero on the first failed assertion.
-
-- [ ] **Step 2: Add explicit recovery tests**
-
-Test all teacher-listed cases:
-
-- missing manifest
-- malformed JSON
-- schema-invalid annotation
-- missing frame image
-- corrupt frame image
-- empty regions
-- out-of-range seek
-- frame/annotation count mismatch
-- duplicate plugin ID
-- export destination not writable
-- cache access across a 10,000-entry synthetic manifest without cache growth beyond its bound
-
-Every expected failure must return a readable message and preserve the prior valid state.
-
-- [ ] **Step 3: Add CLI failure tests**
-
-Invoke sample, frame-source, validator, and package CLIs through subprocess. Assert invalid inputs exit nonzero, stderr contains a concise domain message, and stderr does not contain Traceback.
-
-- [ ] **Step 4: Add performance instrumentation**
-
-Create a Godot headless benchmark that loads the approximately 20-region fixture, performs 300 redraw/transform updates and 300 geometry previews, and prints JSON:
-
-~~~json
-{
-  "render_updates": 300,
-  "mean_update_ms": 0.0,
-  "p95_update_ms": 0.0,
-  "estimated_fps": 0.0,
-  "visible_regions": 20
-}
-~~~
-
-The implementation fills actual measured values. Fail the benchmark when estimated_fps is below 25. Also measure sample load time and frame-delivery throughput.
-
-- [ ] **Step 5: Create the one-command test runner**
-
-Create tests/run_all.sh:
-
-~~~bash
-#!/usr/bin/env bash
-set -euo pipefail
+```bash
 .venv/bin/python -m pytest tests/python -v
 godot --headless --path . --script tests/godot/test_runner.gd
-godot --headless --path . --script tests/smoke/edit_session.gd
-~~~
-
-Make it executable.
-
-- [ ] **Step 6: Run the full suite from a clean generated sample**
-
-Remove only the generated /tmp test sample, regenerate it, then run:
-
-~~~bash
-./tests/run_all.sh
-~~~
-
-Expected: Python tests, Godot tests, smoke session, package validation, and performance threshold all pass.
-
-- [ ] **Step 7: Inspect working-tree output hygiene**
-
-Run:
-
-~~~bash
-git status --short
-git check-ignore -v .godot sample .venv
-~~~
-
-Expected: no generated sample, virtual environment, Godot import, autosave, or export output is staged.
-
-- [ ] **Step 8: Commit**
-
-~~~bash
-git add tests
-git commit -m "test: verify complete annotation workflow"
-~~~
-
----
-
-### Task 14: Complete documentation, reviewer runbook, and submission package
-
-**Files:**
-- Modify: README.md
-- Create: RESULTS.md
-- Modify: docs/architecture.md
-- Modify: docs/plugin-api.md
-- Modify: docs/requirements-traceability.md
-- Create: docs/model-team-interface.md
-- Create: docs/reviewer-script.md
-- Create: docs/demo-script.md
-- Modify: .gitignore if the final generated artifacts reveal an uncovered output path
-- Modify: tests/python/test_documentation.py
-
-**Interfaces:**
-- Consumes: verified commands, measured outputs, keyboard mappings, plugin manifests, package schema.
-- Produces: every written artifact and reviewer instruction required by the assignment.
-
-- [ ] **Step 1: Extend the Part 1 documentation tests for final artifacts**
-
-Extend tests/python/test_documentation.py. Assert required files exist and contain:
-
-- README: environment, install, run, sample regeneration, keyboard shortcuts, reviewer test sequence, plugin overview
-- RESULTS: MITK, coordinate transform, rendering performance, similarity threshold, batch coverage, manual baseline, boundary check, autosave, two or three failure-analysis entries
-- architecture: Mermaid Source → Render → Edit → Export/Feedback → corrected store → training handoff
-- model-team interface: schema, fields, coverage, versioning, checksums, refreshed model_output_vN, re-ingestion
-- plugin API: manifest fields and one add-plugin walkthrough
-- demo script: duration limit and all required shots
-
-- [ ] **Step 2: Complete the README runbook**
-
-Document exact prerequisite versions, environment creation, dependency installation from requirements.lock, sample generation, frame-source conversion, validation, Godot launch, full test command, corrected-data packaging, and expected outputs. Include the complete keyboard table from the specification and link to docs/reviewer-script.md.
-
-Add a Submission section stating that the final repository is private and that Qingbiao LI (qingbiao.qli@gmail.com) and Tianci Yang (GitHub user PatchouliTC) are added as collaborators. State that secrets, private configuration, build outputs, and large reproducible assets are not committed.
-
-- [ ] **Step 3: Reconcile the implemented architecture and plugin API**
-
-docs/architecture.md contains one Mermaid diagram and explains immutable model store, corrected store, shared transform, command history, bounded cache, plugin registry, autosave, and file handoff.
-
-docs/plugin-api.md documents plugin.json fields, each stage's exact methods, failure behavior, API versioning, and a minimal directory example. Verify that following it requires no registry-core modification.
-
-- [ ] **Step 4: Write the model-team interface agreement**
-
-State exactly:
-
-- accepted manifest and annotation schema versions
-- zero-based frame alignment
-- image coordinate convention
-- required/optional region fields
-- model_output_vN immutability
-- human_corrected output
-- package naming and checksums
-- required coverage and verified-state reporting
-- model team returns a new versioned model_output_vN after retraining
-- the reviewer opens the new round as a separate model source against the same source hash
-
-- [ ] **Step 5: Perform and record MITK interaction study**
-
-Use the official MITK interaction/segmentation documentation and repository as the source. RESULTS.md states that selection, move, resize handles, add/remove, fill, focused-tool state, undo/redo, and keyboard access were adopted or adapted to 2D; 3D, volumetric, multi-planar, and advanced contour tooling were dropped because they are outside the assignment.
-
-- [ ] **Step 6: Run and record measurements**
-
-Run the performance test, sample load measurement, frame-delivery measurement, autosave interruption test, batch propagation, manual per-frame labeling baseline, and both batch-boundary checks on the documented machine. Copy actual command outputs and measured values into RESULTS.md. Record two or three real implementation failures and fixes; do not invent incidents.
-
-- [ ] **Step 7: Execute the reviewer script exactly**
-
-Follow docs/reviewer-script.md from a clean checkout without developer-only shortcuts. Verify every required editing operation, keyboard-only path, error message, batch mode, verification state, autosave, export, diff, and handoff package. Fix any discrepancy and rerun the affected automated test before repeating the reviewer step.
-
-- [ ] **Step 8: Prepare the demonstration**
-
-Use docs/demo-script.md to record no more than three minutes:
-
-1. open deterministic sample
-2. identify planted defects
-3. move/resize, relabel, add, delete, and correct track ID
-4. batch-propagate frames 40–59
-5. verify and advance
-6. export and inspect diff/package
-
-Use subtitles and narration, label accelerated segments, upload privately, and place the private link in README.md.
-
-- [ ] **Step 9: Run final verification**
-
-Run:
-
-~~~bash
-./tests/run_all.sh
-.venv/bin/python -m pytest tests/python/test_documentation.py -v
+.venv/bin/python python/make_sample_input.py --output /tmp/annotool-sample --seed 6006
+.venv/bin/python python/validate_model_output.py /tmp/annotool-sample/model_output_v1.jsonl
 git diff --check
-git status --short
-~~~
+```
 
-Expected: every test passes, no whitespace errors, no secrets/large generated assets/build outputs are staged, and only intended documentation changes remain.
+**强制停止点：** 本任务提交后，报告 Part 1 证据并等待用户明确批准。不得在同一执行阶段开始 Task 10。
 
-- [ ] **Step 10: Commit**
+### Task 10：相似帧传播与验证工作流
 
-~~~bash
-git add README.md RESULTS.md docs .gitignore tests/python/test_documentation.py
-git commit -m "docs: complete reviewer and model-team handoff"
-~~~
+**主要文件：** `client/domain/commands/batch_replace_command.gd`、`client/services/propagation_service.gd`、`client/services/verification_service.gd`、`client/app/main.gd`、`client/ui/timeline.gd` 及对应测试。
 
----
+- [ ] overwrite 保留目标帧的 frame、time、image_size 和 dataset_id，只复制关键帧 regions。
+- [ ] 批量替换先校验全部目标；任何一帧失败时不修改任何帧。
+- [ ] 无论批次长度多大，整批只占一条历史记录。
+- [ ] merge 先按非空 `track_id` 匹配，再对 box 使用同类 IoU；polygon 不使用 IoU 后备。
+- [ ] 未匹配的关键帧区域加入目标帧，未匹配的目标区域保留。
+- [ ] 传播目标重置为未验证；batch marker 只在命令成功后写入。
+- [ ] Next Unverified 从当前帧之后开始，最多环绕一次；仅在全部验证时返回 -1。
+- [ ] 确认对话框显示关键帧、范围、阈值 0.02 和 merge/overwrite 选择。
 
-## Specification Coverage Index
+### Task 11：抗崩溃自动保存与外部进程隔离
 
-| Assignment requirement | Implemented and verified in |
+**主要文件：** `client/services/autosave_service.gd`、`client/services/process_service.gd`、`client/app/main.gd` 及对应测试。
+
+- [ ] corrected 与 review state 写入同目录 `.tmp` 后原子替换。
+- [ ] 成功后不残留 `.tmp`；重命名前失败时保留原正式文件。
+- [ ] worker 线程只处理序列化副本，不访问场景节点或修改 AnnotationStore。
+- [ ] 默认每 5 秒自动保存；不启动重叠写线程。
+- [ ] 只有保存期间没有更新编辑代次时才清除 dirty。
+- [ ] `ProcessService` 使用 `OS.create_process` 和轮询，不在主线程调用 `OS.execute`，也不调用 shell。
+- [ ] 视频转换期间 UI 和播放保持响应；失败时当前数据集保持不变。
+- [ ] 退出时若 dirty 或保存进行中，提供 Save and Exit、Exit Without Saving、Cancel。
+
+### Task 12：差异报告与文件式训练交接
+
+**主要文件：** `core/schemas/training-package-v1.schema.json`、`python/annotool/diff.py`、`python/annotool/package.py`、`python/build_update_package.py`、`client/plugins/feedback/file_training_handoff/` 及对应测试。
+
+- [ ] diff 识别 added、deleted、label change、geometry change 和 track ID change。
+- [ ] 最大绝对坐标差不超过 1.0 像素时视为未变。
+- [ ] diff 前后模型输入字典保持不变。
+- [ ] 交接包包含 manifest、corrected JSONL、review state、diff summary 和 `checksums.sha256`。
+- [ ] 在相邻临时目录构建并校验后原子重命名，不覆盖已有包。
+- [ ] CLI 支持终端使用和 `--result-file` 非阻塞调用；失败不输出 traceback。
+- [ ] 保持插件 ID `file_training_handoff`、stage `feedback`、API version 1 和既有 `export` 边界。
+- [ ] 哈希和目录复制不得在 Godot 主线程执行。
+
+### Task 13：端到端烟雾测试、健壮性与性能测量
+
+**主要文件：** `tests/smoke/edit_session.gd`、`tests/python/test_cli_failures.py`、`tests/godot/test_error_recovery.gd`、`tests/godot/test_performance.gd`、`tests/run_all.sh`。
+
+端到端脚本必须依次完成：打开样例、修正五类植入缺陷、undo/redo、传播第 40–59 帧、验证、自动保存、导出交接包并核对 diff。
+
+- [ ] 缺失 manifest、畸形 JSON、schema 无效标注、缺失/损坏图像均返回可读错误。
+- [ ] 空 regions、越界 seek、帧数不匹配、重复插件 ID、不可写目标均有恢复测试。
+- [ ] 10,000 帧 synthetic manifest 不得使缓存超过上限。
+- [ ] 所有 CLI 无效输入均非零退出，stderr 有简短领域错误且不含 `Traceback`。
+- [ ] 性能测试记录 FPS、绘制/预览耗时、样例加载时间和帧交付吞吐量。
+- [ ] 约 20 个区域时估算 FPS 低于 25 必须失败。
+- [ ] 从重新生成的干净样例运行一键测试，并检查输出卫生。
+
+### Task 14：完整文档、审查手册与提交包
+
+**主要文件：** `README.md`、`RESULTS.md`、`docs/architecture.md`、`docs/plugin-api.md`、`docs/requirements-traceability.md`、`docs/model-team-interface.md`、`docs/reviewer-script.md`、`docs/demo-script.md`、`tests/python/test_documentation.py`。
+
+- [ ] README 覆盖环境、安装、运行、样例重建、快捷键、审查顺序和插件概览。
+- [ ] RESULTS 记录 MITK 借鉴、坐标变换、渲染性能、相似度阈值、批处理覆盖、人工基线、边界检查、自动保存和真实失败分析。
+- [ ] architecture 解释不可变模型存储、修正存储、共享变换、命令历史、有界缓存、注册表、自动保存和文件交接。
+- [ ] plugin API 包含 manifest 字段、四阶段方法、错误行为、版本规则和新增插件示例。
+- [ ] 模型组接口文档明确 Schema 版本、帧对齐、坐标约定、字段、不可变模型输出、修正副本、命名、校验和、覆盖率与新版本回传。
+- [ ] reviewer script 可从干净检出执行，不依赖开发者捷径。
+- [ ] demo 不超过三分钟，展示样例、五类修改、批量传播、验证、导出和 diff/交接包。
+- [ ] 实测数据来自真实命令输出，不虚构事件或指标。
+- [ ] 最终验证通过，暂存区不含秘密、大型生成资产或构建输出。
+
+## 5. 需求覆盖索引
+
+| Assignment 要求 | 实现与验证任务 |
 |---|---|
-| Versioned contract, dual-runtime validation, immutable model output | Tasks 2 and 5 |
-| Deterministic sample and planted defects | Task 3 |
-| Arbitrary-video normalization and frame alignment | Task 4 |
-| Protected frontend and direct single-image opening | Task 9R |
-| Plugin registry and one working plugin per required stage | Tasks 6, 7, 8, and 9P1; extended in Task 12 |
-| Part 1 architecture, plugin API, README, and traceability gate | Task 9P1 |
-| Image rendering, zoom/pan, transforms, picking, polygons, opacity, FPS | Tasks 7 and 13 |
-| Select/move/resize/nudge/relabel/add/delete/fill/track correction | Tasks 8 and 9R |
-| Undo/redo and schema-invalid edit refusal | Tasks 5 and 8 |
-| Visible MITK-style modes, keyboard editing, and shortcut documentation | Tasks 8, 9R, and 14 |
-| Playback, step, seek, explicit frame/time, bounded memory | Tasks 6 and 9 |
-| Similarity threshold and contiguous-run detection | Tasks 4 and 10 |
-| Merge/overwrite propagation, batch marker, drift mitigation | Task 10 |
-| Verified timeline and next-unverified navigation | Tasks 9 and 10 |
-| Autosave, recovery, unsaved prompt, non-blocking IO | Task 11 |
-| Corrected JSONL, diff, per-class summary, training package | Task 12 |
-| CLI and UI reproducibility | Tasks 4, 11, 12, and 13 |
-| Headless smoke, robustness, performance and failure analysis | Tasks 13 and 14 |
-| MITK design note, architecture, plugin API, interface agreement | Task 14 |
-| Reviewer runbook, private repository instructions, demonstration | Task 14 |
+| 版本化契约、双运行时校验、不可变模型输出 | Task 2、5 |
+| 确定性样例与植入缺陷 | Task 3 |
+| 任意视频标准化与帧对齐 | Task 4 |
+| 受保护前端与直接单图打开 | Task 9R |
+| 插件注册表和四阶段可用插件 | Task 6、7、8、9P1；Task 12 扩展 Feedback |
+| Part 1 架构、插件 API、README、可追溯性 | Task 9P1 |
+| 图像渲染、缩放/平移、坐标变换、命中、多边形、透明度、FPS | Task 7、13 |
+| 选择、移动、缩放、微调、改类、新增、删除、填充、track 修正 | Task 8、9R |
+| undo/redo 与非法编辑拒绝 | Task 5、8 |
+| MITK 风格模式、键盘编辑、快捷键文档 | Task 8、9R、14 |
+| 播放、逐帧、seek、明确帧/时间、有界内存 | Task 6、9 |
+| 相似度阈值与连续区间 | Task 4、10 |
+| merge/overwrite 传播、batch marker、漂移缓解 | Task 10 |
+| 验证时间线与 Next Unverified | Task 9、10 |
+| 自动保存、恢复、未保存提示、非阻塞 IO | Task 11 |
+| corrected JSONL、diff、分类汇总、训练包 | Task 12 |
+| CLI/UI 可复现性 | Task 4、11、12、13 |
+| 无头烟雾、健壮性、性能与失败分析 | Task 13、14 |
+| MITK 设计说明、架构、插件 API、接口约定 | Task 14 |
+| 审查手册、私有仓库说明、演示 | Task 14 |
 
-## Final Acceptance Gate
+## 6. 最终验收门槛
 
-Before calling any phase complete, check the charter, the phase ledger, and
-`docs/requirements-traceability.md`. Before calling the assignment complete, run the full suite from
-a fresh checkout and regenerated sample, replay docs/reviewer-script.md, validate the exported
-package checksums, and compare every item in Section 18 of the design specification with a passing
-test or recorded manual check. Do not claim completion while any required item lacks evidence.
+宣告任何阶段完成前，必须核对工程章程、阶段台账和 `docs/requirements-traceability.md`。宣告整个 Assignment 完成前，必须从全新检出和重新生成的样例运行完整测试，执行 `docs/reviewer-script.md`，校验导出包 checksum，并把设计规范第 18 节的每一项与通过的自动化测试或人工检查证据对应。任何必需要求缺少证据时，都不得宣告完成。
