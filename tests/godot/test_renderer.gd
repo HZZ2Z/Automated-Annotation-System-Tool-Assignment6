@@ -7,6 +7,7 @@ const TRANSFORM_SCRIPT = preload("res://client/services/viewport_transform.gd")
 
 static func run(support) -> void:
 	_test_box_and_concave_polygon_hits(support)
+	_test_record_state_is_an_isolated_snapshot(support)
 	_test_repeated_polygon_vertex_does_not_hit_everything(support)
 	_test_reverse_draw_order_wins(support)
 	_test_overlay_descriptions(support)
@@ -21,6 +22,24 @@ static func _test_box_and_concave_polygon_hits(support) -> void:
 	support.expect_equal(renderer.hit_test(Vector2(80, 80)), {}, "point in concave polygon notch should remain outside")
 	support.expect_equal(renderer.hit_test(Vector2(45, 45)).get("id"), "box", "box-only point should hit the box")
 	support.expect_equal(renderer.hit_test(Vector2(200, 200)), {}, "point outside every region should miss")
+
+
+static func _test_record_state_is_an_isolated_snapshot(support) -> void:
+	var renderer = RENDERER_SCRIPT.new()
+	var caller_record := _record([_box_region()])
+	renderer.set_state(null, caller_record, _configured_transform(), "", 0.35)
+	caller_record["regions"][0]["id"] = "caller-mutated"
+	caller_record["regions"][0]["box"] = [120, 10, 40, 40]
+	var caller_snapshot: Dictionary = caller_record.duplicate(true)
+	support.expect_equal(renderer.hit_test(Vector2(25, 25)).get("id"), "box", "renderer should keep the snapshot supplied to set_state")
+	support.expect_equal(renderer.hit_test(Vector2(135, 25)), {}, "caller mutation should not change renderer hit testing before another set_state")
+	var descriptions: Array[Dictionary] = renderer.get_overlay_descriptions()
+	support.expect_equal(descriptions[0].get("id"), "box", "caller mutation should not change current overlay descriptions")
+	support.expect_equal(caller_record, caller_snapshot, "renderer reads must never modify the caller's annotation dictionary")
+
+	renderer.set_state(null, caller_record, _configured_transform(), "", 0.35)
+	support.expect_equal(renderer.hit_test(Vector2(25, 25)), {}, "explicitly setting a changed snapshot should replace old renderer geometry")
+	support.expect_equal(renderer.hit_test(Vector2(135, 25)).get("id"), "caller-mutated", "explicitly setting a changed snapshot should update renderer hit testing")
 
 
 static func _test_repeated_polygon_vertex_does_not_hit_everything(support) -> void:

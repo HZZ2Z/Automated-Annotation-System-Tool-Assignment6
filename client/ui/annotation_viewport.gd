@@ -42,7 +42,7 @@ func set_texture(texture: Texture2D) -> void:
 func set_record(record: Dictionary) -> void:
 	if _record == record:
 		return
-	_record = record
+	_record = record.duplicate(true)
 	var transform_did_change := _configure_transform()
 	_sync_renderer()
 	queue_redraw()
@@ -72,7 +72,7 @@ func set_state(texture: Texture2D, record: Dictionary, selected_id: String, opac
 	if _texture == texture and _record == record and _selected_id == selected_id and is_equal_approx(_opacity, next_opacity):
 		return
 	_texture = texture
-	_record = record
+	_record = record.duplicate(true)
 	_selected_id = selected_id
 	_opacity = next_opacity
 	var transform_did_change := _configure_transform()
@@ -107,6 +107,11 @@ func _notification(what: int) -> void:
 		_sync_renderer()
 		queue_redraw()
 		transform_changed.emit()
+
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey:
+		_track_space_state(event)
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -166,12 +171,17 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 
 
 func _update_space_state(event: InputEventKey) -> void:
+	if _track_space_state(event):
+		accept_event()
+
+
+func _track_space_state(event: InputEventKey) -> bool:
 	if event.keycode != KEY_SPACE and event.physical_keycode != KEY_SPACE:
-		return
+		return false
 	_space_held = event.pressed
 	if not _space_held and _pan_button == MOUSE_BUTTON_LEFT:
 		_pan_button = MOUSE_BUTTON_NONE
-	accept_event()
+	return true
 
 
 func _emit_image_pointer(event: InputEventMouse) -> void:

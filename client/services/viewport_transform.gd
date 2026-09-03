@@ -14,8 +14,12 @@ var _configured := false
 
 
 func configure(new_image_size: Vector2, new_viewport_rect: Rect2) -> bool:
+	var dimensions_are_valid := _valid_size(new_image_size) and _valid_size(new_viewport_rect.size)
+	var preserve_user_view := dimensions_are_valid and _configured and image_size.is_equal_approx(new_image_size)
+	var preserved_zoom := user_zoom
+	var preserved_pan := pan
 	_reset()
-	if not _valid_size(new_image_size) or not _valid_size(new_viewport_rect.size):
+	if not dimensions_are_valid:
 		return false
 	image_size = new_image_size
 	viewport_rect = new_viewport_rect
@@ -24,6 +28,9 @@ func configure(new_image_size: Vector2, new_viewport_rect: Rect2) -> bool:
 		_reset()
 		return false
 	letterbox_offset = (viewport_rect.size - image_size * fit_scale) * 0.5
+	if preserve_user_view:
+		user_zoom = preserved_zoom
+		pan = preserved_pan
 	_configured = true
 	return true
 

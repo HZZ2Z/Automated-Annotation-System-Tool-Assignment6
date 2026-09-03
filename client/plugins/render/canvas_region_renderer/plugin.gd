@@ -21,7 +21,7 @@ func _init() -> void:
 
 func set_state(texture: Texture2D, record: Dictionary, transform, selected_id: String, opacity: float) -> void:
 	_texture = texture
-	_record = record
+	_record = record.duplicate(true)
 	_transform = transform
 	_selected_id = selected_id
 	_opacity = clampf(opacity, 0.0, 1.0) if is_finite(opacity) else 0.35

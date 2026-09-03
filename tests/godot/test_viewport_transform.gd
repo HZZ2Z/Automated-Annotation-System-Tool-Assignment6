@@ -7,6 +7,7 @@ static func run(support) -> void:
 	_test_letterbox_and_round_trip(support)
 	_test_zoom_anchor_and_limits(support)
 	_test_pan_updates_forward_and_inverse_mapping(support)
+	_test_same_image_resize_preserves_user_view(support)
 	_test_invalid_dimensions_are_safe(support)
 
 
@@ -48,6 +49,24 @@ static func _test_pan_updates_forward_and_inverse_mapping(support) -> void:
 	var after: Vector2 = transform.image_to_viewport(image_point)
 	support.expect(after.distance_to(before + delta) < 0.000001, "pan should translate image drawing by the requested viewport delta")
 	support.expect(transform.viewport_to_image(after).distance_to(image_point) < 0.000001, "inverse mapping should include pan")
+
+
+static func _test_same_image_resize_preserves_user_view(support) -> void:
+	var transform = TRANSFORM_SCRIPT.new()
+	transform.configure(Vector2(640, 360), Rect2(0, 0, 1000, 800))
+	transform.zoom_at(transform.image_to_viewport(Vector2.ZERO), 2.5)
+	transform.pan_by(Vector2(37, -19))
+	transform.configure(Vector2(640, 360), Rect2(25, 40, 800, 600))
+	support.expect(absf(transform.user_zoom - 2.5) < 0.000001, "same-image viewport resize should preserve user zoom")
+	support.expect_equal(transform.pan, Vector2(37, -19), "same-image viewport resize should preserve viewport-space pan")
+	support.expect(absf(transform.fit_scale - 1.25) < 0.000001, "same-image viewport resize should recompute fit scale")
+	support.expect_equal(transform.letterbox_offset, Vector2(0, 75), "same-image viewport resize should recompute letterboxing")
+	var image_point := Vector2(123, 87)
+	support.expect(transform.viewport_to_image(transform.image_to_viewport(image_point)).distance_to(image_point) < 0.000001, "resized preserved view should keep exact inverse mapping")
+
+	transform.configure(Vector2(320, 240), Rect2(25, 40, 800, 600))
+	support.expect_equal(transform.user_zoom, 1.0, "new image dimensions should reset user zoom")
+	support.expect_equal(transform.pan, Vector2.ZERO, "new image dimensions should reset pan")
 
 
 static func _test_invalid_dimensions_are_safe(support) -> void:
