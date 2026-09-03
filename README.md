@@ -14,6 +14,24 @@ These rules come before feature work and are the guardrails for every later part
 
 The detailed topology is in [docs/architecture.md](docs/architecture.md), and the stable extension contract is in [docs/plugin-api.md](docs/plugin-api.md).
 
+## Current frontend layout
+
+The application uses a resizable three-column annotation workspace. The left pane is a read-only
+explorer for the currently accepted dataset: it lists the accepted frames and only metadata
+artifacts that really exist. It is not a general file manager and does not rename, delete, drag,
+write, or independently open files. The center is the real `AnnotationViewport`. On the right,
+the selected-region Inspector scrolls above a fixed, uncategorized four-column `2D Tools` palette.
+
+The palette has twelve stable slots in this order: Add Box, Subtract, Lasso, Fill, Erase, Close,
+Paint, Wipe, Region Growing, Live Wire, Selection, and Move / Resize. Exactly five use the existing
+Edit plugin behavior: **Add Box, Fill, Erase, Selection, and Move / Resize**. The other seven are
+visible reserved controls only; selecting Subtract, Lasso, Close, Paint, Wipe, Region Growing, or
+Live Wire reports exactly `待开发` without changing the active edit tool or annotation state.
+
+The approved [change-specific layout design](docs/superpowers/specs/2026-09-03-dataset-explorer-mitk-toolbar-design.md)
+supersedes only the earlier plan's left-side tool placement. Plugin API version 1 and the Part 1
+source, render, edit, feedback, schema, store, history, and Python contracts are unchanged.
+
 ## Supported environment
 
 The checked reference environment is:
@@ -99,11 +117,13 @@ Accept the Python gate only when the summary has no failures and no skipped FFmp
 
 Press Run in Godot, then use this Part 1 reviewer path:
 
-1. Press **Open** and select a standalone image (`.png`, `.jpg`, or `.jpeg`). Confirm it appears as `Frame 0 (1 total)`.
-2. Activate Select, Move, Box, Fill, and Delete. Exactly one left-side tool remains pressed; switching tools cancels an unfinished preview.
-3. Press **Open** again and select the normalized directory `sample/assignment_v1`. Confirm frame 0 and its model regions appear, the Inspector stays on the right, and playback/timeline controls stay at the bottom.
-4. Try opening a corrupt or unsupported file. The status bar must explain the rejection and the previously loaded source must remain usable.
-5. Confirm the top row still contains Open, Save, Undo, Redo, and Export. Save and Export are intentionally disabled at the Part 1 boundary.
+1. Press **Open** and select a standalone image (`.png`, `.jpg`, or `.jpeg`). Confirm the left explorer shows the real image and `Frames (1)` without invented metadata, while the image appears in the center as `Frame 0 (1 total)`.
+2. In the right-bottom palette, activate Add Box, Fill, Erase, Selection, and Move / Resize. Exactly one functional tool remains pressed; switching tools cancels an unfinished preview.
+3. Select each reserved control—Subtract, Lasso, Close, Paint, Wipe, Region Growing, and Live Wire—and confirm the status is exactly `待开发`. These controls are unavailable placeholders, not implemented features.
+4. Press **Open** again and select the normalized directory `sample/assignment_v1`. Confirm the explorer frame count matches the manifest, only real metadata artifacts appear, frame 0 and its model regions remain visible in the center, the Inspector scrolls on the right, and playback/timeline controls stay at the bottom.
+5. Try opening a corrupt or unsupported file. The status bar must explain the rejection and the previously loaded explorer, image, annotations, frame, and history must remain usable.
+6. Resize both workspace split handles. Confirm the center stays usable and neither docking nor file-management behavior appears.
+7. Confirm the top row still contains Open, Save, Undo, Redo, and Export. Save and Export are intentionally disabled at the Part 1 boundary.
 
 ### Current keyboard shortcuts
 
@@ -128,7 +148,7 @@ The registry scans `client/plugins` at startup and validates every manifest agai
 
 - Source: `image_sequence_source` reads normalized directories; `single_image_source` adapts PNG/JPG/JPEG to one indexed frame.
 - Render: `canvas_region_renderer` draws the image-space regions through the shared viewport transform.
-- Edit: `basic_edit_tools` owns Select/Move/Box/Fill/Delete intent and submits validated commands to bounded history.
+- Edit: `basic_edit_tools` owns the existing Add Box, Fill, Erase, Selection, and Move / Resize intent and submits validated commands to bounded history. The seven reserved palette controls stop at the UI-level `待开发` boundary.
 - Export/Feedback: `file_training_handoff` validates a corrected snapshot and writes atomic `human_corrected` JSONL. Its UI button is not enabled in Part 1.
 
 Adding a plugin requires a new plugin directory and `plugin.json`; it must not require edits to the registry. See [docs/plugin-api.md](docs/plugin-api.md) for the exact methods, lifecycle, ownership rules, and compatibility test.

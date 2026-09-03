@@ -17,9 +17,54 @@ flowchart LR
 
 Video first passes through the Python frame-source adapter, which creates indexed PNG frames and a manifest with explicit frame indices and timestamps. A normalized directory and a standalone image then enter the same Source contract. The single-image adapter constructs an in-memory one-frame manifest; it never writes metadata beside the user's image.
 
+## Frontend composition
+
+The approved shell keeps the actual annotation viewport between two resizable side panes:
+
+```text
+MainVBox
+├── TopToolbar
+├── WorkspaceSplit
+│   ├── DatasetExplorerContainer
+│   │   └── DatasetExplorer
+│   └── ContentSplit
+│       ├── ViewportPanel
+│       │   └── AnnotationViewport
+│       └── RightSidebarContainer
+│           └── RightSidebar
+│               ├── InspectorScroll
+│               │   └── InspectorPanel
+│               ├── Separator
+│               └── ToolPanel
+├── TimelinePanel
+└── StatusBar
+```
+
+`DatasetExplorer` is a read-only projection of the source already accepted by `AnnotationMain`,
+not a general file manager. It receives a copied labels-and-paths view model only after a source
+transaction commits. User frame selection emits one navigation request; programmatic frame
+selection updates the highlight without feeding a second request back into the application.
+Standalone images expose their real file and one virtual frame, while normalized datasets expose
+their manifest frames and only metadata artifacts that exist.
+
+The central `AnnotationViewport` and its existing renderer and image-space transforms remain the
+real display path. On the right, `InspectorPanel` stays the region-property editor inside a
+scrollable region. A fixed, uncategorized four-column grid below it owns twelve visible tool slots.
+Add Box, Fill, Erase, Selection, and Move / Resize route to the existing Edit plugin. Subtract,
+Lasso, Close, Paint, Wipe, Region Growing, and Live Wire route only to the UI-level unavailable
+signal, which reports exactly `待开发` and does not mutate tool, selection, annotation, gesture, or
+history state.
+
+This [change-specific design](superpowers/specs/2026-09-03-dataset-explorer-mitk-toolbar-design.md)
+supersedes only the earlier plan's left-side ToolPanel placement. Plugin API version 1 and the
+Part 1 Source, Render, Edit, Feedback, schema, store, history, renderer, and Python contracts are
+unchanged.
+
 ## Ownership
 
 - `AnnotationMain` composes the application and performs failure-atomic source replacement. It does not implement decoding, rendering, editing, or export behavior.
+- `DatasetExplorer` owns only presentation and frame-request intent for the active accepted source. It never opens, validates, decodes, caches, edits, or writes source data.
+- `ToolPanel` owns the declarative twelve-slot presentation registry and separates functional edit intent from unavailable-tool intent. Reserved controls never enter the Edit plugin.
 - A Source plugin owns its open file handles/cache and returns a deep copy of manifest entries and model records. The model snapshot is immutable after ingestion.
 - `AnnotationStore` owns the immutable model baseline and the corrected copy. Consumers receive copied records, and accepted changes replace a whole validated frame record.
 - `AnnotationViewport` owns input-to-image coordinate conversion and delegates drawing to the Render plugin. Render state is transient and never becomes annotation truth.
