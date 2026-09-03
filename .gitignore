@@ -19,3 +19,7 @@ dist/
 *.import
 icon.svg.import
 docs/000*.png
+
+# Local AI workflow artifacts are not submission deliverables.
+.superpowers/
+docs/superpowers/

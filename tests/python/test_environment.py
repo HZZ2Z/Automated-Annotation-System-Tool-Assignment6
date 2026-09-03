@@ -21,10 +21,5 @@ def test_repository_root_contains_required_project_files() -> None:
 
     assert (root / "project.godot").is_file()
     assert (root / "client" / "app" / "main.tscn").is_file()
-    assert (
-        root
-        / "docs"
-        / "superpowers"
-        / "specs"
-        / "2026-09-03-automated-annotation-system-design.md"
-    ).is_file()
+    assert (root / "docs" / "architecture.md").is_file()
+    assert (root / "docs" / "plugin-api.md").is_file()
