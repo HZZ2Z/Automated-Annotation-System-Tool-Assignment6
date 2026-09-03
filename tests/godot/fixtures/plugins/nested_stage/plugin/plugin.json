@@ -1,0 +1,7 @@
+{
+  "id": "nested-unknown",
+  "version": "1.0.0",
+  "api_version": 1,
+  "stage": "nested-unknown-stage",
+  "entry": "plugin.gd"
+}

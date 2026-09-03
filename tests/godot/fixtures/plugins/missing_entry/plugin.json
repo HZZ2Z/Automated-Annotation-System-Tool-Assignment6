@@ -1,0 +1,7 @@
+{
+  "id": "missing-entry",
+  "version": "1.0.0",
+  "api_version": 1,
+  "stage": "source",
+  "entry": "absent.gd"
+}

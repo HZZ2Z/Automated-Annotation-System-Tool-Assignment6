@@ -1,0 +1,7 @@
+{
+  "id": "unknown-stage",
+  "version": "1.0.0",
+  "api_version": 1,
+  "stage": "analysis",
+  "entry": "plugin.gd"
+}

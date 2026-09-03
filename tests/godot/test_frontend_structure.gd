@@ -13,6 +13,7 @@ func run(support, tree: SceneTree) -> void:
 		return
 	tree.root.add_child(main)
 	await tree.process_frame
+	support.expect(main.call("get_discovered_plugin", "source", "image_sequence_source") != null, "main startup should discover the production source plugin")
 	support.expect_equal(main.name, "Main", "scene root should be named Main")
 	support.expect_equal(main.anchors_preset, Control.PRESET_FULL_RECT, "scene root should fill its parent")
 	for node_path in [

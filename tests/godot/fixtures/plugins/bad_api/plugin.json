@@ -1,0 +1,7 @@
+{
+  "id": "bad-api",
+  "version": "1.0.0",
+  "api_version": 99,
+  "stage": "source",
+  "entry": "plugin.gd"
+}
