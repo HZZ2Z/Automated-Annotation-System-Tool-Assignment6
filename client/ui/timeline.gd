@@ -87,14 +87,24 @@ func get_frame_state(index: int) -> Dictionary:
 	}
 
 
+func get_visible_frame_indices(view_width: float, scroll_value: float) -> PackedInt32Array:
+	var result := PackedInt32Array()
+	if _frame_count <= 0 or cell_width <= 0.0 or not is_finite(view_width) or view_width <= 0.0 or not is_finite(scroll_value):
+		return result
+	var start := clampi(floori(scroll_value), 0, _frame_count - 1)
+	var visible_count := ceili(view_width / cell_width)
+	var finish := mini(_frame_count, start + visible_count)
+	for index in range(start, finish):
+		result.append(index)
+	return result
+
+
 func _draw() -> void:
 	if _frame_count <= 0 or cell_width <= 0.0:
 		return
 	var strip_height := maxf(1.0, size.y - _scroll_bar.size.y - 2.0)
 	var start := clampi(floori(_scroll_bar.value), 0, _frame_count - 1)
-	var visible_count := ceili(size.x / cell_width) + 1
-	var finish := mini(_frame_count, start + visible_count)
-	for index in range(start, finish):
+	for index in get_visible_frame_indices(size.x, _scroll_bar.value):
 		var x := float(index - start) * cell_width
 		var rect := Rect2(x + 1.0, 1.0, maxf(1.0, cell_width - 2.0), maxf(1.0, strip_height - 2.0))
 		var fill := Color("#3f8f65") if _verified[index] != 0 else Color("#75565d")

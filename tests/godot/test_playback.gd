@@ -24,7 +24,7 @@ func run(support, tree: SceneTree) -> void:
 	var errors: PackedStringArray = main.call("open_source", source_root)
 	support.expect_equal(errors, PackedStringArray(), "a normalized 120-frame directory should open")
 	support.expect_equal(main.call("get_current_frame"), 0, "opening should select frame zero")
-	support.expect_equal(_label(main, "FrameLabel"), "Frame 0 / 119", "frame label should show current and last explicit indices")
+	support.expect_equal(_label(main, "FrameLabel"), "Frame 0 (120 total)", "frame label should show zero-based current index and total frame count")
 	support.expect_equal(_label(main, "TimeLabel"), "00:00.125", "initial timestamp should come from manifest entry zero")
 
 	support.expect(not main.call("step", -1), "previous at frame zero should be a clamped no-op")

@@ -8,6 +8,10 @@ const TAXONOMY_PATH := "res://core/taxonomy/classes.json"
 const MAX_STATUS_LENGTH := 180
 const ZOOM_FACTOR := 1.2
 
+@export var source_plugin_id := "image_sequence_source"
+@export var render_plugin_id := "canvas_region_renderer"
+@export var edit_plugin_id := "basic_edit_tools"
+
 @onready var _open_button: Button = $MainVBox/TopToolbar/Open
 @onready var _previous_button: Button = $MainVBox/TopToolbar/Previous
 @onready var _play_pause_button: Button = $MainVBox/TopToolbar/PlayPause
@@ -32,6 +36,7 @@ var _source: Variant
 var _store = STORE_SCRIPT.new()
 var _history = HISTORY_SCRIPT.new(200)
 var _edit_plugin: Variant
+var _render_plugin: Variant
 var _manifest: Dictionary = {}
 var _taxonomy: Dictionary = {}
 var _current_frame := -1
@@ -46,10 +51,11 @@ func _ready() -> void:
 	var plugin_errors: PackedStringArray = _plugin_registry.discover("res://client/plugins")
 	if not plugin_errors.is_empty():
 		_set_status("Plugin discovery: %s" % plugin_errors[0])
-	var renderer = _plugin_registry.get_plugin("render", "canvas_region_renderer")
-	if renderer != null:
-		_viewport.set_renderer(renderer)
-	_edit_plugin = _plugin_registry.get_plugin("edit", "basic_edit_tools")
+	_render_plugin = _plugin_registry.get_plugin("render", render_plugin_id)
+	if _render_plugin != null:
+		_viewport.set_renderer(_render_plugin)
+	else:
+		_set_status("Configured render plugin is unavailable: %s" % render_plugin_id)
 	_timeline.configure(0)
 	_refresh_labels()
 	_refresh_toolbar()
@@ -61,84 +67,154 @@ func get_discovered_plugin(stage: String, plugin_id: String) -> RefCounted:
 
 func open_source(path: String) -> PackedStringArray:
 	var candidate_errors := PackedStringArray()
-	var prototype = _plugin_registry.get_plugin("source", "image_sequence_source")
-	if prototype == null or prototype.get_script() == null:
-		candidate_errors.append("Source plugin is unavailable")
+	var source_prototype = _plugin_registry.get_plugin("source", source_plugin_id)
+	var render_candidate = _plugin_registry.get_plugin("render", render_plugin_id)
+	var edit_prototype = _plugin_registry.get_plugin("edit", edit_plugin_id)
+	if source_prototype == null:
+		candidate_errors.append("Configured source plugin is unavailable: %s" % source_plugin_id)
+	if render_candidate == null:
+		candidate_errors.append("Configured render plugin is unavailable: %s" % render_plugin_id)
+	if edit_prototype == null:
+		candidate_errors.append("Configured edit plugin is unavailable: %s" % edit_plugin_id)
+	if not candidate_errors.is_empty():
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
 	if not DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(path)):
 		candidate_errors.append("Select a normalized directory containing manifest.json")
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
-	var source_script := prototype.get_script() as Script
-	var candidate = source_script.new()
-	candidate_errors = candidate.open(path)
-	if not candidate_errors.is_empty():
+	var candidate = _new_plugin_instance(source_prototype)
+	if candidate == null:
+		candidate_errors.append("Configured source plugin cannot be instantiated: %s" % source_plugin_id)
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
-	var candidate_manifest: Dictionary = candidate.get_manifest()
+	var open_result: Variant = candidate.open(path)
+	if not open_result is PackedStringArray:
+		candidate_errors.append("Source plugin open must return PackedStringArray")
+		candidate.close()
+		_show_errors("Cannot open source", candidate_errors)
+		return candidate_errors
+	candidate_errors = open_result
+	if not candidate_errors.is_empty():
+		candidate.close()
+		_show_errors("Cannot open source", candidate_errors)
+		return candidate_errors
+
+	var frame_count_value: Variant = candidate.get_frame_count()
+	if not _logical_positive_integer(frame_count_value):
+		candidate_errors.append("Source plugin frame count must be a positive integer")
+	var candidate_frame_count := int(frame_count_value) if _logical_positive_integer(frame_count_value) else 0
+	var manifest_value: Variant = candidate.get_manifest()
+	if not manifest_value is Dictionary or manifest_value.is_empty():
+		candidate_errors.append("Source plugin manifest must be a non-empty Dictionary")
+	var candidate_manifest: Dictionary = manifest_value.duplicate(true) if manifest_value is Dictionary else {}
+	var manifest_fps: Variant = candidate_manifest.get("nominal_fps")
+	if not _finite_positive(manifest_fps):
+		candidate_errors.append("Source manifest nominal_fps must be finite and positive")
+	var manifest_count: Variant = candidate_manifest.get("frame_count")
+	if not _logical_positive_integer(manifest_count):
+		candidate_errors.append("Source manifest frame_count must be a positive integer")
+	elif candidate_frame_count > 0 and int(manifest_count) != candidate_frame_count:
+		candidate_errors.append("Source manifest frame_count must match the source frame count")
+	var records_value: Variant = candidate.get_model_records()
+	if not records_value is Array:
+		candidate_errors.append("Source plugin model records must be an Array")
+	if not candidate_errors.is_empty():
+		candidate.close()
+		_show_errors("Cannot open source", candidate_errors)
+		return candidate_errors
+
 	var candidate_store = STORE_SCRIPT.new()
-	var store_errors: PackedStringArray = candidate_store.load_model_records(candidate.get_model_records())
+	var store_errors: PackedStringArray = candidate_store.load_model_records(records_value)
 	if not store_errors.is_empty():
 		candidate.close()
 		_show_errors("Cannot open source", store_errors)
 		return store_errors
-	if candidate.get_frame_count() <= 0:
-		candidate_errors.append("Source contains no frames")
+	if candidate_store.get_frame_count() != candidate_frame_count:
+		candidate_errors.append("Source model record count must match the manifest frame count")
 		candidate.close()
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
-	var first_texture: Texture2D = candidate.load_texture(0)
+	var texture_value: Variant = candidate.load_texture(0)
+	var first_texture: Texture2D = texture_value if texture_value is Texture2D else null
 	var first_record: Dictionary = candidate_store.get_corrected_record(0)
-	var first_entry: Dictionary = candidate.get_frame_entry(0)
-	if first_texture == null or first_record.is_empty() or first_entry.is_empty():
-		var detail := str(candidate.get("last_error")) if candidate.get("last_error") != null else ""
-		candidate_errors.append(detail if not detail.is_empty() else "First frame could not be loaded")
+	var entry_value: Variant = candidate.get_frame_entry(0)
+	var first_entry: Dictionary = entry_value.duplicate(true) if entry_value is Dictionary else {}
+	if first_texture == null:
+		candidate_errors.append("Source plugin first frame texture is invalid")
+	if first_record.is_empty():
+		candidate_errors.append("Source plugin first annotation record is invalid")
+	if first_entry.is_empty():
+		candidate_errors.append("Source plugin frame zero entry must be a non-empty Dictionary")
+	else:
+		var entry_frame: Variant = first_entry.get("frame")
+		var entry_time: Variant = first_entry.get("time_s")
+		if not _logical_integer(entry_frame) or int(entry_frame) != 0:
+			candidate_errors.append("Source plugin frame zero entry must identify frame 0")
+		if not _finite_non_negative(entry_time):
+			candidate_errors.append("Source plugin frame zero time_s must be finite and non-negative")
+	if not candidate_errors.is_empty():
 		candidate.close()
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
+
 	var candidate_history = HISTORY_SCRIPT.new(200)
-	if _edit_plugin == null:
-		candidate_errors.append("Edit plugin is unavailable")
+	var candidate_edit = _new_plugin_instance(edit_prototype)
+	if candidate_edit == null:
+		candidate_errors.append("Configured edit plugin cannot be instantiated: %s" % edit_plugin_id)
 		candidate.close()
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
-	var edit_errors: PackedStringArray = _edit_plugin.activate(_edit_context(candidate_store, candidate_history))
+	var edit_result: Variant = candidate_edit.activate(_edit_context(candidate_store, candidate_history))
+	var edit_errors := PackedStringArray()
+	if edit_result is PackedStringArray:
+		edit_errors = edit_result
+	else:
+		edit_errors.append("Edit plugin activate must return PackedStringArray")
 	if not edit_errors.is_empty():
+		_deactivate_edit(candidate_edit)
 		candidate.close()
-		if _source != null:
-			_edit_plugin.activate(_edit_context(_store, _history))
 		_show_errors("Cannot open source", edit_errors)
 		return edit_errors
 
 	pause()
-	_edit_plugin.cancel()
+	_deactivate_edit(_edit_plugin)
 	if _source != null:
 		_source.close()
 	_source = candidate
 	_store = candidate_store
 	_history = candidate_history
+	_edit_plugin = candidate_edit
+	_render_plugin = render_candidate
+	_viewport.set_renderer(_render_plugin)
 	_manifest = candidate_manifest.duplicate(true)
 	_current_frame = 0
 	_selected_region_id = ""
-	_timeline.configure(candidate.get_frame_count())
+	_timeline.configure(candidate_frame_count)
 	_viewport.set_state(first_texture, first_record, "", _opacity_slider.value)
 	_inspector.populate({}, _taxonomy)
 	_refresh_labels(first_entry)
 	_refresh_toolbar()
-	_set_status("Loaded %s (%d frames)" % [str(_manifest.get("dataset_id", "dataset")), candidate.get_frame_count()])
+	_set_status("Loaded %s (%d frames)" % [str(_manifest.get("dataset_id", "dataset")), candidate_frame_count])
 	return PackedStringArray()
 
 
 func set_frame(index: int) -> bool:
-	if _source == null or index < 0 or index >= _source.get_frame_count():
+	var frame_count := _active_frame_count()
+	if _source == null or index < 0 or index >= frame_count:
 		return false
-	var texture: Texture2D = _source.load_texture(index)
+	var texture_value: Variant = _source.load_texture(index)
+	var texture: Texture2D = texture_value if texture_value is Texture2D else null
 	var record: Dictionary = _store.get_corrected_record(index)
-	var entry: Dictionary = _source.get_frame_entry(index)
+	var entry_value: Variant = _source.get_frame_entry(index)
+	var entry: Dictionary = entry_value.duplicate(true) if entry_value is Dictionary else {}
 	if texture == null or record.is_empty() or entry.is_empty():
-		var detail := str(_source.get("last_error")) if _source.get("last_error") != null else ""
-		_set_status(_bounded(detail if not detail.is_empty() else "Frame %d could not be loaded" % index))
+		_set_status("Frame %d could not be loaded" % index)
+		return false
+	var entry_frame: Variant = entry.get("frame")
+	var entry_time: Variant = entry.get("time_s")
+	if not _logical_integer(entry_frame) or int(entry_frame) != index or not _finite_non_negative(entry_time):
+		_set_status("Frame %d metadata is invalid" % index)
 		return false
 	_edit_plugin.cancel()
 	_current_frame = index
@@ -152,7 +228,8 @@ func set_frame(index: int) -> bool:
 
 
 func play() -> void:
-	if _source == null or _current_frame < 0 or _current_frame >= _source.get_frame_count() - 1:
+	var frame_count := _active_frame_count()
+	if _source == null or _current_frame < 0 or _current_frame >= frame_count - 1:
 		pause()
 		return
 	_edit_plugin.cancel()
@@ -176,16 +253,17 @@ func pause() -> void:
 
 
 func step(delta: int) -> bool:
-	if _source == null or _current_frame < 0:
+	var frame_count := _active_frame_count()
+	if _source == null or _current_frame < 0 or frame_count <= 0:
 		return false
-	var target := clampi(_current_frame + delta, 0, _source.get_frame_count() - 1)
+	var target := clampi(_current_frame + delta, 0, frame_count - 1)
 	if target == _current_frame:
 		return false
 	return set_frame(target)
 
 
 func seek(index: int) -> bool:
-	if _source == null or index < 0 or index >= _source.get_frame_count():
+	if _source == null or index < 0 or index >= _active_frame_count():
 		return false
 	if index == _current_frame:
 		return true
@@ -203,10 +281,11 @@ func is_playing() -> bool:
 func _on_playback_timeout() -> void:
 	if not _playing or _source == null:
 		return
-	if _current_frame >= _source.get_frame_count() - 1:
+	var frame_count := _active_frame_count()
+	if frame_count <= 0 or _current_frame >= frame_count - 1:
 		pause()
 		return
-	if not set_frame(_current_frame + 1) or _current_frame >= _source.get_frame_count() - 1:
+	if not set_frame(_current_frame + 1) or _current_frame >= frame_count - 1:
 		pause()
 
 
@@ -335,7 +414,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if _edit_plugin.handle_key(event):
 		get_viewport().set_input_as_handled()
 		var after_record := _store.get_corrected_record(_current_frame) if _current_frame >= 0 else {}
-		_refresh_after_edit(before_record != after_record)
+		if before_record != after_record:
+			_refresh_after_edit(true)
+		else:
+			_refresh_toolbar()
 
 
 func _run_selected_edit(region_id: String, method: String, value: Variant) -> void:
@@ -409,6 +491,33 @@ func _edit_context(store: Variant, history: Variant) -> Dictionary:
 	}
 
 
+func _new_plugin_instance(prototype: Variant) -> Variant:
+	if not prototype is Object or prototype == null:
+		return null
+	var script_value: Variant = prototype.get_script()
+	if not script_value is Script:
+		return null
+	var script := script_value as Script
+	if not script.can_instantiate():
+		return null
+	var instance: Variant = script.new()
+	return instance if instance is RefCounted else null
+
+
+func _deactivate_edit(edit: Variant) -> void:
+	if not edit is Object or edit == null:
+		return
+	if edit.has_method("deactivate"):
+		edit.deactivate()
+
+
+func _active_frame_count() -> int:
+	if _source == null:
+		return 0
+	var value: Variant = _manifest.get("frame_count")
+	return int(value) if _logical_positive_integer(value) else 0
+
+
 func _connect_ui() -> void:
 	_open_button.pressed.connect(func(): _source_dialog.popup_centered_ratio(0.8))
 	_previous_button.pressed.connect(_on_previous_pressed)
@@ -438,8 +547,9 @@ func _refresh_labels(entry: Dictionary = {}) -> void:
 		_frame_label.text = "Frame - / -"
 		_time_label.text = "--:--.---"
 		return
-	_frame_label.text = "Frame %d / %d" % [_current_frame, _source.get_frame_count() - 1]
-	var frame_entry: Dictionary = entry if not entry.is_empty() else _source.get_frame_entry(_current_frame)
+	_frame_label.text = "Frame %d (%d total)" % [_current_frame, _active_frame_count()]
+	var entry_value: Variant = entry if not entry.is_empty() else _source.get_frame_entry(_current_frame)
+	var frame_entry: Dictionary = entry_value if entry_value is Dictionary else {}
 	_time_label.text = _format_timestamp(float(frame_entry.get("time_s", 0.0)))
 
 
@@ -447,9 +557,10 @@ func _refresh_toolbar() -> void:
 	if not is_node_ready():
 		return
 	var has_source := _source != null and _current_frame >= 0
+	var frame_count := _active_frame_count()
 	_previous_button.disabled = not has_source or _current_frame <= 0
-	_next_button.disabled = not has_source or _current_frame >= _source.get_frame_count() - 1
-	_play_pause_button.disabled = not has_source or _current_frame >= _source.get_frame_count() - 1
+	_next_button.disabled = not has_source or _current_frame >= frame_count - 1
+	_play_pause_button.disabled = not has_source or _current_frame >= frame_count - 1
 	_play_pause_button.text = "Pause" if _playing else "Play"
 	_undo_button.disabled = not _history.can_undo()
 	_redo_button.disabled = not _history.can_redo()
@@ -489,11 +600,22 @@ func _finite_positive(value: Variant) -> bool:
 	return (typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT) and is_finite(float(value)) and float(value) > 0.0
 
 
+func _finite_non_negative(value: Variant) -> bool:
+	return (typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT) and is_finite(float(value)) and float(value) >= 0.0
+
+
+func _logical_integer(value: Variant) -> bool:
+	return (typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT) and is_finite(float(value)) and float(value) == floorf(float(value))
+
+
+func _logical_positive_integer(value: Variant) -> bool:
+	return _logical_integer(value) and int(value) > 0
+
+
 func _exit_tree() -> void:
 	_playing = false
 	if is_instance_valid(_playback_timer):
 		_playback_timer.stop()
-	if _edit_plugin != null:
-		_edit_plugin.cancel()
+	_deactivate_edit(_edit_plugin)
 	if _source != null:
 		_source.close()

@@ -71,6 +71,21 @@ func activate(context: Dictionary) -> PackedStringArray:
 	return errors
 
 
+func deactivate() -> void:
+	cancel()
+	_disconnect_viewport_cancel()
+	_clear_transient()
+	_store = null
+	_history = null
+	_viewport = null
+	_current_frame_getter = Callable()
+	_selected_region_getter = Callable()
+	_selected_region_setter = Callable()
+	_status_callback = Callable()
+	_taxonomy = {}
+	_active = false
+
+
 func handle_pointer(event: InputEvent, image_position: Vector2) -> void:
 	if not _active or not image_position.is_finite():
 		return

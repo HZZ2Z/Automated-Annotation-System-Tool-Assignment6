@@ -71,6 +71,13 @@ func run(support, tree: SceneTree) -> void:
 	support.expect_equal(requested, [139], "timeline click should include the horizontal scroll offset and emit an exact zero-based index")
 	var frame_buttons := timeline.find_children("*", "Button", true, false)
 	support.expect_equal(frame_buttons.size(), 0, "long timelines should remain one self-drawn control rather than create frame buttons")
+	if timeline.has_method("get_visible_frame_indices"):
+		support.expect_equal(timeline.call("get_visible_frame_indices", 90.0, 0.0), PackedInt32Array([0, 1, 2, 3, 4]), "exact five-cell width should draw exactly five indices")
+		support.expect_equal(timeline.call("get_visible_frame_indices", 91.0, 0.0), PackedInt32Array([0, 1, 2, 3, 4, 5]), "non-integral width should include the one partially visible cell")
+		support.expect_equal(timeline.call("get_visible_frame_indices", 90.0, NAN), PackedInt32Array(), "non-finite scroll offsets should return no visible indices safely")
+		support.expect_equal(timeline.call("get_visible_frame_indices", 90.0, INF), PackedInt32Array(), "infinite scroll offsets should return no visible indices safely")
+	else:
+		support.expect(false, "Timeline should expose its visible-index calculation for exact boundary regression coverage")
 
 	timeline.queue_free()
 	await tree.process_frame
