@@ -37,6 +37,62 @@ class ReadOnlyStore extends RefCounted:
 		return {}
 
 
+class WrongArityHistory extends RefCounted:
+	func execute(_command) -> PackedStringArray:
+		return PackedStringArray()
+
+	func undo() -> bool:
+		return false
+
+	func redo(_store, _extra) -> PackedStringArray:
+		return PackedStringArray()
+
+
+class WrongArityStore extends RefCounted:
+	func get_corrected_record() -> Dictionary:
+		return {}
+
+	func replace_corrected_record(_frame) -> PackedStringArray:
+		return PackedStringArray()
+
+
+class WrongArityViewport extends RefCounted:
+	func set_record() -> void:
+		pass
+
+	func set_selected_region_id(_region_id, _extra) -> void:
+		pass
+
+	func get_image_transform(_extra):
+		return null
+
+
+class DefaultArgumentSurface extends RefCounted:
+	func get_corrected_record(_frame = 0) -> Dictionary:
+		return {}
+
+	func replace_corrected_record(_frame = 0, _record = {}) -> PackedStringArray:
+		return PackedStringArray()
+
+	func execute(_command = null, _store = null) -> PackedStringArray:
+		return PackedStringArray()
+
+	func undo(_store = null) -> bool:
+		return false
+
+	func redo(_store = null) -> PackedStringArray:
+		return PackedStringArray()
+
+	func set_record(_record = {}) -> void:
+		pass
+
+	func set_selected_region_id(_region_id = "") -> void:
+		pass
+
+	func get_image_transform():
+		return null
+
+
 static func run(support: TestSupport) -> void:
 	var plugin_script: Script = ResourceLoader.load(PLUGIN_PATH)
 	support.expect(plugin_script != null, "basic edit-tools plugin should load")
@@ -49,11 +105,14 @@ static func run(support: TestSupport) -> void:
 	_test_keyboard_matrix(plugin_script, support)
 	_test_cycle_delete_undo_redo(plugin_script, support)
 	_test_keyboard_only_add(plugin_script, support)
+	_test_pointer_interrupts_keyboard_add(plugin_script, support)
 	_test_pointer_drag_blocks_command_keys(plugin_script, support)
 	_test_pointer_motion_loss_and_repress_cancel(plugin_script, support)
 	_test_cross_frame_restore_and_selection(plugin_script, support)
 	_test_reactivation_cancels_and_rewires(plugin_script, support)
 	_test_activation_dependency_surface_and_callable_arity(plugin_script, support)
+	_test_pointer_noops_are_numeric_and_cross_frame_safe(plugin_script, support)
+	_test_activation_dependency_method_arity(plugin_script, support)
 
 
 static func _test_activation_contract(plugin_script: Script, support: TestSupport) -> void:
@@ -194,6 +253,20 @@ static func _test_keyboard_only_add(plugin_script: Script, support: TestSupport)
 	support.expect(fixture.plugin.handle_key(_key(KEY_ENTER)), "Enter should confirm keyboard-only box creation")
 	support.expect_equal(fixture.history.get_undo_count(), 1, "keyboard-only add should create exactly one command")
 	support.expect_equal(fixture.store.get_corrected_record(0).regions.size(), 3, "keyboard-only add should create a valid box")
+
+
+static func _test_pointer_interrupts_keyboard_add(plugin_script: Script, support: TestSupport) -> void:
+	var fixture := _fixture(plugin_script)
+	fixture.plugin.activate(fixture.context)
+	fixture.plugin.handle_key(_key(KEY_A))
+	support.expect_equal(fixture.viewport.records.back().regions.size(), 3, "keyboard add should begin with a transient preview")
+	_pointer(fixture.plugin, true, Vector2(15, 15), fixture.viewport)
+	support.expect_equal(fixture.viewport.records.back(), fixture.store.get_corrected_record(0), "a new pointer press should cancel the keyboard-add preview before starting a fresh gesture")
+	_motion(fixture.plugin, Vector2(18, 15), fixture.viewport)
+	_pointer(fixture.plugin, false, Vector2(18, 15), fixture.viewport)
+	support.expect_equal(fixture.history.get_undo_count(), 1, "pointer interruption should commit only the fresh pointer gesture")
+	support.expect_equal(fixture.store.get_corrected_record(0).regions.size(), 2, "interrupted keyboard add must not leak into the committed record")
+	support.expect_equal(fixture.store.get_corrected_record(0).regions[0].box, [13.0, 10.0, 20, 15], "pointer interruption should apply the explicit move")
 
 
 static func _test_pointer_drag_blocks_command_keys(plugin_script: Script, support: TestSupport) -> void:
@@ -398,6 +471,68 @@ static func _test_activation_dependency_surface_and_callable_arity(plugin_script
 		support.expect(_contains_error(errors, case.fragment) and _contains_error(errors, "argument"), "%s callback with wrong arity should be rejected clearly" % case.field)
 
 
+static func _test_pointer_noops_are_numeric_and_cross_frame_safe(plugin_script: Script, support: TestSupport) -> void:
+	for box in [[10, 10, 20, 15], [10.0, 10.0, 20.0, 15.0]]:
+		var record := _record()
+		record.regions[0].box = box.duplicate()
+		var fixture := _fixture_with_records(plugin_script, [record])
+		fixture.plugin.activate(fixture.context)
+		fixture.selected[0] = "box-1"
+		_pointer(fixture.plugin, true, Vector2(30, 25), fixture.viewport)
+		_pointer(fixture.plugin, false, Vector2(30, 25), fixture.viewport)
+		support.expect_equal(fixture.history.get_undo_count(), 0, "numeric-equivalent resize handle click should not enter history for %s" % str(box))
+		support.expect(fixture.store.get_dirty_frames().is_empty(), "numeric-equivalent resize handle click should not dirty the frame for %s" % str(box))
+
+	var zero_move := _two_frame_fixture(plugin_script)
+	zero_move.plugin.activate(zero_move.context)
+	_pointer(zero_move.plugin, true, Vector2(15, 15), zero_move.viewport)
+	zero_move.frame[0] = 1
+	zero_move.selected[0] = "frame-1-box"
+	_pointer(zero_move.plugin, false, Vector2(15, 15), zero_move.viewport)
+	support.expect_equal(zero_move.history.get_undo_count(), 0, "cross-frame zero move should not enter history")
+	support.expect_equal(zero_move.viewport.records.back(), zero_move.store.get_corrected_record(1), "cross-frame zero move should render the current frame")
+
+	var float_zero_resize := _record()
+	float_zero_resize.regions[0].box = [10.0, 10.0, 20.0, 15.0]
+	var second := _record()
+	second.frame = 1
+	second.regions[0].id = "frame-1-box"
+	second.regions[1].id = "frame-1-poly"
+	var zero_resize := _fixture_with_records(plugin_script, [float_zero_resize, second])
+	zero_resize.plugin.activate(zero_resize.context)
+	zero_resize.selected[0] = "box-1"
+	_pointer(zero_resize.plugin, true, Vector2(30, 25), zero_resize.viewport)
+	zero_resize.frame[0] = 1
+	zero_resize.selected[0] = "frame-1-box"
+	_pointer(zero_resize.plugin, false, Vector2(30, 25), zero_resize.viewport)
+	support.expect_equal(zero_resize.history.get_undo_count(), 0, "cross-frame zero resize should not enter history")
+	support.expect_equal(zero_resize.viewport.records.back(), zero_resize.store.get_corrected_record(1), "cross-frame zero resize should render the current frame")
+
+
+static func _test_activation_dependency_method_arity(plugin_script: Script, support: TestSupport) -> void:
+	var fixture := _fixture(plugin_script)
+	var cases := [
+		{"field": "history", "value": WrongArityHistory.new(), "methods": ["execute", "undo", "redo"]},
+		{"field": "store", "value": WrongArityStore.new(), "methods": ["get_corrected_record", "replace_corrected_record"]},
+		{"field": "viewport", "value": WrongArityViewport.new(), "methods": ["set_record", "set_selected_region_id", "get_image_transform"]},
+	]
+	for case: Dictionary in cases:
+		var context: Dictionary = fixture.context.duplicate()
+		context[case.field] = case.value
+		var plugin = plugin_script.new()
+		var errors: PackedStringArray = plugin.activate(context)
+		for method: String in case.methods:
+			support.expect(_contains_error(errors, method) and _contains_error(errors, "argument"), "%s.%s wrong arity should be rejected clearly" % [case.field, method])
+		support.expect(not plugin.handle_key(_key(KEY_RIGHT)), "plugin must remain inactive after %s method-signature rejection" % case.field)
+
+	var defaults := DefaultArgumentSurface.new()
+	var default_context: Dictionary = fixture.context.duplicate()
+	default_context["store"] = defaults
+	default_context["history"] = defaults
+	default_context["viewport"] = defaults
+	support.expect(plugin_script.new().activate(default_context).is_empty(), "dependency methods with defaults should activate when they accept the actual call counts")
+
+
 static func _fixture(plugin_script: Script) -> Dictionary:
 	var store = STORE_SCRIPT.new()
 	store.load_model_records([_record()])
@@ -420,12 +555,16 @@ static func _fixture(plugin_script: Script) -> Dictionary:
 
 
 static func _two_frame_fixture(plugin_script: Script) -> Dictionary:
-	var store = STORE_SCRIPT.new()
 	var second := _record()
 	second["frame"] = 1
 	second["regions"][0]["id"] = "frame-1-box"
 	second["regions"][1]["id"] = "frame-1-poly"
-	store.load_model_records([_record(), second])
+	return _fixture_with_records(plugin_script, [_record(), second])
+
+
+static func _fixture_with_records(plugin_script: Script, records: Array) -> Dictionary:
+	var store = STORE_SCRIPT.new()
+	store.load_model_records(records)
 	var history = HISTORY_SCRIPT.new()
 	var viewport := ViewportProbe.new()
 	var frame := [0]

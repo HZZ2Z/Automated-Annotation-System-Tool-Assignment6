@@ -48,14 +48,14 @@ func activate(context: Dictionary) -> PackedStringArray:
 	_selected_region_setter = _context_callable(context, ["set_selected_region", "selected_region_setter"])
 	var taxonomy_value: Variant = context.get("taxonomy")
 	_taxonomy = taxonomy_value.duplicate(true) if taxonomy_value is Dictionary else {}
-	_require_object_method(_store, "store", "get_corrected_record", errors)
-	_require_object_method(_store, "store", "replace_corrected_record", errors)
-	_require_object_method(_history, "history", "execute", errors)
-	_require_object_method(_history, "history", "undo", errors)
-	_require_object_method(_history, "history", "redo", errors)
-	_require_object_method(_viewport, "viewport", "set_record", errors)
-	_require_object_method(_viewport, "viewport", "set_selected_region_id", errors)
-	_require_object_method(_viewport, "viewport", "get_image_transform", errors)
+	_require_object_method(_store, "store", "get_corrected_record", 1, errors)
+	_require_object_method(_store, "store", "replace_corrected_record", 2, errors)
+	_require_object_method(_history, "history", "execute", 2, errors)
+	_require_object_method(_history, "history", "undo", 1, errors)
+	_require_object_method(_history, "history", "redo", 1, errors)
+	_require_object_method(_viewport, "viewport", "set_record", 1, errors)
+	_require_object_method(_viewport, "viewport", "set_selected_region_id", 1, errors)
+	_require_object_method(_viewport, "viewport", "get_image_transform", 0, errors)
 	_validate_callable_arity(_current_frame_getter, "current_frame", 0, errors)
 	_validate_callable_arity(_selected_region_getter, "selected_region", 0, errors)
 	_validate_callable_arity(_selected_region_setter, "set_selected_region", 1, errors)
@@ -196,7 +196,7 @@ func delete_selected() -> PackedStringArray:
 
 
 func _begin_pointer_drag(event: InputEventMouseButton, image_position: Vector2) -> void:
-	if _is_pointer_drag():
+	if _drag_kind == "keyboard_add" or _is_pointer_drag():
 		cancel()
 	var frame := _current_frame()
 	var record := _record_for_frame(frame)
@@ -271,14 +271,14 @@ func _finish_pointer_drag(image_position: Vector2) -> void:
 		"move":
 			var delta := image_position - start
 			if delta.is_zero_approx():
-				_refresh_frame(frame)
+				_refresh_visible_frame(frame)
 				return
 			command = MOVE_COMMAND.new(frame, before, region_id, delta)
 		"resize":
 			var region := _find_region(before, region_id)
 			var box := _resized_box(region.get("box", []), handle, image_position)
-			if box == region.get("box", []):
-				_refresh_frame(frame)
+			if _numeric_arrays_approx_equal(box, region.get("box", [])):
+				_refresh_visible_frame(frame)
 				return
 			command = RESIZE_COMMAND.new(frame, before, region_id, box)
 		"add":
@@ -374,7 +374,7 @@ func _refresh_visible_frame(fallback_frame: int) -> void:
 
 
 func _refresh_frame(frame: int) -> void:
-	if frame < 0:
+	if frame < 0 or not _is_live_object(_viewport):
 		return
 	var record := _record_for_frame(frame)
 	if not record.is_empty():
@@ -595,6 +595,21 @@ func _polygon_points(value: Variant) -> PackedVector2Array:
 	return result
 
 
+func _numeric_arrays_approx_equal(left: Variant, right: Variant) -> bool:
+	if not left is Array or not right is Array or left.size() != right.size():
+		return false
+	for index in range(left.size()):
+		var left_value: Variant = left[index]
+		var right_value: Variant = right[index]
+		if (typeof(left_value) != TYPE_INT and typeof(left_value) != TYPE_FLOAT) or not is_finite(float(left_value)):
+			return false
+		if (typeof(right_value) != TYPE_INT and typeof(right_value) != TYPE_FLOAT) or not is_finite(float(right_value)):
+			return false
+		if not is_equal_approx(float(left_value), float(right_value)):
+			return false
+	return true
+
+
 func _clear_transient() -> void:
 	_add_pointer_mode = false
 	_drag_kind = ""
@@ -612,14 +627,14 @@ func _is_pointer_drag() -> bool:
 
 
 func _connect_viewport_cancel() -> void:
-	if _viewport is Object and _viewport.has_signal("edit_cancel_requested"):
+	if _is_live_object(_viewport) and _viewport.has_signal("edit_cancel_requested"):
 		var callback := Callable(self, "cancel")
 		if not _viewport.is_connected("edit_cancel_requested", callback):
 			_viewport.connect("edit_cancel_requested", callback)
 
 
 func _disconnect_viewport_cancel() -> void:
-	if _viewport is Object and _viewport.has_signal("edit_cancel_requested"):
+	if _is_live_object(_viewport) and _viewport.has_signal("edit_cancel_requested"):
 		var callback := Callable(self, "cancel")
 		if _viewport.is_connected("edit_cancel_requested", callback):
 			_viewport.disconnect("edit_cancel_requested", callback)
@@ -643,9 +658,28 @@ func _context_callable(context: Dictionary, keys: Array[String]) -> Callable:
 	return Callable()
 
 
-func _require_object_method(value: Variant, field: String, method: String, errors: PackedStringArray) -> void:
-	if not value is Object or not value.has_method(method):
+func _require_object_method(value: Variant, field: String, method: String, expected: int, errors: PackedStringArray) -> void:
+	if not _is_live_object(value) or not value.has_method(method):
 		errors.append("context.%s: expected an object providing %s" % [field, method])
+		return
+	if not _method_accepts_argument_count(value, method, expected):
+		errors.append("context.%s.%s: method must accept %d argument(s)" % [field, method, expected])
+
+
+func _method_accepts_argument_count(value: Object, method: String, expected: int) -> bool:
+	for method_info: Dictionary in value.get_method_list():
+		if method_info.get("name", "") != method:
+			continue
+		var arguments: Array = method_info.get("args", [])
+		var defaults: Array = method_info.get("default_args", [])
+		var minimum := maxi(0, arguments.size() - defaults.size())
+		var is_vararg := int(method_info.get("flags", 0)) & METHOD_FLAG_VARARG != 0
+		return expected >= minimum and (is_vararg or expected <= arguments.size())
+	return false
+
+
+func _is_live_object(value: Variant) -> bool:
+	return typeof(value) == TYPE_OBJECT and value != null and is_instance_valid(value)
 
 
 func _validate_callable_arity(value: Callable, field: String, expected: int, errors: PackedStringArray) -> bool:

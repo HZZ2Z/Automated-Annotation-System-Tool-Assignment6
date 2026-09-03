@@ -87,6 +87,33 @@ func run(support: TestSupport, tree: SceneTree) -> void:
 	viewport.queue_free()
 	await tree.process_frame
 
+	var replacement := VIEWPORT_SCENE.instantiate() as Control
+	replacement.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	replacement.size = Vector2(200, 160)
+	tree.root.add_child(replacement)
+	await tree.process_frame
+	var replacement_context: Dictionary = context.duplicate()
+	replacement_context["viewport"] = replacement
+	var lifecycle_marker := "reactivating after the old viewport is freed must complete without a script error"
+	support.failures.append(lifecycle_marker)
+	var reactivation_errors: PackedStringArray = plugin.activate(replacement_context)
+	support.failures.erase(lifecycle_marker)
+	support.expect(reactivation_errors.is_empty(), "a live replacement viewport should reactivate after the old viewport is freed")
+	var cancel_callback := Callable(plugin, "cancel")
+	support.expect(replacement.is_connected("edit_cancel_requested", cancel_callback), "reactivation should connect cancellation only to the replacement viewport")
+	replacement.region_selected.connect(func(region_id: String): selected[0] = region_id)
+	replacement.image_pointer_event.connect(func(event: InputEvent, image_position: Vector2): plugin.handle_pointer(event, image_position))
+	replacement.call("set_record", store.get_corrected_record(0))
+	selected[0] = "box-1"
+	plugin.begin_add_box()
+	replacement.edit_cancel_requested.emit()
+	_mouse_button(replacement, true, Vector2(15, 15))
+	_mouse_motion(replacement, Vector2(16, 15), MOUSE_BUTTON_MASK_LEFT)
+	_mouse_button(replacement, false, Vector2(16, 15))
+	support.expect_equal(history.get_undo_count(), history_before_navigation + 1, "replacement viewport should remain the sole live edit surface")
+	replacement.queue_free()
+	await tree.process_frame
+
 
 func _start_drag(viewport: Control, start: Vector2, finish: Vector2) -> void:
 	_mouse_button(viewport, true, start)
