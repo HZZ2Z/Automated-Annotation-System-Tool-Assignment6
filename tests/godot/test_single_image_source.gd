@@ -1,7 +1,7 @@
 extends RefCounted
 
 const SOURCE_PATH := "res://client/plugins/source/single_image_source/plugin.gd"
-const VALIDATOR_SCRIPT := preload("res://client/domain/annotation_validator.gd")
+const VALIDATOR_SCRIPT := preload("res://client/domain/model_output_validator.gd")
 const TEMP_PREFIX := "/tmp/annotool-part1-single-image-"
 
 var _owned_paths: Array[String] = []
@@ -35,11 +35,12 @@ func _test_supported_extension(source_script: Script, extension: String, support
 	var manifest: Dictionary = source.get_manifest()
 	support.expect_equal([manifest.get("width"), manifest.get("height")], [11, 7], "%s manifest should match decoded image dimensions" % extension)
 	support.expect_equal(manifest.get("source_sha256"), FileAccess.get_sha256(path), "%s manifest should contain the actual source hash" % extension)
+	support.expect_equal(manifest.get("model_version"), "none", "%s standalone image should not claim a model-output file" % extension)
 	var records: Array = source.get_model_records()
 	support.expect_equal(records.size(), 1, "%s should synthesize one model record" % extension)
 	if records.size() == 1:
-		support.expect_equal(records[0].get("source"), "model_output_v1", "%s record should use the shared model-output source" % extension)
-		support.expect_equal(records[0].get("image_size"), [11, 7], "%s record should match image dimensions" % extension)
+		support.expect_equal(records[0].get("source"), path.get_file(), "%s record should identify the image source" % extension)
+		support.expect(not records[0].has("dataset_id") and not records[0].has("image_size"), "%s record should contain only Part 1.1 fields" % extension)
 		support.expect_equal(records[0].get("regions"), [], "%s record should begin without annotations" % extension)
 		support.expect_equal(VALIDATOR_SCRIPT.new().validate_record(records[0]), PackedStringArray(), "%s synthesized record should satisfy the shared schema" % extension)
 	var texture: Texture2D = source.load_texture(0)

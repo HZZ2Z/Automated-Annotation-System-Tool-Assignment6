@@ -49,16 +49,14 @@ func open(path: String) -> PackedStringArray:
 		"frame_count": 1,
 		"nominal_fps": 1.0,
 		"frames": [{"frame": 0, "time_s": 0.0, "image_path": absolute.get_file()}],
-		"model_version": "model_output_v1",
+		"model_version": "none",
 		"taxonomy_version": "v1",
 	}
 	var candidate_record := {
 		"schema_version": 1,
-		"dataset_id": dataset_id,
-		"source": "model_output_v1",
+		"source": absolute.get_file(),
 		"frame": 0,
 		"time_s": 0.0,
-		"image_size": [candidate_image.get_width(), candidate_image.get_height()],
 		"regions": [],
 	}
 

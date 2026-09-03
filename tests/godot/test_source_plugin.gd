@@ -18,6 +18,7 @@ static func run(support) -> void:
 	if not sample_dir.is_empty():
 		_test_generated_sample_and_transaction(support, sample_dir)
 	_test_normalized_video_without_model_output(support)
+	_test_versioned_model_output_selection(support)
 	_test_texture_errors_are_recoverable(support)
 	_test_manifest_and_model_failures(support)
 	_test_symlink_paths_are_contained(support)
@@ -103,7 +104,7 @@ static func _test_normalized_video_without_model_output(support) -> void:
 	support.expect_equal(errors, PackedStringArray(), "model_version none source should synthesize records when JSONL is absent")
 	var records: Array[Dictionary] = source.get_model_records()
 	support.expect_equal(records.size(), 1, "normalized source should synthesize one record per frame")
-	support.expect_equal(records[0].get("source"), "model_output_v1", "synthesized record should use the shared model source contract")
+	support.expect_equal(records[0].get("source"), "fixture.mp4", "synthesized record should preserve the frame source")
 	support.expect_equal(records[0].get("regions"), [], "synthesized record should have empty regions")
 	support.expect(source.load_texture(0) != null, "normalized source texture should load on demand")
 
@@ -118,10 +119,10 @@ static func _test_manifest_and_model_failures(support) -> void:
 	image.save_png(root.path_join("frames/frame_000000.png"))
 	var source = SOURCE_SCRIPT.new()
 
-	var missing_model_manifest := _base_manifest("missing-real-model", "real-model-v2", 8, 6)
+	var missing_model_manifest := _base_manifest("missing-real-model", "model_output_v1", 8, 6)
 	_write_json(root.path_join("manifest.json"), missing_model_manifest)
 	var errors: PackedStringArray = source.open(root)
-	support.expect(_contains(errors, "model_output.jsonl"), "real model version should require model_output.jsonl")
+	support.expect(_contains(errors, "model_output_v1.jsonl"), "v1 manifest should require its same-named JSONL")
 
 	var invalid_manifest := _base_manifest("bad-extra", "none", 8, 6)
 	invalid_manifest["unexpected"] = true
@@ -148,24 +149,23 @@ static func _test_manifest_and_model_failures(support) -> void:
 	errors = source.open(root)
 	support.expect(_contains(errors, "portable relative POSIX path"), "manifest should reject URL-scheme paths even without slashes")
 
-	var bad_record_manifest := _base_manifest("bad-record", "real-model-v1", 8, 6)
+	var bad_record_manifest := _base_manifest("bad-record", "model_output_v1", 8, 6)
+	bad_record_manifest["source_name"] = "sample_v1"
 	_write_json(root.path_join("manifest.json"), bad_record_manifest)
 	var bad_record := {
 		"schema_version": 1,
-		"dataset_id": "wrong-dataset",
-		"source": "model_output_v1",
+		"source": "wrong-source",
 		"frame": 0,
 		"time_s": 0.0,
-		"image_size": [8, 6],
 		"regions": [],
 	}
-	_write_text(root.path_join("model_output.jsonl"), JSON.stringify(bad_record) + "\n")
+	_write_text(root.path_join("model_output_v1.jsonl"), JSON.stringify(bad_record) + "\n")
 	errors = source.open(root)
-	support.expect(_contains(errors, "dataset_id"), "model record dataset should align with manifest")
+	support.expect(_contains(errors, "source"), "model record source should align with manifest")
 
-	bad_record["dataset_id"] = "bad-record"
+	bad_record["source"] = "sample_v1"
 	bad_record["time_s"] = 1.0
-	_write_text(root.path_join("model_output.jsonl"), JSON.stringify(bad_record) + "\n")
+	_write_text(root.path_join("model_output_v1.jsonl"), JSON.stringify(bad_record) + "\n")
 	errors = source.open(root)
 	support.expect(_contains(errors, "time_s"), "model record time should align with manifest")
 
@@ -276,24 +276,23 @@ static func _test_linked_metadata_is_rejected(support) -> void:
 	DirAccess.make_dir_recursive_absolute(outside_model_root)
 	var linked_model_root := _new_temp_path("linked-model")
 	_make_one_frame_source(linked_model_root, 8, 6)
-	var linked_model_manifest := _base_manifest("linked-model", "real-model-v1", 8, 6)
+	var linked_model_manifest := _base_manifest("linked-model", "model_output_v1", 8, 6)
+	linked_model_manifest["source_name"] = "sample_v1"
 	_write_json(linked_model_root.path_join("manifest.json"), linked_model_manifest)
-	var outside_model := outside_model_root.path_join("model_output.jsonl")
+	var outside_model := outside_model_root.path_join("model_output_v1.jsonl")
 	var valid_record := {
 		"schema_version": 1,
-		"dataset_id": "linked-model",
-		"source": "model_output_v1",
+		"source": "sample_v1",
 		"frame": 0,
 		"time_s": 0.0,
-		"image_size": [8, 6],
 		"regions": [],
 	}
 	_write_text(outside_model, JSON.stringify(valid_record) + "\n")
-	var linked_model_path := linked_model_root.path_join("model_output.jsonl")
+	var linked_model_path := linked_model_root.path_join("model_output_v1.jsonl")
 	support.expect_equal(_create_link(outside_model, linked_model_path), OK, "model output symlink should be created")
 	_register_cleanup_target_check(linked_model_root, outside_model)
 	errors = model_source.open(linked_model_root)
-	support.expect(_contains(errors, "model_output.jsonl") and _contains(errors, "link"), "open should identify and reject linked model output before reading it")
+	support.expect(_contains(errors, "model_output_v1.jsonl") and _contains(errors, "link"), "open should identify and reject linked model output before reading it")
 	support.expect_equal(model_source.get_manifest().get("dataset_id"), model_baseline_dataset, "linked model rejection should preserve the prior source")
 	DirAccess.remove_absolute(model_baseline_root.path_join("frames/frame_000000.png"))
 	support.expect(model_source.load_texture(0) == model_cached_texture, "linked model rejection should preserve the prior frame cache")
@@ -305,6 +304,43 @@ static func _make_one_frame_source(root: String, image_width: int, image_height:
 	image.fill(Color.GREEN)
 	image.save_png(root.path_join("frames/frame_000000.png"))
 	_write_json(root.path_join("manifest.json"), _base_manifest(root.get_file(), "none", 8, 6))
+
+
+static func _test_versioned_model_output_selection(support: TestSupport) -> void:
+	var valid_root := _new_temp_path("versioned-model")
+	_make_one_frame_source(valid_root, 8, 6)
+	var manifest := _base_manifest("versioned-model", "model_output_v1", 8, 6)
+	manifest["source_name"] = "sample_v1"
+	_write_json(valid_root.path_join("manifest.json"), manifest)
+	_write_text(valid_root.path_join("model_output_v1.jsonl"), JSON.stringify(_model_record("sample_v1")) + "\n")
+	var source = SOURCE_SCRIPT.new()
+	support.expect_equal(source.open(valid_root), PackedStringArray(), "model_output_v1 should load its same-named JSONL")
+	support.expect_equal(source.get_model_records()[0].get("source"), "sample_v1", "record source should identify the frame source")
+
+	var unversioned_root := _new_temp_path("unversioned-model")
+	_make_one_frame_source(unversioned_root, 8, 6)
+	_write_json(unversioned_root.path_join("manifest.json"), manifest)
+	_write_text(unversioned_root.path_join("model_output.jsonl"), JSON.stringify(_model_record("sample_v1")) + "\n")
+	var errors: PackedStringArray = source.open(unversioned_root)
+	support.expect(_contains(errors, "model_output_v1.jsonl"), "unversioned fallback must be refused")
+
+	var future_root := _new_temp_path("future-model")
+	_make_one_frame_source(future_root, 8, 6)
+	var future_manifest := _base_manifest("future-model", "model_output_v2", 8, 6)
+	future_manifest["source_name"] = "sample_v1"
+	_write_json(future_root.path_join("manifest.json"), future_manifest)
+	errors = source.open(future_root)
+	support.expect(_contains(errors, "unsupported") and _contains(errors, "model_output_v2"), "legal future name must not be validated as v1")
+
+
+static func _model_record(source_id: String) -> Dictionary:
+	return {
+		"schema_version": 1,
+		"source": source_id,
+		"frame": 0,
+		"time_s": 0.0,
+		"regions": [],
+	}
 
 
 static func _base_manifest(dataset_id: String, model_version: String, width: int, height: int) -> Dictionary:

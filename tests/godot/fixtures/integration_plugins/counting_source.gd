@@ -43,21 +43,17 @@ func get_model_records():
 		return {}
 	var records := [{
 		"schema_version": 1,
-		"dataset_id": "counting-source",
-		"source": "model_output_v1",
+		"source": "sample_v1",
 		"frame": 0,
 		"time_s": 1.25,
-		"image_size": [40, 30],
 		"regions": [],
 	}]
 	if mode in ["valid_two", "records_hole", "entry_second_bad_frame", "entry_second_bad_time"]:
 		records.append({
 			"schema_version": 1,
-			"dataset_id": "counting-source",
-			"source": "model_output_v1",
+			"source": "sample_v1",
 			"frame": 2 if mode == "records_hole" else 1,
 			"time_s": 2.25,
-			"image_size": [40, 30],
 			"regions": [],
 		})
 	return records

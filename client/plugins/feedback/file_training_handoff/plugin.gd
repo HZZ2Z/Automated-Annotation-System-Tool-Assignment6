@@ -2,7 +2,7 @@ extends RefCounted
 
 signal export_finished(success: bool, path_or_error: String)
 
-const VALIDATOR_SCRIPT := preload("res://client/domain/annotation_validator.gd")
+const VALIDATOR_SCRIPT := preload("res://client/domain/model_output_validator.gd")
 
 
 func export(context: Dictionary) -> PackedStringArray:
@@ -16,7 +16,6 @@ func export(context: Dictionary) -> PackedStringArray:
 	var input_records: Array = context["records"]
 	for index in range(input_records.size()):
 		var corrected: Dictionary = (input_records[index] as Dictionary).duplicate(true)
-		corrected["source"] = "human_corrected"
 		var record_errors: PackedStringArray = validator.validate_record(corrected)
 		for error: String in record_errors:
 			errors.append("records.%d.%s" % [index, error])

@@ -35,7 +35,6 @@ func _init(
 		"kind": kind,
 		"box": requested_box.duplicate(true),
 		"track_id": null,
-		"filled": false,
 	})
 
 

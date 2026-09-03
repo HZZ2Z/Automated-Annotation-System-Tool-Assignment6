@@ -19,6 +19,9 @@ func run(support: TestSupport, tree: SceneTree) -> void:
 	var selected := [""]
 	var statuses: Array[String] = []
 	var plugin = PLUGIN_SCRIPT.new()
+	var image := Image.create(100, 80, false, Image.FORMAT_RGBA8)
+	image.fill(Color.DARK_BLUE)
+	var texture := ImageTexture.create_from_image(image)
 	var context := {
 		"store": store,
 		"history": history,
@@ -33,6 +36,7 @@ func run(support: TestSupport, tree: SceneTree) -> void:
 	support.expect(plugin.set_active_tool(&"move").is_empty(), "real viewport integration should select Move explicitly")
 	viewport.region_selected.connect(func(region_id: String): selected[0] = region_id)
 	viewport.image_pointer_event.connect(func(event: InputEvent, image_position: Vector2): plugin.handle_pointer(event, image_position))
+	viewport.call("set_texture", texture)
 	viewport.call("set_record", store.get_corrected_record(0))
 
 	_mouse_button(viewport, true, Vector2(15, 15))
@@ -104,6 +108,7 @@ func run(support: TestSupport, tree: SceneTree) -> void:
 	support.expect(replacement.is_connected("edit_cancel_requested", cancel_callback), "reactivation should connect cancellation only to the replacement viewport")
 	replacement.region_selected.connect(func(region_id: String): selected[0] = region_id)
 	replacement.image_pointer_event.connect(func(event: InputEvent, image_position: Vector2): plugin.handle_pointer(event, image_position))
+	replacement.call("set_texture", texture)
 	replacement.call("set_record", store.get_corrected_record(0))
 	selected[0] = "box-1"
 	plugin.begin_add_box()
@@ -140,12 +145,10 @@ func _mouse_motion(viewport: Control, image_position: Vector2, button_mask: int)
 func _record() -> Dictionary:
 	return {
 		"schema_version": 1,
-		"dataset_id": "real-edit-integration",
-		"source": "model_output_v1",
+		"source": "sample_v1",
 		"frame": 0,
-		"image_size": [100, 80],
 		"regions": [
-			{"id": "box-1", "class": "grasper", "kind": "instrument", "box": [10, 10, 20, 15], "filled": false},
-			{"id": "poly-1", "class": "gallbladder", "kind": "anatomy", "polygon": [[40, 40], [55, 40], [45, 55]], "filled": true},
+			{"id": "box-1", "class": "grasper", "kind": "instrument", "box": [10, 10, 20, 15]},
+			{"id": "poly-1", "class": "gallbladder", "kind": "anatomy", "polygon": [[40, 40], [55, 40], [45, 55]]},
 		],
 	}

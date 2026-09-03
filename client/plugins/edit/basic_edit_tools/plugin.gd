@@ -367,11 +367,16 @@ func _begin_keyboard_add() -> void:
 	if frame < 0 or record.is_empty():
 		_report("Cannot add a box without a current frame")
 		return
-	var dimensions: Variant = record.get("image_size", [])
-	if not dimensions is Array or dimensions.size() != 2:
+	var transform: Variant = _viewport.get_image_transform()
+	if (
+		not transform is Object
+		or not transform.has_method("is_configured")
+		or not transform.is_configured()
+	):
 		_report("Current frame has no valid image size")
 		return
-	_keyboard_box = [0.0, 0.0, minf(20.0, float(dimensions[0])), minf(20.0, float(dimensions[1]))]
+	var dimensions: Vector2 = transform.image_size
+	_keyboard_box = [0.0, 0.0, minf(20.0, dimensions.x), minf(20.0, dimensions.y)]
 	_drag_kind = "keyboard_add"
 	_drag_frame = frame
 	_drag_before = record.duplicate(true)
@@ -617,7 +622,7 @@ func _normalized_box(start: Vector2, finish: Vector2) -> Array:
 func _append_preview_box(record: Dictionary, box: Array) -> void:
 	var regions: Variant = record.get("regions", [])
 	if regions is Array:
-		regions.append({"id": "__new_box_preview", "class": _default_class(), "kind": _default_kind(), "box": box.duplicate(true), "track_id": null, "filled": false})
+		regions.append({"id": "__new_box_preview", "class": _default_class(), "kind": _default_kind(), "box": box.duplicate(true), "track_id": null})
 
 
 func _default_class() -> String:

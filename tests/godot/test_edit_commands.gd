@@ -38,7 +38,7 @@ static func _test_round_trips(scripts: Dictionary, support: TestSupport) -> void
 		{"name": "move box", "script": scripts.move, "args": [0, _record(), "box-1", Vector2(3, 4)], "check": func(record): return record.regions[0].box == [13.0, 14.0, 20, 15]},
 		{"name": "move polygon", "script": scripts.move, "args": [0, _record(), "poly-1", Vector2(2, 3)], "check": func(record): return record.regions[1].polygon == [[42.0, 43.0], [57.0, 43.0], [47.0, 58.0]]},
 		{"name": "resize box", "script": scripts.resize, "args": [0, _record(), "box-1", [10, 10, 28, 24]], "check": func(record): return record.regions[0].box == [10, 10, 28, 24]},
-		{"name": "add box", "script": scripts.add, "args": [0, _record(), [70, 60, 12, 9], "scissors", "instrument"], "check": func(record): return record.regions.size() == 3 and record.regions[2]["class"] == "scissors"},
+		{"name": "add box", "script": scripts.add, "args": [0, _record(), [70, 60, 12, 9], "scissors", "instrument"], "check": func(record): return record.regions.size() == 3 and record.regions[2]["class"] == "scissors" and not record.regions[2].has("filled")},
 		{"name": "delete region", "script": scripts.delete, "args": [0, _record(), "box-1"], "check": func(record): return record.regions.size() == 1 and record.regions[0].id == "poly-1"},
 		{"name": "relabel region", "script": scripts.relabel, "args": [0, _record(), "box-1", "scissors"], "check": func(record): return record.regions[0]["class"] == "scissors"},
 		{"name": "set track ID", "script": scripts.track, "args": [0, _record(), "box-1", "T99"], "check": func(record): return record.regions[0].track_id == "T99"},
@@ -152,7 +152,7 @@ static func _test_add_id_collision_and_cross_frame_monotonicity(scripts: Diction
 	var number := int(probe_id.get_slice("-", probe_id.get_slice_count("-") - 1))
 	var collision_id := "frame-0-added-%d" % (number + 1)
 	var collision_record := _record()
-	collision_record.regions.append({"id": collision_id, "class": "unknown", "kind": "region", "box": [80, 60, 5, 5], "track_id": null, "filled": false})
+	collision_record.regions.append({"id": collision_id, "class": "unknown", "kind": "region", "box": [80, 60, 5, 5], "track_id": null})
 	var collision_store = load(STORE_PATH).new()
 	collision_store.load_model_records([collision_record])
 	var collision_history = _history()
@@ -219,12 +219,10 @@ static func _history(capacity: int = 200):
 static func _record() -> Dictionary:
 	return {
 		"schema_version": 1,
-		"dataset_id": "edit-tests",
-		"source": "model_output_v1",
+		"source": "sample_v1",
 		"frame": 0,
-		"image_size": [100, 80],
 		"regions": [
-			{"id": "box-1", "class": "grasper", "kind": "instrument", "box": [10, 10, 20, 15], "conf": 0.9, "track_id": "T01", "filled": false},
-			{"id": "poly-1", "class": "gallbladder", "kind": "anatomy", "polygon": [[40, 40], [55, 40], [45, 55]], "filled": true},
+			{"id": "box-1", "class": "grasper", "kind": "instrument", "box": [10, 10, 20, 15], "conf": 0.9, "track_id": "T01"},
+			{"id": "poly-1", "class": "gallbladder", "kind": "anatomy", "polygon": [[40, 40], [55, 40], [45, 55]]},
 		],
 	}

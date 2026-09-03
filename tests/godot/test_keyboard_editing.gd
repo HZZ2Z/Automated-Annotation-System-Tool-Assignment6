@@ -141,7 +141,9 @@ static func _test_explicit_tool_contract_and_preview_cancel(plugin_script: Scrip
 	support.expect(fixture.plugin.set_active_tool(&"box").is_empty(), "Box should be a supported explicit tool")
 	_pointer(fixture.plugin, true, Vector2(60, 50), fixture.viewport)
 	_motion(fixture.plugin, Vector2(75, 65), fixture.viewport)
-	support.expect(not _find_region(fixture.viewport.records.back(), "__new_box_preview").is_empty(), "Box drag should create only a transient preview before release")
+	var preview_region := _find_region(fixture.viewport.records.back(), "__new_box_preview")
+	support.expect(not preview_region.is_empty(), "Box drag should create only a transient preview before release")
+	support.expect(not preview_region.has("filled"), "new preview should not add a model-output field")
 	support.expect(fixture.plugin.set_active_tool(&"move").is_empty(), "switching tools should be accepted during a preview")
 	support.expect_equal(fixture.plugin.get_active_tool(), &"move", "the requested Move tool should become authoritative")
 	support.expect_equal(fixture.viewport.records.back(), fixture.store.get_corrected_record(0), "tool switching should restore the committed record and cancel the preview")
@@ -694,13 +696,11 @@ static func _key(code: Key, shift := false, ctrl := false, alt := false) -> Inpu
 static func _record() -> Dictionary:
 	return {
 		"schema_version": 1,
-		"dataset_id": "edit-tests",
-		"source": "model_output_v1",
+		"source": "sample_v1",
 		"frame": 0,
-		"image_size": [100, 80],
 		"regions": [
-			{"id": "box-1", "class": "grasper", "kind": "instrument", "box": [10, 10, 20, 15], "conf": 0.9, "track_id": "T01", "filled": false},
-			{"id": "poly-1", "class": "gallbladder", "kind": "anatomy", "polygon": [[40, 40], [55, 40], [45, 55]], "filled": true},
+			{"id": "box-1", "class": "grasper", "kind": "instrument", "box": [10, 10, 20, 15], "conf": 0.9, "track_id": "T01"},
+			{"id": "poly-1", "class": "gallbladder", "kind": "anatomy", "polygon": [[40, 40], [55, 40], [45, 55]]},
 		],
 	}
 

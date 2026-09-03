@@ -1,7 +1,7 @@
 extends RefCounted
 
 const REGISTRY_SCRIPT := preload("res://client/pipeline/plugin_registry.gd")
-const VALIDATOR_SCRIPT := preload("res://client/domain/annotation_validator.gd")
+const MODEL_OUTPUT_VALIDATOR := preload("res://client/domain/model_output_validator.gd")
 const TEMP_PREFIX := "/tmp/annotool-part1-feedback-"
 
 var _owned_paths: Array[String] = []
@@ -37,8 +37,9 @@ func _test_valid_atomic_export(plugin, support) -> void:
 	var parsed: Variant = JSON.parse_string(content.strip_edges())
 	support.expect(parsed is Dictionary, "exported JSONL line should parse as an object")
 	if parsed is Dictionary:
-		support.expect_equal(parsed.get("source"), "human_corrected", "Feedback export should identify corrected ground truth")
-		support.expect_equal(VALIDATOR_SCRIPT.new().validate_record(parsed), PackedStringArray(), "Feedback output should satisfy the canonical annotation contract")
+		support.expect_equal(parsed.get("source"), "sample_v1", "Feedback must preserve the frame source")
+		support.expect(not parsed.has("dataset_id") and not parsed.has("image_size"), "Feedback must not reintroduce removed model fields")
+		support.expect_equal(MODEL_OUTPUT_VALIDATOR.new().validate_record(parsed), PackedStringArray(), "canonical corrected snapshot should remain structurally valid")
 	support.expect_equal(records, original, "Feedback export must not mutate the model snapshot")
 	support.expect_equal(outcomes, [[true, output_path]], "successful export should emit the published path")
 	for file_name: String in DirAccess.get_files_at(root):
@@ -71,13 +72,11 @@ func _test_context_errors(plugin, support) -> void:
 func _model_record() -> Dictionary:
 	return {
 		"schema_version": 1,
-		"dataset_id": "feedback-fixture",
-		"source": "model_output_v1",
+		"source": "sample_v1",
 		"frame": 0,
 		"time_s": 0.0,
-		"image_size": [32, 24],
 		"regions": [
-			{"id": "box-1", "class": "grasper", "kind": "instrument", "box": [2, 3, 4, 5], "conf": 0.9, "track_id": "T01", "filled": false},
+			{"id": "box-1", "class": "grasper", "kind": "instrument", "box": [2, 3, 4, 5], "conf": 0.9, "track_id": "T01"},
 		],
 	}
 

@@ -2,7 +2,7 @@ class_name AnnotationStore
 extends RefCounted
 
 
-const VALIDATOR_SCRIPT := preload("res://client/domain/annotation_validator.gd")
+const VALIDATOR_SCRIPT := preload("res://client/domain/model_output_validator.gd")
 
 var _model_records: Dictionary = {}
 var _corrected_records: Dictionary = {}
@@ -13,20 +13,17 @@ var _validator = VALIDATOR_SCRIPT.new()
 func load_model_records(records: Variant) -> PackedStringArray:
 	var errors := PackedStringArray()
 	if not records is Array:
-		errors.append("$: expected array of annotation records")
+		errors.append("$: expected array of model output records")
 		return errors
 	var next_model := {}
 	var seen_frames := {}
 	for index in range(records.size()):
 		var record: Variant = records[index]
 		var record_errors: PackedStringArray = _validator.validate_record(record)
-		for error in record_errors:
+		for error: String in record_errors:
 			errors.append(_prefix_record_error(index, error))
 		if not record is Dictionary:
 			continue
-		var source: Variant = record.get("source")
-		if typeof(source) == TYPE_STRING and source == "human_corrected":
-			errors.append("records.%d.source: model load requires model_output_vN" % index)
 		var frame_value: Variant = record.get("frame")
 		if _is_logical_integer(frame_value) and frame_value >= 0:
 			var frame := int(frame_value)
@@ -34,7 +31,7 @@ func load_model_records(records: Variant) -> PackedStringArray:
 				errors.append("records.%d.frame: duplicate frame %d" % [index, frame])
 			else:
 				seen_frames[frame] = true
-			if record_errors.is_empty() and typeof(source) == TYPE_STRING and source != "human_corrected":
+			if record_errors.is_empty() and not next_model.has(frame):
 				next_model[frame] = record.duplicate(true)
 	if not errors.is_empty():
 		return errors
@@ -58,8 +55,22 @@ func get_corrected_record(frame: int) -> Dictionary:
 	return record.duplicate(true)
 
 
+func _model_output_projection(record: Variant) -> Variant:
+	if not record is Dictionary:
+		return record
+	var result: Dictionary = record.duplicate(true)
+	var regions: Variant = result.get("regions")
+	if regions is Array:
+		for value: Variant in regions:
+			if value is Dictionary:
+				value.erase("filled")
+	return result
+
+
 func replace_corrected_record(frame: int, record: Variant) -> PackedStringArray:
-	var errors: PackedStringArray = _validator.validate_record(record)
+	var errors: PackedStringArray = _validator.validate_record(
+		_model_output_projection(record)
+	)
 	if not _corrected_records.has(frame):
 		errors.append("frame: frame %d does not exist" % frame)
 	if record is Dictionary:
@@ -91,10 +102,10 @@ func clear_dirty() -> void:
 
 
 func snapshot_corrected() -> Array:
-	var snapshot := _sorted_record_copies(_corrected_records)
-	for record: Dictionary in snapshot:
-		record["source"] = "human_corrected"
-	return snapshot
+	var result: Array = []
+	for record: Dictionary in _sorted_record_copies(_corrected_records):
+		result.append(_model_output_projection(record))
+	return result
 
 
 func model_digest() -> String:

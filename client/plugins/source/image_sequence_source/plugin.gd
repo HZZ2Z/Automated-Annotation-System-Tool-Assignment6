@@ -218,30 +218,39 @@ func _validate_manifest(manifest: Dictionary, root: String, errors: PackedString
 
 func _read_model_records(root: String, manifest: Dictionary, errors: PackedStringArray) -> Array[Dictionary]:
 	var records: Array[Dictionary] = []
-	var model_link_error := _path_link_error(root, "model_output.jsonl")
-	if not model_link_error.is_empty():
-		errors.append("model_output.jsonl: %s" % model_link_error)
-		return records
-	var model_path := root.path_join("model_output.jsonl")
-	if not FileAccess.file_exists(model_path):
-		if manifest["model_version"] != "none":
-			errors.append("model_output.jsonl is required when model_version is %s" % manifest["model_version"])
-			return records
+	var model_version := str(manifest["model_version"])
+	var filename := ""
+	if model_version == "none":
 		for index in range(int(manifest["frame_count"])):
-			var frame_entry: Dictionary = manifest["frames"][index]
+			var entry: Dictionary = manifest["frames"][index]
 			records.append({
 				"schema_version": 1,
-				"dataset_id": manifest["dataset_id"],
-				"source": "model_output_v1",
+				"source": manifest["source_name"],
 				"frame": index,
-				"time_s": frame_entry["time_s"],
-				"image_size": [manifest["width"], manifest["height"]],
+				"time_s": entry["time_s"],
 				"regions": [],
 			})
+	elif not _is_model_output_version(model_version):
+		errors.append("manifest.model_version: expected none or model_output_vX")
+		return records
+	elif model_version != "model_output_v1":
+		errors.append("unsupported model output contract: %s" % model_version)
+		return records
 	else:
+		filename = "%s.jsonl" % model_version
+		var link_error := _path_link_error(root, filename)
+		if not link_error.is_empty():
+			errors.append("%s: %s" % [filename, link_error])
+			return records
+		var model_path := root.path_join(filename)
+		if not FileAccess.file_exists(model_path):
+			errors.append(
+				"%s is required when model_version is %s" % [filename, model_version]
+			)
+			return records
 		var file := FileAccess.open(model_path, FileAccess.READ)
 		if file == null:
-			errors.append("model_output.jsonl cannot be read")
+			errors.append("%s cannot be read" % filename)
 			return records
 		var line_number := 0
 		while not file.eof_reached():
@@ -251,10 +260,13 @@ func _read_model_records(root: String, manifest: Dictionary, errors: PackedStrin
 				continue
 			var parser := JSON.new()
 			if parser.parse(line) != OK:
-				errors.append("model_output.jsonl:%d: invalid JSON: %s" % [line_number, parser.get_error_message()])
+				errors.append(
+					"%s:%d: invalid JSON: %s"
+					% [filename, line_number, parser.get_error_message()]
+				)
 				continue
 			if not parser.data is Dictionary:
-				errors.append("model_output.jsonl:%d: expected object" % line_number)
+				errors.append("%s:%d: expected object" % [filename, line_number])
 				continue
 			records.append(parser.data)
 
@@ -269,11 +281,8 @@ func _read_model_records(root: String, manifest: Dictionary, errors: PackedStrin
 		var record: Dictionary = records[index]
 		if not _is_logical_integer(record.get("frame")) or int(record.get("frame")) != index:
 			errors.append("model_output.%d.frame: expected frame %d" % [index, index])
-		if record.get("dataset_id") != manifest["dataset_id"]:
-			errors.append("model_output.%d.dataset_id: must match manifest" % index)
-		var image_size: Variant = record.get("image_size")
-		if not image_size is Array or image_size.size() != 2 or image_size[0] != manifest["width"] or image_size[1] != manifest["height"]:
-			errors.append("model_output.%d.image_size: must match manifest dimensions" % index)
+		if record.get("source") != manifest["source_name"]:
+			errors.append("model_output.%d.source: must match manifest source_name" % index)
 		if record.has("time_s") and (not _is_finite_number(record["time_s"]) or not is_equal_approx(float(record["time_s"]), float(manifest["frames"][index]["time_s"]))):
 			errors.append("model_output.%d.time_s: must match manifest frame time" % index)
 	if not errors.is_empty():
@@ -282,6 +291,20 @@ func _read_model_records(root: String, manifest: Dictionary, errors: PackedStrin
 	for index in range(frame_count):
 		validated.append(store.get_model_record(index))
 	return validated
+
+
+func _is_model_output_version(value: String) -> bool:
+	const PREFIX := "model_output_v"
+	if not value.begins_with(PREFIX):
+		return false
+	var digits := value.substr(PREFIX.length())
+	if digits.is_empty() or digits.unicode_at(0) < 49 or digits.unicode_at(0) > 57:
+		return false
+	for index in range(1, digits.length()):
+		var code := digits.unicode_at(index)
+		if code < 48 or code > 57:
+			return false
+	return true
 
 
 func _read_json_object(path: String, label: String, errors: PackedStringArray) -> Dictionary:
