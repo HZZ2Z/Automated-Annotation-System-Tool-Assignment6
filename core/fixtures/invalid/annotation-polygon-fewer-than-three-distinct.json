@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "dataset_id": "fixture-v1",
+  "source": "model_output_v1",
+  "frame": 0,
+  "image_size": [640, 360],
+  "regions": [
+    {
+      "id": "fixture-r1",
+      "class": "reviewer_free_text",
+      "kind": "region",
+      "polygon": [[10, 10], [60, 10], [60, 10]]
+    }
+  ]
+}

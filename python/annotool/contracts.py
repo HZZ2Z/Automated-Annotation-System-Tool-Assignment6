@@ -12,10 +12,25 @@ from jsonschema.validators import extend
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_DIR = ROOT / "core/schemas"
+TAXONOMY_PATH = ROOT / "core/taxonomy/classes.json"
+
+
+def _is_exact_integer(_checker: Any, instance: Any) -> bool:
+    return type(instance) is int
+
+
+def _is_finite_json_number(_checker: Any, instance: Any) -> bool:
+    if type(instance) is int:
+        return True
+    return type(instance) is float and math.isfinite(instance)
+
+
 StrictDraft202012Validator = extend(
     Draft202012Validator,
-    type_checker=Draft202012Validator.TYPE_CHECKER.redefine(
-        "integer", lambda _checker, instance: type(instance) is int
+    type_checker=(
+        Draft202012Validator.TYPE_CHECKER
+        .redefine("integer", _is_exact_integer)
+        .redefine("number", _is_finite_json_number)
     ),
 )
 
@@ -24,6 +39,18 @@ StrictDraft202012Validator = extend(
 def load_schema(name: str) -> dict[str, Any]:
     """Load one canonical schema by filename."""
     return json.loads((SCHEMA_DIR / name).read_text(encoding="utf-8"))
+
+
+@lru_cache(maxsize=1)
+def _load_taxonomy_class_kinds() -> dict[str, str]:
+    taxonomy = json.loads(TAXONOMY_PATH.read_text(encoding="utf-8"))
+    return {
+        item["id"]: item["kind"]
+        for item in taxonomy.get("classes", [])
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and isinstance(item.get("kind"), str)
+    }
 
 
 def validate_instance(data: dict[str, Any], schema_name: str) -> list[str]:
@@ -59,6 +86,16 @@ def validate_annotation_semantics(record: dict[str, Any]) -> list[str]:
                 errors.append(f"regions.{index}.id: duplicate region id {region_id!r}")
             seen_ids.add(region_id)
 
+        class_label = region.get("class")
+        kind = region.get("kind")
+        if isinstance(class_label, str) and isinstance(kind, str):
+            expected_kind = _load_taxonomy_class_kinds().get(class_label)
+            if expected_kind is not None and kind != expected_kind:
+                errors.append(
+                    f"regions.{index}.kind: class {class_label!r} requires kind "
+                    f"{expected_kind!r}"
+                )
+
         box = region.get("box")
         if bounds_are_valid and _valid_box(box) and not _box_within_bounds(box, width, height):
             errors.append(
@@ -67,6 +104,15 @@ def validate_annotation_semantics(record: dict[str, Any]) -> list[str]:
             )
 
         polygon = region.get("polygon")
+        if _valid_polygon(polygon):
+            if polygon[0] == polygon[-1]:
+                errors.append(
+                    f"regions.{index}.polygon: first vertex must not be repeated at the end"
+                )
+            if len({tuple(vertex) for vertex in polygon}) < 3:
+                errors.append(
+                    f"regions.{index}.polygon: expected at least three distinct coordinates"
+                )
         if bounds_are_valid and isinstance(polygon, list):
             for vertex_index, vertex in enumerate(polygon):
                 if _valid_vertex(vertex) and not _vertex_within_bounds(vertex, width, height):
@@ -101,9 +147,7 @@ def validate_manifest_semantics(record: dict[str, Any]) -> list[str]:
             )
         for index, score in enumerate(similarity_scores):
             if (
-                isinstance(score, bool)
-                or not isinstance(score, (int, float))
-                or not math.isfinite(score)
+                not _is_finite_number(score)
                 or not 0.0 <= score <= 1.0
             ):
                 errors.append(
@@ -126,7 +170,7 @@ def validate_manifest_semantics(record: dict[str, Any]) -> list[str]:
             seen_paths.add(image_path)
 
         time_s = entry.get("time_s")
-        if isinstance(time_s, (int, float)) and not isinstance(time_s, bool):
+        if _is_finite_number(time_s):
             if previous_time is not None and time_s < previous_time:
                 errors.append(
                     f"frames.{index}.time_s: must be non-decreasing "
@@ -140,7 +184,7 @@ def _valid_image_size(value: Any) -> bool:
     return (
         isinstance(value, list)
         and len(value) == 2
-        and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value)
+        and all(type(item) is int and item > 0 for item in value)
     )
 
 
@@ -148,7 +192,7 @@ def _valid_box(value: Any) -> bool:
     return (
         isinstance(value, list)
         and len(value) == 4
-        and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value)
+        and all(_is_finite_number(item) for item in value)
     )
 
 
@@ -161,8 +205,20 @@ def _valid_vertex(value: Any) -> bool:
     return (
         isinstance(value, list)
         and len(value) == 2
-        and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value)
+        and all(_is_finite_number(item) for item in value)
     )
+
+
+def _valid_polygon(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) >= 3
+        and all(_valid_vertex(vertex) for vertex in value)
+    )
+
+
+def _is_finite_number(value: Any) -> bool:
+    return type(value) is int or (type(value) is float and math.isfinite(value))
 
 
 def _vertex_within_bounds(vertex: list[Any], width: int | float, height: int | float) -> bool:

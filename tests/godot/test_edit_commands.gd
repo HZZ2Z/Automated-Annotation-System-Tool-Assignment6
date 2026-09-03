@@ -30,6 +30,7 @@ static func run(support: TestSupport) -> void:
 	_test_history_regressions_with_real_commands(scripts, support)
 	_test_invalid_real_commands_preserve_redo_branch(scripts, support)
 	_test_add_id_collision_and_cross_frame_monotonicity(scripts, support)
+	_test_relabel_updates_known_kind_and_preserves_unknown_kind(scripts, support)
 
 
 static func _test_round_trips(scripts: Dictionary, support: TestSupport) -> void:
@@ -177,6 +178,32 @@ static func _test_add_id_collision_and_cross_frame_monotonicity(scripts: Diction
 	var next_zero = scripts.add.new(0, store.get_corrected_record(0), [75, 60, 5, 5], "unknown", "region")
 	history.execute(next_zero, store)
 	support.expect(zero_id != one_id and next_zero.get_region_id() != zero_id and next_zero.get_region_id() != one_id, "generated IDs should remain session-monotonic across frames and deletion")
+
+
+static func _test_relabel_updates_known_kind_and_preserves_unknown_kind(scripts: Dictionary, support: TestSupport) -> void:
+	var store = _store()
+	var history = _history()
+	var before: Dictionary = store.get_corrected_record(0)
+	var known = scripts.relabel.new(0, before, "box-1", "gallbladder")
+	support.expect(history.execute(known, store).is_empty(), "known cross-kind relabel should apply atomically")
+	var known_after: Dictionary = store.get_corrected_record(0)
+	support.expect_equal(known_after.regions[0]["class"], "gallbladder", "known relabel should update class")
+	support.expect_equal(known_after.regions[0]["kind"], "anatomy", "known relabel should update kind from shared taxonomy")
+	support.expect(history.undo(store), "known cross-kind relabel should undo")
+	support.expect_equal(store.get_corrected_record(0), before, "known cross-kind relabel undo should restore exact class and kind")
+	support.expect(history.redo(store).is_empty(), "known cross-kind relabel should redo")
+	support.expect_equal(store.get_corrected_record(0), known_after, "known cross-kind relabel redo should restore exact class and kind")
+
+	var unknown_before: Dictionary = store.get_corrected_record(0)
+	var free_text = scripts.relabel.new(0, unknown_before, "box-1", "reviewer_free_text")
+	support.expect(history.execute(free_text, store).is_empty(), "unknown free-text relabel should apply")
+	var free_text_after: Dictionary = store.get_corrected_record(0)
+	support.expect_equal(free_text_after.regions[0]["class"], "reviewer_free_text", "unknown relabel should preserve text exactly")
+	support.expect_equal(free_text_after.regions[0]["kind"], "anatomy", "unknown relabel should preserve the prior legal kind")
+	support.expect(history.undo(store), "unknown free-text relabel should undo")
+	support.expect_equal(store.get_corrected_record(0), unknown_before, "unknown free-text relabel undo should restore exact snapshot")
+	support.expect(history.redo(store).is_empty(), "unknown free-text relabel should redo")
+	support.expect_equal(store.get_corrected_record(0), free_text_after, "unknown free-text relabel redo should restore exact snapshot")
 
 
 static func _store():

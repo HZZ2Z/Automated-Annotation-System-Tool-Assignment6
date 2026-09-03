@@ -20,6 +20,42 @@ def load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@pytest.mark.parametrize(
+    "path",
+    sorted((FIXTURES / "valid").glob("annotation-*.json")),
+    ids=lambda path: path.name,
+)
+def test_shared_valid_annotation_fixtures_pass_schema_and_semantics(path: Path) -> None:
+    record = load(path)
+
+    errors = validate_instance(record, "annotation-v1.schema.json")
+    errors.extend(validate_annotation_semantics(record))
+
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted((FIXTURES / "invalid").glob("annotation-*.json")),
+    ids=lambda path: path.name,
+)
+def test_shared_invalid_annotation_fixtures_fail_schema_or_semantics(path: Path) -> None:
+    record = load(path)
+
+    errors = validate_instance(record, "annotation-v1.schema.json")
+    errors.extend(validate_annotation_semantics(record))
+
+    assert errors, path.name
+    expected_paths = {
+        "annotation-known-class-kind-mismatch.json": "regions.0.kind:",
+        "annotation-polygon-fewer-than-three-distinct.json": "regions.0.polygon:",
+        "annotation-polygon-repeats-first-at-end.json": "regions.0.polygon:",
+        "annotation-unknown-kind.json": "regions.0.kind:",
+    }
+    if path.name in expected_paths:
+        assert any(error.startswith(expected_paths[path.name]) for error in errors), errors
+
+
 def test_valid_box_annotation_passes() -> None:
     errors = validate_instance(
         load(FIXTURES / "valid/annotation-box.json"),
@@ -222,3 +258,57 @@ def test_annotation_source_rejects_terminal_newline() -> None:
     errors = validate_instance(record, "annotation-v1.schema.json")
 
     assert any(error.startswith("source:") for error in errors)
+
+
+def test_annotation_schema_rejects_every_non_finite_number_with_its_path() -> None:
+    for value in [math.nan, math.inf, -math.inf]:
+        cases = []
+
+        time_record = load(FIXTURES / "valid/annotation-box.json")
+        time_record["time_s"] = value
+        cases.append((time_record, "time_s:"))
+
+        confidence_record = load(FIXTURES / "valid/annotation-box.json")
+        confidence_record["regions"][0]["conf"] = value
+        cases.append((confidence_record, "regions.0.conf:"))
+
+        box_record = load(FIXTURES / "valid/annotation-box.json")
+        box_record["regions"][0]["box"][0] = value
+        cases.append((box_record, "regions.0.box.0:"))
+
+        polygon_record = load(FIXTURES / "valid/annotation-polygon.json")
+        polygon_record["regions"][0]["polygon"][0][0] = value
+        cases.append((polygon_record, "regions.0.polygon.0.0:"))
+
+        for record, path in cases:
+            errors = validate_instance(record, "annotation-v1.schema.json")
+            assert any(error.startswith(path) for error in errors), (path, value, errors)
+
+
+def test_annotation_schema_accepts_arbitrarily_large_exact_integer_numbers() -> None:
+    record = load(FIXTURES / "valid/annotation-box.json")
+    record["regions"][0]["box"][0] = 10**10000
+
+    assert validate_instance(record, "annotation-v1.schema.json") == []
+
+
+def test_annotation_semantics_only_applies_bounds_for_exact_positive_image_size() -> None:
+    record = load(FIXTURES / "valid/annotation-box.json")
+    record["image_size"] = [640.0, 360.0]
+    record["regions"][0]["box"] = [630, 20, 40, 30]
+
+    errors = validate_annotation_semantics(record)
+
+    assert not any(error.startswith("regions.0.box:") for error in errors)
+
+
+def test_unknown_free_text_class_accepts_any_legal_kind() -> None:
+    for kind in ["instrument", "anatomy", "region"]:
+        record = load(FIXTURES / "valid/annotation-box.json")
+        record["regions"][0]["class"] = "reviewer_free_text"
+        record["regions"][0]["kind"] = kind
+
+        errors = validate_instance(record, "annotation-v1.schema.json")
+        errors.extend(validate_annotation_semantics(record))
+
+        assert errors == []

@@ -25,6 +25,38 @@ const REGION_FIELDS := {
 	"filled": true,
 }
 const REQUIRED_REGION_FIELDS := ["id", "class", "kind"]
+const TAXONOMY_PATH := "res://core/taxonomy/classes.json"
+const LEGAL_KINDS := ["instrument", "anatomy", "region"]
+
+static var _taxonomy_loaded := false
+static var _taxonomy_class_kinds := {}
+
+
+static func taxonomy_kind_for_class(class_label: String) -> String:
+	_ensure_taxonomy_loaded()
+	return str(_taxonomy_class_kinds.get(class_label, ""))
+
+
+static func _ensure_taxonomy_loaded() -> void:
+	if _taxonomy_loaded:
+		return
+	_taxonomy_loaded = true
+	_taxonomy_class_kinds = {}
+	if not FileAccess.file_exists(TAXONOMY_PATH):
+		return
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(TAXONOMY_PATH))
+	if not parsed is Dictionary:
+		return
+	var classes: Variant = parsed.get("classes")
+	if not classes is Array:
+		return
+	for item: Variant in classes:
+		if not item is Dictionary:
+			continue
+		var class_id: Variant = item.get("id")
+		var kind: Variant = item.get("kind")
+		if typeof(class_id) == TYPE_STRING and not class_id.is_empty() and typeof(kind) == TYPE_STRING and LEGAL_KINDS.has(kind):
+			_taxonomy_class_kinds[class_id] = kind
 
 
 func validate_record(record: Variant) -> PackedStringArray:
@@ -115,6 +147,15 @@ func _validate_region(
 		if typeof(value) != TYPE_STRING or value.is_empty():
 			errors.append("%s.%s: expected non-empty string" % [path, field])
 
+	var class_label: Variant = region.get("class")
+	var kind: Variant = region.get("kind")
+	if typeof(kind) == TYPE_STRING and not LEGAL_KINDS.has(kind):
+		errors.append("%s.kind: expected instrument, anatomy, or region" % path)
+	if typeof(class_label) == TYPE_STRING and not class_label.is_empty() and typeof(kind) == TYPE_STRING and LEGAL_KINDS.has(kind):
+		var expected_kind := taxonomy_kind_for_class(class_label)
+		if not expected_kind.is_empty() and kind != expected_kind:
+			errors.append("%s.kind: class %s requires kind %s" % [path, class_label, expected_kind])
+
 	if region.has("id") and typeof(region.get("id")) == TYPE_STRING:
 		var region_id: String = region.get("id")
 		if seen_ids.has(region_id):
@@ -195,14 +236,17 @@ func _validate_polygon(
 		return
 	if polygon.size() < 3:
 		errors.append("%s: expected at least three vertices" % path)
+	var all_vertices_are_valid: bool = polygon.size() >= 3
 	for vertex_index in range(polygon.size()):
 		var vertex: Variant = polygon[vertex_index]
 		var vertex_path := "%s.%d" % [path, vertex_index]
 		if not vertex is Array or vertex.size() != 2:
 			errors.append("%s: expected exactly [x, y]" % vertex_path)
+			all_vertices_are_valid = false
 			continue
 		if not _is_finite_number(vertex[0]) or not _is_finite_number(vertex[1]):
 			errors.append("%s: expected two finite numbers" % vertex_path)
+			all_vertices_are_valid = false
 			continue
 		if bounds_are_valid:
 			var x: float = vertex[0]
@@ -211,6 +255,24 @@ func _validate_polygon(
 			var image_height: float = image_size[1]
 			if x < 0 or y < 0 or x >= image_width or y >= image_height:
 				errors.append("%s: vertex must stay within image bounds [0, %s) x [0, %s)" % [vertex_path, str(image_width), str(image_height)])
+	if all_vertices_are_valid:
+		if _vertices_equal(polygon[0], polygon[-1]):
+			errors.append("%s: first vertex must not be repeated at the end" % path)
+		var distinct_count := 0
+		for vertex_index in range(polygon.size()):
+			var already_seen := false
+			for prior_index in range(vertex_index):
+				if _vertices_equal(polygon[vertex_index], polygon[prior_index]):
+					already_seen = true
+					break
+			if not already_seen:
+				distinct_count += 1
+		if distinct_count < 3:
+			errors.append("%s: expected at least three distinct coordinates" % path)
+
+
+func _vertices_equal(left: Array, right: Array) -> bool:
+	return left[0] == right[0] and left[1] == right[1]
 
 
 func _is_valid_source(value: String) -> bool:

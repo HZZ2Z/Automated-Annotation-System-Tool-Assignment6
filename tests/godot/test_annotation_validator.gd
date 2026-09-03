@@ -15,6 +15,7 @@ static func run(support: TestSupport) -> void:
 	_test_top_level_contract(validator, support)
 	_test_region_contract(validator, support)
 	_test_geometry_bounds_and_duplicates(validator, support)
+	_test_taxonomy_and_polygon_semantics(validator, support)
 	_test_malformed_variants_do_not_crash(validator, support)
 
 
@@ -43,7 +44,16 @@ static func _test_annotation_fixtures(validator, support: TestSupport) -> void:
 		for filename in invalid_dir.get_files():
 			if filename.begins_with("annotation-") and filename.ends_with(".json"):
 				var record: Variant = _read_json("res://core/fixtures/invalid/%s" % filename)
-				support.expect(not validator.validate_record(record).is_empty(), "invalid annotation fixture accepted: %s" % filename)
+				var errors: PackedStringArray = validator.validate_record(record)
+				support.expect(not errors.is_empty(), "invalid annotation fixture accepted: %s" % filename)
+				var expected_paths := {
+					"annotation-known-class-kind-mismatch.json": "regions.0.kind",
+					"annotation-polygon-fewer-than-three-distinct.json": "regions.0.polygon",
+					"annotation-polygon-repeats-first-at-end.json": "regions.0.polygon",
+					"annotation-unknown-kind.json": "regions.0.kind",
+				}
+				if expected_paths.has(filename):
+					_expect_error_path(errors, expected_paths[filename], support, "shared invalid fixture should report its contract field: %s" % filename)
 
 
 static func _test_top_level_contract(validator, support: TestSupport) -> void:
@@ -193,6 +203,18 @@ static func _test_geometry_bounds_and_duplicates(validator, support: TestSupport
 	var duplicate_errors: PackedStringArray = validator.validate_record(duplicate)
 	_expect_error_path(duplicate_errors, "image_size", support, "malformed image size should be rejected")
 	_expect_error_path(duplicate_errors, "regions.1.id", support, "duplicate IDs should still be detected with malformed image size")
+
+
+static func _test_taxonomy_and_polygon_semantics(validator, support: TestSupport) -> void:
+	for kind in ["instrument", "anatomy", "region"]:
+		var free_text := _valid_box()
+		free_text["regions"][0]["class"] = "reviewer_free_text"
+		free_text["regions"][0]["kind"] = kind
+		support.expect(validator.validate_record(free_text).is_empty(), "unknown free-text class should accept legal kind %s" % kind)
+
+	var internal_duplicate := _valid_polygon()
+	internal_duplicate["regions"][0]["polygon"] = [[10, 10], [60, 10], [60, 10], [40, 50]]
+	support.expect(validator.validate_record(internal_duplicate).is_empty(), "internal duplicate polygon vertex should remain valid with three distinct coordinates")
 
 
 static func _test_malformed_variants_do_not_crash(validator, support: TestSupport) -> void:
