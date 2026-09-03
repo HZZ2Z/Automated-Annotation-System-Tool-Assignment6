@@ -179,3 +179,18 @@ def test_main_returns_one_for_malformed_json_and_no_traceback(
     captured = capsys.readouterr()
     assert str(path) in captured.out
     assert "Traceback" not in captured.out + captured.err
+
+
+def test_part1_1_schema_directory_has_only_model_output_v1() -> None:
+    schema_files = sorted((ROOT / "core/schemas").glob("*.json"))
+    assert [path.name for path in schema_files] == ["model_output_v1.schema.json"]
+
+
+def test_removed_contract_aliases_do_not_exist() -> None:
+    removed = [
+        ROOT / "core/schemas/annotation-v1.schema.json",
+        ROOT / "core/schemas/review-state-v1.schema.json",
+        ROOT / "python/validate_annotations.py",
+        ROOT / "client/domain/annotation_validator.gd",
+    ]
+    assert not [path for path in removed if path.exists()]

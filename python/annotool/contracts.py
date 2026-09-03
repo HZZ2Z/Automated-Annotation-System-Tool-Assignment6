@@ -11,8 +11,11 @@ from jsonschema.validators import extend
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCHEMA_DIR = ROOT / "core/schemas"
-TAXONOMY_PATH = ROOT / "core/taxonomy/classes.json"
+SCHEMA_PATHS = {
+    "model_output_v1.schema.json": ROOT / "core/schemas/model_output_v1.schema.json",
+    "dataset-manifest-v1.schema.json": ROOT
+    / "core/frame_source/dataset-manifest-v1.schema.json",
+}
 
 
 def _is_exact_integer(_checker: Any, instance: Any) -> bool:
@@ -37,20 +40,12 @@ StrictDraft202012Validator = extend(
 
 @lru_cache(maxsize=None)
 def load_schema(name: str) -> dict[str, Any]:
-    """Load one canonical schema by filename."""
-    return json.loads((SCHEMA_DIR / name).read_text(encoding="utf-8"))
-
-
-@lru_cache(maxsize=1)
-def _load_taxonomy_class_kinds() -> dict[str, str]:
-    taxonomy = json.loads(TAXONOMY_PATH.read_text(encoding="utf-8"))
-    return {
-        item["id"]: item["kind"]
-        for item in taxonomy.get("classes", [])
-        if isinstance(item, dict)
-        and isinstance(item.get("id"), str)
-        and isinstance(item.get("kind"), str)
-    }
+    """Load a known contract by logical filename."""
+    try:
+        path = SCHEMA_PATHS[name]
+    except KeyError:
+        raise ValueError(f"unknown schema: {name}") from None
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def validate_instance(data: object, schema_name: str) -> list[str]:
@@ -77,65 +72,6 @@ def _validation_error_path(error: Any) -> str:
         if unexpected:
             parts.append(unexpected[0])
     return ".".join(parts) or "$"
-
-
-def validate_annotation_semantics(record: dict[str, Any]) -> list[str]:
-    """Validate annotation constraints that depend on multiple fields."""
-    image_size = record.get("image_size")
-    errors: list[str] = []
-    seen_ids: set[str] = set()
-    regions = record.get("regions")
-    if not isinstance(regions, list):
-        return errors
-
-    bounds_are_valid = _valid_image_size(image_size)
-    if bounds_are_valid:
-        width, height = image_size
-
-    for index, region in enumerate(regions):
-        if not isinstance(region, dict):
-            continue
-        region_id = region.get("id")
-        if isinstance(region_id, str):
-            if region_id in seen_ids:
-                errors.append(f"regions.{index}.id: duplicate region id {region_id!r}")
-            seen_ids.add(region_id)
-
-        class_label = region.get("class")
-        kind = region.get("kind")
-        if isinstance(class_label, str) and isinstance(kind, str):
-            expected_kind = _load_taxonomy_class_kinds().get(class_label)
-            if expected_kind is not None and kind != expected_kind:
-                errors.append(
-                    f"regions.{index}.kind: class {class_label!r} requires kind "
-                    f"{expected_kind!r}"
-                )
-
-        box = region.get("box")
-        if bounds_are_valid and _valid_box(box) and not _box_within_bounds(box, width, height):
-            errors.append(
-                f"regions.{index}.box: box must stay within image bounds "
-                f"[0, {width}] x [0, {height}]"
-            )
-
-        polygon = region.get("polygon")
-        if _valid_polygon(polygon):
-            if polygon[0] == polygon[-1]:
-                errors.append(
-                    f"regions.{index}.polygon: first vertex must not be repeated at the end"
-                )
-            if len({tuple(vertex) for vertex in polygon}) < 3:
-                errors.append(
-                    f"regions.{index}.polygon: expected at least three distinct coordinates"
-                )
-        if bounds_are_valid and isinstance(polygon, list):
-            for vertex_index, vertex in enumerate(polygon):
-                if _valid_vertex(vertex) and not _vertex_within_bounds(vertex, width, height):
-                    errors.append(
-                        f"regions.{index}.polygon.{vertex_index}: vertex must stay within "
-                        f"image bounds [0, {width}) x [0, {height})"
-                    )
-    return errors
 
 
 def validate_manifest_semantics(record: dict[str, Any]) -> list[str]:
@@ -195,47 +131,5 @@ def validate_manifest_semantics(record: dict[str, Any]) -> list[str]:
     return errors
 
 
-def _valid_image_size(value: Any) -> bool:
-    return (
-        isinstance(value, list)
-        and len(value) == 2
-        and all(type(item) is int and item > 0 for item in value)
-    )
-
-
-def _valid_box(value: Any) -> bool:
-    return (
-        isinstance(value, list)
-        and len(value) == 4
-        and all(_is_finite_number(item) for item in value)
-    )
-
-
-def _box_within_bounds(box: list[Any], width: int | float, height: int | float) -> bool:
-    x, y, box_width, box_height = box
-    return x >= 0 and y >= 0 and x + box_width <= width and y + box_height <= height
-
-
-def _valid_vertex(value: Any) -> bool:
-    return (
-        isinstance(value, list)
-        and len(value) == 2
-        and all(_is_finite_number(item) for item in value)
-    )
-
-
-def _valid_polygon(value: Any) -> bool:
-    return (
-        isinstance(value, list)
-        and len(value) >= 3
-        and all(_valid_vertex(vertex) for vertex in value)
-    )
-
-
 def _is_finite_number(value: Any) -> bool:
     return type(value) is int or (type(value) is float and math.isfinite(value))
-
-
-def _vertex_within_bounds(vertex: list[Any], width: int | float, height: int | float) -> bool:
-    x, y = vertex
-    return 0 <= x < width and 0 <= y < height
