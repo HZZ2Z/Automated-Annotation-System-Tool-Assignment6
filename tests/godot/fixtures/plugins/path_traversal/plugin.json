@@ -1,7 +1,9 @@
 {
-  "id": "path-traversal",
+  "id": "path_traversal",
   "version": "1.0.0",
   "api_version": 1,
   "stage": "source",
-  "entry": "../valid/plugin.gd"
+  "entry": "../valid/plugin.gd",
+  "priority": 10,
+  "capabilities": ["frames"]
 }

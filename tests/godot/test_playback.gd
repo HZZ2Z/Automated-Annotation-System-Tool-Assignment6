@@ -14,6 +14,7 @@ func run(support, tree: SceneTree) -> void:
 	var main := packed.instantiate() as Control
 	tree.root.add_child(main)
 	await tree.process_frame
+	support.expect_equal(main.get("source_plugin_id"), "", "default source routing should honor manifest priority instead of pinning the generic directory source")
 	if not main.has_method("open_source"):
 		support.expect(false, "Main should expose open_source")
 		main.queue_free()
@@ -23,6 +24,11 @@ func run(support, tree: SceneTree) -> void:
 	var source_root := _make_source(support, "valid", 120, 0.01, "model_output_v1")
 	var errors: PackedStringArray = main.call("open_source", source_root)
 	support.expect_equal(errors, PackedStringArray(), "a normalized 120-frame directory should open")
+	var export_button := main.get_node("MainVBox/TopToolbar/Export") as Button
+	support.expect(not export_button.disabled, "Export should become available after a source is accepted")
+	var handoff_path := source_root.path_join("training_update_v1")
+	support.expect_equal(main.call("export_handoff", handoff_path), PackedStringArray(), "Main should route export through the configured Feedback plugin")
+	support.expect(FileAccess.file_exists(handoff_path.path_join("manifest.json")), "Main export should publish the training handoff package")
 	support.expect_equal(main.call("get_current_frame"), 0, "opening should select frame zero")
 	support.expect_equal(_label(main, "FrameLabel"), "Frame 0 (120 total)", "frame label should show zero-based current index and total frame count")
 	support.expect_equal(_label(main, "TimeLabel"), "00:00.125", "initial timestamp should come from manifest entry zero")
@@ -274,11 +280,40 @@ func run(support, tree: SceneTree) -> void:
 	support.expect(_status(main) != "Modified" and "positive" in _status(main).to_lower(), "a refused edit should remain visible even when the dataset was already modified")
 
 	var registry_renderer = main.call("get_discovered_plugin", "render", "canvas_region_renderer")
-	support.expect(registry_renderer != null and viewport.get("_renderer") == registry_renderer, "integrated Main should inject the renderer instance discovered by the registry")
+	support.expect(registry_renderer != null and viewport.get("_renderer").get_script() == registry_renderer.get_script(), "integrated Main should inject a renderer instance created by the registry")
 
 	main.queue_free()
 	await tree.process_frame
+	await _test_external_source_through_main(support, tree, packed)
 	_cleanup(support)
+
+
+func _test_external_source_through_main(support, tree: SceneTree, packed: PackedScene) -> void:
+	var main := packed.instantiate() as Control
+	var has_plugin_roots := false
+	for property: Dictionary in main.get_property_list():
+		if property.get("name") == "plugin_roots":
+			has_plugin_roots = true
+			break
+	support.expect(has_plugin_roots, "Main should expose startup plugin roots without requiring core edits")
+	if not has_plugin_roots:
+		main.free()
+		return
+	main.set("plugin_roots", PackedStringArray([
+		"res://client/plugins",
+		"res://tests/godot/fixtures/extension_plugins",
+	]))
+	tree.root.add_child(main)
+	await tree.process_frame
+	var errors: PackedStringArray = main.call("open_source", "case.fixture")
+	support.expect_equal(errors, PackedStringArray(), "a non-filesystem Source dropped into an additional root should open through Main")
+	support.expect_equal(main.call("get_current_frame"), 0, "the external Source should use the same indexed-frame client path")
+	var explorer = main.get_node("MainVBox/WorkspaceSplit/DatasetExplorerContainer/DatasetExplorer")
+	var view_model: Dictionary = explorer.get("_view_model")
+	support.expect_equal(view_model.get("display_name"), "Non-filesystem fixture", "Source-owned presentation metadata should reach the explorer unchanged")
+	support.expect_equal(view_model.get("source_path"), "fixture://case.fixture", "Main must not rewrite a server-style Source locator as a filesystem path")
+	main.queue_free()
+	await tree.process_frame
 
 
 func _make_source(

@@ -1,7 +1,9 @@
 {
-  "id": "not-a-script",
+  "id": "not_a_script",
   "version": "1.0.0",
   "api_version": 1,
   "stage": "source",
-  "entry": "entry.json"
+  "entry": "entry.json",
+  "priority": 10,
+  "capabilities": ["frames"]
 }

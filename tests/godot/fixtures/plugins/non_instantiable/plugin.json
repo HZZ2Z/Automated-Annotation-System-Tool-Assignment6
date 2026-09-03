@@ -1,7 +1,9 @@
 {
-  "id": "abstract-source",
+  "id": "abstract_source",
   "version": "1.0.0",
   "api_version": 1,
   "stage": "source",
-  "entry": "plugin.gd"
+  "entry": "plugin.gd",
+  "priority": 10,
+  "capabilities": ["frames"]
 }

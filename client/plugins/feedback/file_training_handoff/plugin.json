@@ -3,5 +3,7 @@
   "version": "1.0.0",
   "api_version": 1,
   "stage": "feedback",
-  "entry": "plugin.gd"
+  "entry": "plugin.gd",
+  "priority": 100,
+  "capabilities": ["corrected_dataset", "training_handoff"]
 }

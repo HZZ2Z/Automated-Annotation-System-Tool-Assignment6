@@ -55,7 +55,7 @@ custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 disabled = true
 text = "Export"
-tooltip_text = "Available after feedback export is implemented"
+tooltip_text = "Export a checksummed training_update_v1 package"
 
 [node name="WorkspaceSplit" type="HSplitContainer" parent="MainVBox"]
 layout_mode = 2
@@ -170,6 +170,11 @@ title = "Open image or normalized annotation source"
 file_mode = 3
 access = 2
 filters = PackedStringArray("*.png ; PNG Images", "*.jpg, *.jpeg ; JPEG Images", "*.mp4, *.mov, *.avi, *.mkv ; Video Files")
+
+[node name="ExportDialog" type="FileDialog" parent="."]
+title = "Choose parent directory for training_update_v1"
+file_mode = 2
+access = 2
 
 [node name="PlaybackTimer" type="Timer" parent="."]
 wait_time = 0.0333333

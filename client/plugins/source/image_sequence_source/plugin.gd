@@ -1,4 +1,4 @@
-extends RefCounted
+extends "res://client/pipeline/stages/source_stage.gd"
 
 const CACHE_SCRIPT := preload("res://client/services/frame_cache.gd")
 const STORE_SCRIPT := preload("res://client/domain/annotation_store.gd")
@@ -28,6 +28,11 @@ var _root := ""
 var _manifest: Dictionary = {}
 var _model_records: Array[Dictionary] = []
 var _cache = CACHE_SCRIPT.new(12)
+
+
+func can_open(locator: String) -> bool:
+	var root := ProjectSettings.globalize_path(locator).simplify_path().trim_suffix("/")
+	return DirAccess.dir_exists_absolute(root)
 
 
 func open(path: String) -> PackedStringArray:
@@ -79,6 +84,31 @@ func get_model_records() -> Array[Dictionary]:
 
 func get_manifest() -> Dictionary:
 	return _manifest.duplicate(true)
+
+
+func get_presentation() -> Dictionary:
+	if _root.is_empty() or _manifest.is_empty():
+		return {}
+	var frames: Array[Dictionary] = []
+	for index in range(get_frame_count()):
+		var entry: Dictionary = _manifest["frames"][index]
+		var relative_path := str(entry["image_path"])
+		frames.append({
+			"index": index,
+			"label": relative_path,
+			"path": _root.path_join(relative_path),
+		})
+	var artifacts: Array[Dictionary] = [{"label": "manifest.json", "path": _root.path_join("manifest.json")}]
+	var model_version := str(_manifest.get("model_version", "none"))
+	if model_version != "none":
+		var model_file := "%s.jsonl" % model_version
+		artifacts.append({"label": model_file, "path": _root.path_join(model_file)})
+	return {
+		"display_name": str(_manifest.get("dataset_id", _root.get_file())),
+		"source_path": _root,
+		"frames": frames,
+		"artifacts": artifacts,
+	}
 
 
 func load_texture(index: int) -> Texture2D:

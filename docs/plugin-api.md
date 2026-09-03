@@ -1,18 +1,18 @@
-# 插件 API
+# Plugin API version 1
 
-本文档固定 Part 1 流水线的 **API version 1**。可执行契约位于 `client/pipeline/plugin_api.gd`；在修改本文档或升级版本前，必须先更新注册表兼容性测试。
+本文档是 Part 1.4 的团队扩展规范。可执行契约位于 `client/pipeline/stages/`，注册与兼容性规则位于 `client/pipeline/plugin_api.gd` 和 `plugin_registry.gd`。插件属于受信任的仓库代码，但所有外部数据仍必须验证；预期内错误用 `PackedStringArray` 返回，空数组表示成功。所有 stage 都必须明确生命周期、深拷贝边界和故障隔离方式。
 
-## 插件声明
+## 1. 目录与 manifest
 
-每个插件都是 `client/plugins/<stage>/<plugin-name>/` 下的一个目录，其中包含 `plugin.json` 和入口脚本。插件声明只允许以下字段：
+每个插件放在 `client/plugins/<stage>/<plugin_name>/`，至少包含 `plugin.json` 和入口脚本。manifest 只允许七个字段：
 
-- `id`：非空插件标识，在同一 stage 内唯一。
-- `version`：非空实现版本字符串。
-- `api_version`：整数 `1`；其他值均不兼容。
-- `stage`：`source`、`render`、`edit` 或 `feedback` 之一。
-- `entry`：指向可实例化 GDScript resource 的安全 POSIX 相对路径。
-
-示例：
+- `id`：stage 内唯一的小写 snake_case 标识。
+- `version`：严格 SemVer，例如 `1.0.0`。
+- `api_version`：当前固定为整数 `1`。
+- `stage`：`source`、`render`、`edit` 或 `feedback`。
+- `entry`：插件目录内安全的 POSIX 相对脚本路径。
+- `priority`：整数；自动选择时数值高者优先，相同则按 ID 排序。
+- `capabilities`：非空、无重复的能力标识数组。
 
 ```json
 {
@@ -20,83 +20,101 @@
   "version": "1.0.0",
   "api_version": 1,
   "stage": "source",
-  "entry": "plugin.gd"
+  "entry": "plugin.gd",
+  "priority": 20,
+  "capabilities": ["frames", "model_annotations", "locator.example"]
 }
 ```
 
-入口脚本必须能无参数实例化并继承 `RefCounted`。未知字段、不安全路径、重复 ID、未知阶段、损坏 JSON 和缺失方法都会被拒绝。发现顺序是确定的，并且按插件进行故障隔离。
+Registry 在启动时扫描 Main 的 `plugin_roots`（默认只有 `client/plugins`，可追加团队插件目录）。损坏 JSON、未知字段/阶段、路径穿越、重复 ID、API 不兼容、未继承对应抽象 Stage、不可实例化脚本、缺方法或参数数量错误只会拒绝相应插件。`list_plugins(stage)` 和 `get_descriptor(stage, id)` 只返回元数据；`create_plugin(stage, id)` 每次产生独立实例，Registry 不保存有状态单例。Source 的 `resolve_source_plugin_id(locator, preferred_id)` 调用各插件的 `can_open`；默认不固定 preferred ID，而按 `priority` 降序、ID 升序确定重叠来源。只有显式配置 `source_plugin_id` 才覆盖该顺序，因此新增格式不需要修改 Main 的扩展名分支。
 
-## 数据源阶段（source）
+Godot 导出包默认不会自动携带普通 JSON。仓库的 `export_presets.cfg` 明确包含 `client/plugins/**/*.json`；不得删除该规则，否则导出后的启动发现会缺少 manifest。
 
-必需方法：
+## 2. Stage interfaces
 
-- `open(path: String) -> PackedStringArray`：验证并暂存一个数据源；空数组表示成功。
-- `get_frame_count() -> int`：权威索引帧数量。
-- `get_frame_entry(index: int) -> Dictionary`：至少包含 `frame`、`time_s` 和 `image_path` 的防御性副本。
-- `get_model_records() -> Array[Dictionary]`：每帧一条规范模型输出记录的深拷贝。
-- `get_manifest() -> Dictionary`：规范数据清单的深拷贝。
-- `load_texture(index: int) -> Texture2D`：返回已解码帧；失败时返回 `null` 并提供可读插件错误。
-- `close() -> void`：释放缓存/资源并返回空状态；重复调用必须安全。
+入口脚本必须继承对应抽象基类，而不是仅靠约定拼写方法；Registry 会沿脚本继承链强制检查。
 
-数据源插件拥有解码和缓存生命周期，主应用拥有已安装实例。帧索引、清单项和记录必须完全对齐。公开 getter 返回深拷贝，防止下游代码修改数据源真值。若清单声明 `model_version: "model_output_v1"`，实现只读取同名的 `model_output_v1.jsonl`；记录中的 `source` 仍表示帧来源，例如 `sample_v1`。
+### SourceStage
 
-## 渲染阶段（render）
+继承 `client/pipeline/stages/source_stage.gd` 并实现：
 
-必需方法：
+- `can_open(locator: String) -> bool`：只判断自己是否接受该 locator，不修改实例状态。
+- `open(locator: String) -> PackedStringArray`：完整验证后才提交内部状态。
+- `get_frame_count() -> int`
+- `get_frame_entry(index: int) -> Dictionary`
+- `get_model_records() -> Array[Dictionary]`
+- `get_manifest() -> Dictionary`
+- `get_presentation() -> Dictionary`
+- `load_texture(index: int) -> Texture2D`
+- `close() -> void`
 
-- `set_state(texture: Texture2D, record: Dictionary, transform, selected_id: String, opacity: float) -> void`：替换短期绘制状态。
-- `draw(canvas: CanvasItem) -> void`：绘制当前图像和 overlay。
-- `hit_test(image_point: Vector2) -> Dictionary`：返回命中区域的副本，或空 Dictionary。
+帧、frame entry 和模型记录必须按同一显式索引对齐。manifest、presentation 与记录 getter 返回深拷贝。`get_presentation` 由 Source 自己把文件、localhost 或远程 locator 投影为格式无关的浏览数据：`display_name`、`source_path`、连续的 `frames[{index,label,path}]` 和 `artifacts[{label,path}]`；Main 只校验并消费这些字段，不猜测 `manifest.json`、`image_path` 或模型文件名。现有工作插件是 `image_sequence_source` 和 `single_image_source`；视频先经 `python/frame_source.py` 归一化后，与原生图像序列使用同一个 Source API。
 
-渲染阶段接收已验证数据，以及用于命中测试的同一图像/视口变换。它不拥有标注状态，也不得修改输入记录。
+### RenderStage
 
-## 编辑阶段（edit）
+继承 `client/pipeline/stages/render_stage.gd` 并实现：
 
-必需生命周期和交互方法：
+- `set_state(texture, record, transform, selected_id, opacity) -> void`
+- `draw(canvas: CanvasItem) -> void`
+- `hit_test(image_point: Vector2) -> Dictionary`
 
+Renderer 只持有短期绘制快照，不拥有标注真值。`AnnotationViewport` 初始只依赖无业务绘制逻辑的 `null_renderer.gd`，启动后由 Main 注入所选 Render 插件。现有工作插件是 `canvas_region_renderer`。
+
+### EditStage
+
+继承 `client/pipeline/stages/edit_stage.gd` 并实现：
+
+- `get_tool_descriptors() -> Array[Dictionary]`
 - `activate(context: Dictionary) -> PackedStringArray`
 - `set_active_tool(tool_id: StringName) -> PackedStringArray`
 - `get_active_tool() -> StringName`
-- `handle_pointer(event: InputEvent, image_position: Vector2) -> void`
-- `handle_key(event: InputEvent) -> bool`
-- `begin_add_box() -> void`
+- `handle_pointer(event, image_position) -> void`
+- `handle_key(event) -> bool`
+- `invoke(action_id: StringName, payload: Dictionary) -> PackedStringArray`
 - `cancel() -> void`
-- `relabel_selected(class_label: String) -> PackedStringArray`
-- `set_selected_track_id(track_id: Variant) -> PackedStringArray`
-- `set_selected_fill(filled: bool) -> PackedStringArray`
-- `set_selected_geometry(box: Array) -> PackedStringArray`
-- `delete_selected() -> PackedStringArray`
 - `deactivate() -> void`
 
-`activate` 接收 `store`、`history`、`viewport`、`get_current_frame`、`get_selected_region`、`set_selected_region`、`status` 和 `taxonomy`。它在进入 active 状态前验证完整依赖面。支持的 tool ID 是 `select`、`move`、`box`、`fill` 和 `delete`。
+`activate` 的 context 包含 `store`、`history`、`viewport`、`get_current_frame`、`get_selected_region`、`set_selected_region`、`status` 和 `taxonomy`。候选插件必须先验证完整依赖，失败时不接管当前会话；`deactivate` 必须幂等并断开自己建立的信号。
 
-生命周期是显式的：Main 为候选数据源创建新实例，对暂存状态激活它，并且只在激活成功后安装。`cancel` 恢复已提交显示状态，不创建 history；`deactivate` 执行取消、断开信号、清除引用，并且是幂等的。一次完成编辑通过 history 作为一条已验证命令提交。
+工具描述字段为 `id`、`node_name`、`label`、`implemented`、`tooltip`、`icon_path`，可选 `presentation_text` 和唯一的 `default: true`。ToolPanel 只校验并呈现描述，不硬编码具体工具 ID。现有插件通过 `invoke` 支持以下动作：
 
-## 导出/回传阶段（feedback）
+| action ID | payload | 行为 |
+|---|---|---|
+| `begin_add_box` | `{}` | 开始加框 |
+| `relabel_selected` | `{"class": String}` | 重分类 |
+| `set_selected_track_id` | `{"track_id": String/null}` | 修改 track ID |
+| `set_selected_fill` | `{"filled": bool}` | 修改显示填充 |
+| `set_selected_geometry` | `{"box": Array}` | 修改 box |
+| `delete_selected` | `{}` | 删除选中区域 |
+| `range_propagate` | `{"keyframe": int, "start_frame": int, "end_frame": int, "mode": "overwrite"/"merge"}` | 将关键帧区域传播到连续范围 |
 
-必需方法：
+`basic_edit_tools` 还保留 `relabel_selected`、`set_selected_track_id`、`set_selected_fill`、`set_selected_geometry`、`delete_selected` 和 `begin_add_box` 便利方法供自身测试使用，但核心只通过通用 `invoke` 边界调用。范围传播先验证全部目标，再一次性提交；整段是一条 undo/redo history，目标帧的 `source`、`frame`、`time_s` 保持不变，操作 marker 存在 Store 的独立 batch operations 中，不写入 Model Output V1。
 
-- `export(context: Dictionary) -> PackedStringArray`：验证完整 corrected snapshot 并发布；空数组表示成功。
+### FeedbackStage
 
-Part 1 实现接收 `records: Array` 和 `output_path: String`，并发出：
+继承 `client/pipeline/stages/feedback_stage.gd` 并实现：
 
-- `export_finished(success: bool, path_or_error: String)`
+- `export(context: Dictionary) -> PackedStringArray`
 
-插件先获取深拷贝，保留每条记录原有的 `source`，再使用 `client/domain/model_output_validator.gd` 校验。发布使用同目录临时文件和重命名；故障隔离要求之前的有效输出保持不变。导出路径必须与只读的 `model_output_v1.jsonl` 分开，插件不得覆盖原始模型输出。Part 4 可以在同一 `export(context)` 边界后新增差异报告和训练交接文件。
+context 包含 `records`、`output_path`、`source_manifest`、`model_digest`、`dirty_frames` 和 `batch_operations`。`file_training_handoff` 发出 `export_finished(success, path_or_error)`，在目标同级建立 staging 目录，验证内容与校验和后重命名发布；目标已存在时拒绝覆盖。
 
-## 错误、数据所有权和兼容性
+```text
+training_update_v1/
+├── manifest.json
+└── data/
+    └── corrected_annotations.jsonl
+```
 
-预期内验证和 I/O 失败返回包含简洁信息的 `PackedStringArray`；它们不能使界面崩溃，也不向用户暴露原始调用栈。空数组表示成功。除非对象被明确定义为短期渲染状态，返回 Dictionary 或记录数组的方法都返回深拷贝。插件私有字段永远不是核心接口。
+manifest 包含 schema/package 版本、确定性 package ID、源数据集 ID/SHA-256、模型基线版本/摘要、taxonomy 版本、帧覆盖、dirty frames、独立 batch operations，以及 corrected artifact 的相对路径、字节数和 SHA-256。原始 `model_output_v1.jsonl` 永远只读。
 
-API 兼容性是精确契约：新增或删除必需方法时，必须协调修改测试和文档；无法保持向后兼容时还必须修改 `api_version`。Registry 检查方法是否存在，每个 stage 的 contract test 检查行为和所有权。
+## 3. 新增插件（不修改 Registry 或 core）
 
-## 新增插件
+1. 复制最接近的 `client/plugins/<stage>/...` 目录，改成新的目录名。
+2. 填写七字段 `plugin.json`；选择唯一 ID、SemVer、能力和合理优先级。
+3. 入口脚本继承对应 Stage 抽象类并实现所有方法；不要访问其他插件私有字段。
+4. Source 用 `can_open` 声明新 locator，并用 `get_presentation` 提供格式无关的浏览元数据；Edit 用 tool descriptors 和 `invoke` 声明新工具。不要在 Main、ToolPanel 或 Registry 增加格式/工具分支。
+5. 在 `tests/godot/fixtures/extension_plugins` 先做最小插件测试，再添加生产行为测试。
+6. 需要独立团队目录时，把它追加到 Main 的 `plugin_roots`；同一 stage 的 ID 在所有 roots 中仍必须唯一。
+7. 运行 Python 与 Godot 完整门禁，确认 discovery 无错误，`create_plugin` 返回不同实例。
 
-1. 创建 `client/plugins/<stage>/<new-plugin>/`。
-2. 添加一个包含五个字段的 `plugin.json`，设置 `api_version: 1` 和 stage 内唯一 ID。
-3. 在一个无参数 `RefCounted` 脚本中实现该 stage 列出的所有方法。
-4. 按上述规则返回防御性副本和可恢复错误。
-5. 新增聚焦行为测试，并运行完整 Godot 测试套件。
-6. 启动客户端，并通过 `get_discovered_plugin(stage, id)` 确认插件被发现。
-
-该目录应当在**不修改 Registry**或主应用发现循环的情况下被发现。只有当产品明确要改变当前实现时，主应用配置才选择替代插件 ID。
+API version 1 已冻结。向插件增加可选能力可以保持 V1；删除必需方法、改变参数数量/语义或改变所有权属于破坏性修改，必须建立 V2，不能静默修改 V1。

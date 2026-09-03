@@ -3,5 +3,7 @@
   "version": "1.0.0",
   "api_version": 1,
   "stage": "edit",
-  "entry": "plugin.gd"
+  "entry": "plugin.gd",
+  "priority": 100,
+  "capabilities": ["select", "move", "resize", "relabel", "add", "delete", "range_propagate"]
 }

@@ -44,6 +44,33 @@ def test_sample_is_deterministic(samples: tuple[Path, dict[str, str], Path]) -> 
         assert hashlib.sha256((first_dir / relative_path).read_bytes()).hexdigest() == digest
 
 
+def test_cli_without_arguments_generates_the_canonical_sample(
+    tmp_path: Path,
+    samples: tuple[Path, dict[str, str], Path],
+) -> None:
+    _, canonical_hashes, _ = samples
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "python/make_sample_input.py")],
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    output_dir = tmp_path / "sample/assignment_v1"
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == [
+        "Generated sample at sample/assignment_v1",
+        "Validation errors: 0",
+    ]
+    generated_hashes = json.loads(
+        (output_dir / "hashes.json").read_text(encoding="utf-8")
+    )
+    assert generated_hashes == canonical_hashes
+
+
 def test_sample_model_output_matches_assignment_contract(
     samples: tuple[Path, dict[str, str], Path],
 ) -> None:

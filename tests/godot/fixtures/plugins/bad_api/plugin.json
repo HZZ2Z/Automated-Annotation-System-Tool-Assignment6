@@ -1,7 +1,9 @@
 {
-  "id": "bad-api",
+  "id": "bad_api",
   "version": "1.0.0",
   "api_version": 99,
   "stage": "source",
-  "entry": "plugin.gd"
+  "entry": "plugin.gd",
+  "priority": 10,
+  "capabilities": ["frames"]
 }

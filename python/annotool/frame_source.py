@@ -50,10 +50,10 @@ def decode_video(input_path: Path, output_dir: Path) -> dict[str, Any]:
                 "video timestamp count does not match extracted frame count "
                 f"({len(probe['timestamps'])} != {len(frame_paths)})"
             )
-        similarity_scores = _validate_and_score_frames(
-            frame_paths, probe["width"], probe["height"]
+        width, height, similarity_scores = _validate_and_score_frames(frame_paths)
+        manifest = _build_manifest(
+            input_path, probe, frame_paths, width, height, similarity_scores
         )
-        manifest = _build_manifest(input_path, probe, frame_paths, similarity_scores)
         _validate_manifest(manifest)
         _write_manifest(staging_dir / "manifest.json", manifest)
         staging_dir.replace(output_dir)
@@ -98,20 +98,40 @@ def _probe_video(input_path: Path) -> dict[str, Any]:
     frames = payload.get("frames")
     if not isinstance(frames, list) or not frames:
         raise ValueError("video has no readable frame timestamps")
-    timestamps: list[float] = []
+    raw_timestamps: list[object] = []
     for index, frame in enumerate(frames):
         if not isinstance(frame, dict):
             raise ValueError(f"video frame {index} has no timestamp")
-        raw_timestamp = frame.get("best_effort_timestamp_time")
+        raw_timestamps.append(frame.get("best_effort_timestamp_time"))
+
+    missing_indices = [
+        index for index, raw_timestamp in enumerate(raw_timestamps) if raw_timestamp is None
+    ]
+    if len(missing_indices) == len(raw_timestamps):
+        timestamps = [index / nominal_fps for index in range(len(raw_timestamps))]
+        return {
+            "width": width,
+            "height": height,
+            "nominal_fps": nominal_fps,
+            "timestamps": timestamps,
+        }
+    if missing_indices:
+        raise ValueError(f"video frame {missing_indices[0]} has no timestamp")
+
+    timestamps: list[float] = []
+    for index, raw_timestamp in enumerate(raw_timestamps):
         try:
             timestamp = float(raw_timestamp)
         except (TypeError, ValueError):
-            raise ValueError(f"video frame {index} has no timestamp") from None
-        if not math.isfinite(timestamp) or timestamp < 0:
+            raise ValueError(f"video frame {index} has invalid timestamp") from None
+        if not math.isfinite(timestamp):
             raise ValueError(f"video frame {index} has invalid timestamp")
         if timestamps and timestamp < timestamps[-1]:
             raise ValueError("video frame timestamps are not monotonic")
         timestamps.append(timestamp)
+    if timestamps[0] < 0:
+        offset = -timestamps[0]
+        timestamps = [timestamp + offset for timestamp in timestamps]
     return {
         "width": width,
         "height": height,
@@ -198,26 +218,34 @@ def _normalize_frame_names(frames_dir: Path) -> list[Path]:
     return normalized_paths
 
 
-def _validate_and_score_frames(
-    frame_paths: list[Path], width: int, height: int
-) -> list[float]:
+def _validate_and_score_frames(frame_paths: list[Path]) -> tuple[int, int, list[float]]:
     """Check one decoded image at a time and retain only adjacent frames."""
     previous_image: np.ndarray | None = None
+    decoded_shape: tuple[int, int, int] | None = None
     similarity_scores: list[float] = []
     for index, frame_path in enumerate(frame_paths):
         image = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
-        if image is None or image.shape != (height, width, 3):
+        if image is None:
+            raise ValueError(f"decoded frame {index} is unreadable or has invalid dimensions")
+        if decoded_shape is None:
+            decoded_shape = image.shape
+        elif image.shape != decoded_shape:
             raise ValueError(f"decoded frame {index} is unreadable or has invalid dimensions")
         if previous_image is not None:
             similarity_scores.append(normalized_mad(previous_image, image))
         previous_image = image
-    return similarity_scores
+    if decoded_shape is None:
+        raise ValueError("video decode produced no readable PNG frames")
+    height, width, _ = decoded_shape
+    return width, height, similarity_scores
 
 
 def _build_manifest(
     input_path: Path,
     probe: dict[str, Any],
     frame_paths: list[Path],
+    width: int,
+    height: int,
     similarity_scores: list[float],
 ) -> dict[str, Any]:
     source_sha256 = _sha256_file(input_path)
@@ -226,8 +254,8 @@ def _build_manifest(
         "dataset_id": f"video-{source_sha256[:16]}",
         "source_name": input_path.name,
         "source_sha256": source_sha256,
-        "width": probe["width"],
-        "height": probe["height"],
+        "width": width,
+        "height": height,
         "frame_count": len(frame_paths),
         "nominal_fps": probe["nominal_fps"],
         "frames": [

@@ -56,6 +56,13 @@ func populate(view_model: Dictionary) -> void:
 	frames_root.set_collapsed(false)
 
 
+func validate_view_model(value: Variant) -> PackedStringArray:
+	if not value is Dictionary:
+		return PackedStringArray(["Dataset explorer view model must be a Dictionary"])
+	var error := _validation_error(value)
+	return PackedStringArray() if error.is_empty() else PackedStringArray([_bounded(error)])
+
+
 func select_frame(index: int) -> bool:
 	if not _frame_items.has(index):
 		return false

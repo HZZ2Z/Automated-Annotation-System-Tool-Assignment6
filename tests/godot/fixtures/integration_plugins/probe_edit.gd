@@ -25,6 +25,27 @@ static func reset(next_mode: String = "success") -> void:
 	last_activation_selection = "unset"
 
 
+func get_tool_descriptors() -> Array[Dictionary]:
+	return [{
+		"id": &"select",
+		"node_name": "Select",
+		"label": "Selection",
+		"implemented": true,
+		"default": true,
+		"tooltip": "Fixture selection",
+		"icon_path": "res://client/ui/icons/tools/selection.svg",
+	}]
+
+
+func invoke(action_id: StringName, _payload: Dictionary = {}) -> PackedStringArray:
+	if action_id == &"begin_add_box":
+		begin_add_box()
+		return PackedStringArray()
+	if action_id == &"delete_selected":
+		return delete_selected()
+	return PackedStringArray()
+
+
 func activate(context: Dictionary) -> PackedStringArray:
 	activation_count += 1
 	if context.is_empty():

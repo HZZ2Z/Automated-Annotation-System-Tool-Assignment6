@@ -8,10 +8,24 @@ from typing import Sequence
 from annotool.sample import generate_sample
 
 
+DEFAULT_OUTPUT = Path("sample/assignment_v1")
+DEFAULT_SEED = 6006
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", required=True, type=Path, help="new sample output directory")
-    parser.add_argument("--seed", type=int, default=6006, help="deterministic seed")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=DEFAULT_OUTPUT,
+        help=f"new sample output directory (default: {DEFAULT_OUTPUT})",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help=f"deterministic seed (default: {DEFAULT_SEED})",
+    )
     return parser.parse_args(argv)
 
 

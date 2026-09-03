@@ -38,6 +38,7 @@ func run(support, tree: SceneTree) -> void:
 		"MainVBox/TimelinePanel/TimelineColumn/Timeline",
 		"MainVBox/StatusBar",
 		"SourceDialog",
+		"ExportDialog",
 		"PlaybackTimer",
 	]:
 		support.expect(main.get_node_or_null(node_path) != null, "required node should exist: %s" % node_path)
@@ -98,7 +99,8 @@ func run(support, tree: SceneTree) -> void:
 	var feedback_plugin = main.call("get_discovered_plugin", "feedback", "file_training_handoff")
 	support.expect(source_plugin != null and single_image_plugin != null and render_plugin != null and edit_plugin != null and feedback_plugin != null, "main startup should discover every required plugin stage")
 	if viewport != null and render_plugin != null:
-		support.expect(viewport.get("_renderer") == render_plugin, "main should inject the registry-discovered renderer into AnnotationViewport")
+		support.expect(viewport.get("_renderer").get_script() == render_plugin.get_script(), "main should inject an instance created from the registry-discovered renderer")
+	support.expect(main.get("_feedback_plugin") != null, "main startup should instantiate the configured Feedback plugin")
 
 	var dialog := main.get_node_or_null("SourceDialog") as FileDialog
 	support.expect(dialog != null and dialog.file_mode == FileDialog.FILE_MODE_OPEN_ANY, "SourceDialog should accept directories while retaining a file signal")
@@ -108,6 +110,8 @@ func run(support, tree: SceneTree) -> void:
 		for extension in ["*.png", "*.jpg", "*.jpeg"]:
 			support.expect(extension in filters, "SourceDialog should expose %s files" % extension)
 		support.expect("*.mp4" in filters, "SourceDialog should expose common video selection for the documented conversion path")
+	var export_dialog := main.get_node_or_null("ExportDialog") as FileDialog
+	support.expect(export_dialog != null and export_dialog.file_mode == FileDialog.FILE_MODE_OPEN_DIR, "ExportDialog should choose a parent for the training handoff package")
 	var playback_timer := main.get_node_or_null("PlaybackTimer") as Timer
 	support.expect(playback_timer != null and playback_timer.one_shot == false and playback_timer.is_stopped(), "PlaybackTimer should start stopped and repeat")
 	var timeline_panel := main.get_node_or_null("MainVBox/TimelinePanel") as PanelContainer

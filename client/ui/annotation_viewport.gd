@@ -7,7 +7,7 @@ signal transform_changed
 signal edit_cancel_requested
 
 const TRANSFORM_SCRIPT := preload("res://client/services/viewport_transform.gd")
-const RENDERER_SCRIPT := preload("res://client/plugins/render/canvas_region_renderer/plugin.gd")
+const RENDERER_SCRIPT := preload("res://client/pipeline/null_renderer.gd")
 const WHEEL_ZOOM_FACTOR := 1.1
 
 var _viewport_transform = TRANSFORM_SCRIPT.new()

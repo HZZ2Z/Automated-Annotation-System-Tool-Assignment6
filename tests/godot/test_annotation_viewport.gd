@@ -1,6 +1,7 @@
 extends RefCounted
 
 const VIEWPORT_SCENE = preload("res://client/ui/annotation_viewport.tscn")
+const RENDERER_SCRIPT = preload("res://client/plugins/render/canvas_region_renderer/plugin.gd")
 
 
 func run(support, tree: SceneTree) -> void:
@@ -21,6 +22,12 @@ func _test_scene_and_dirty_redraws(support, tree: SceneTree) -> void:
 	support.expect(viewport != null, "annotation viewport scene should instantiate as a Control")
 	if viewport == null:
 		return
+	var initial_renderer: Variant = viewport.get("_renderer")
+	support.expect(
+		initial_renderer != null and initial_renderer.get_script().resource_path == "res://client/pipeline/null_renderer.gd",
+		"AnnotationViewport should depend only on a neutral core fallback before renderer injection",
+	)
+	viewport.set_renderer(RENDERER_SCRIPT.new())
 	viewport.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	viewport.size = Vector2(800, 600)
 	var draws := [0]
@@ -165,6 +172,7 @@ func _test_resize_preserves_user_view(support, tree: SceneTree) -> void:
 
 func _test_transformed_selection_and_pointer_signal(support, tree: SceneTree) -> void:
 	var viewport := VIEWPORT_SCENE.instantiate() as Control
+	viewport.set_renderer(RENDERER_SCRIPT.new())
 	viewport.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	viewport.size = Vector2(800, 600)
 	tree.root.add_child(viewport)
@@ -422,6 +430,7 @@ func _record() -> Dictionary:
 
 func _mounted_viewport(tree: SceneTree) -> Control:
 	var viewport := VIEWPORT_SCENE.instantiate() as Control
+	viewport.set_renderer(RENDERER_SCRIPT.new())
 	viewport.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	viewport.size = Vector2(800, 600)
 	tree.root.add_child(viewport)

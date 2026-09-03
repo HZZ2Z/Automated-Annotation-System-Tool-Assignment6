@@ -11,6 +11,10 @@ static func reset(next_mode: String = "valid") -> void:
 	close_count = 0
 
 
+func can_open(_locator: String) -> bool:
+	return true
+
+
 func open(_path: String):
 	open_count += 1
 	if mode == "open_error":
@@ -80,6 +84,20 @@ func get_manifest():
 		"frame_count": count,
 		"nominal_fps": fps,
 		"frames": frames,
+	}
+
+
+func get_presentation() -> Dictionary:
+	var count_value: Variant = get_frame_count()
+	var count := int(count_value) if typeof(count_value) == TYPE_INT else 1
+	var frames: Array[Dictionary] = []
+	for index in range(count):
+		frames.append({"index": index, "label": "Fixture %d" % index, "path": "fixture://counting/%d" % index})
+	return {
+		"display_name": "Counting fixture",
+		"source_path": "fixture://counting",
+		"frames": frames,
+		"artifacts": [],
 	}
 
 

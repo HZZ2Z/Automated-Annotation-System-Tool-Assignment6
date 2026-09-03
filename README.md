@@ -10,7 +10,7 @@
 2. **按所有权组织代码。** 场景组装界面，领域对象拥有标注状态和命令，服务负责变换、缓存与进程边界，插件负责可替换的阶段行为。
 3. **保持清晰接口。** 跨模块调用经过已记录的数据源、渲染、编辑和导出/回传契约；应用不得依赖插件私有字段。
 4. **优先可维护、可测试的变更。** 每个改变状态的编辑都是一条已验证命令；输入输出使用防御性拷贝，失败可读且相互隔离。
-5. **遵守 Part 1 边界。** 本检查点不声明批量传播、自动保存、差异报告、训练提交、性能测量或最终 MITK 设计评估已完成。在后续后端接入前，保存和导出按钮保持禁用。
+5. **遵守 Part 1 边界。** 本检查点只实现 Part 1.4 要求的最小范围传播和本地训练交接包；不声明近似段自动发现、autosave、差异审阅、远程训练提交、性能测量或最终 MITK 设计评估已完成。Save 保持禁用，Export 在数据源成功打开后启用。
 
 详细拓扑见 [docs/architecture.md](docs/architecture.md)，稳定扩展契约见 [docs/plugin-api.md](docs/plugin-api.md)。
 
@@ -18,7 +18,7 @@
 
 应用采用可调整宽度的三栏标注工作区。左栏是当前已接受数据集的只读浏览器，只显示真实帧和确实存在的元数据文件；它不是通用文件管理器，不负责重命名、删除、拖拽、写入或独立打开文件。中央是实际的 `AnnotationViewport`。右栏上方是可滚动的区域属性 Inspector，下方固定一个无分类、四列平铺的 `2D Tools` 工具区。
 
-工具区按固定顺序提供十二个位置：Add Box、Subtract、Lasso、Fill、Erase、Close、Paint、Wipe、Region Growing、Live Wire、Selection、Move / Resize。其中只有 **Add Box、Fill、Erase、Selection、Move / Resize** 接入现有 Edit 插件。其余七项只是明确的预留控件；点击后只显示 `待开发`，不会改变当前工具或标注状态。
+工作 Edit 插件按固定顺序提供十二个工具描述：Add Box、Subtract、Lasso、Fill、Erase、Close、Paint、Wipe、Region Growing、Live Wire、Selection、Move / Resize。其中只有 **Add Box、Fill、Erase、Selection、Move / Resize** 接入当前交互。其余七项只是明确的预留控件；点击后只显示 `待开发`，不会改变当前工具或标注状态。ToolPanel 本身不保存这些具体 ID，新 Edit 插件可以提供自己的描述而不修改核心。
 
 该布局只调整客户端组合和导航呈现，不改变 Plugin API version 1，也不改变 Part 1 的 Source、Render、Edit、Feedback、Schema、Store、History 和 Python 契约。
 
@@ -71,7 +71,13 @@ ffprobe -version
 
 ## 生成并验证必需样本
 
-输出目录必须不存在。种子 `6006` 会确定性生成 120 帧 640×360 图像、模型标注、数据清单、哈希和缺陷清单。
+输出目录必须不存在。不传参数时，默认输出到 `sample/assignment_v1`，并使用固定种子 `6006`，确定性生成 120 帧 640×360 图像、模型标注、数据清单、哈希和缺陷清单：
+
+```bash
+.venv/bin/python python/make_sample_input.py
+```
+
+如需显式指定参数，等价命令为：
 
 ```bash
 .venv/bin/python python/make_sample_input.py --output sample/assignment_v1 --seed 6006
@@ -91,6 +97,8 @@ Part 1.1 只有一个权威 Schema：`core/schemas/model_output_v1.schema.json`�
 ```
 
 之后客户端会像处理生成图像序列一样处理 `sample/normalized_video`。系统不以编解码器播放位置作为标注真值；manifest 帧索引和时间戳才是权威值。
+
+规范化保留 FFmpeg 的默认显示方向变换，因此 manifest 宽高总是实际输出 PNG 的像素宽高，不是旋转前的编码宽高。合法的负起始时间戳会使用同一偏移整体平移到 `0`，保留原始可变帧率间隔；仅当所有帧都没有时间戳时，才按 `frame_index / nominal_fps` 合成时间。部分帧缺失时间戳会被明确拒绝，避免混用真实时间与推测时间。
 
 ## 运行测试
 
@@ -118,7 +126,7 @@ Part 1.1 只有一个权威 Schema：`core/schemas/model_output_v1.schema.json`�
 4. 再次点击 **Open**，选择归一化目录 `sample/assignment_v1`。确认左侧帧数与 manifest 一致，只显示真实元数据文件；中央显示第 0 帧及模型区域，右侧 Inspector 可滚动，播放和时间线控件位于底部。
 5. 尝试打开损坏或不支持的文件。状态栏必须说明拒绝原因，之前的浏览器、图像、标注、帧位置和历史记录仍可使用。
 6. 调整工作区的两个分隔条，确认中央视口仍可用，并且没有引入停靠或文件管理行为。
-7. 确认顶部仍包含 Open、Save、Undo、Redo 和 Export。Save 和 Export 在 Part 1 边界中故意保持禁用。
+7. 确认顶部仍包含 Open、Save、Undo、Redo 和 Export。Save 保持禁用；打开有效数据源后 Export 启用，选择父目录后生成新的 `training_update_v1/`，已有同名目录不会被覆盖。
 
 ### 当前键盘快捷键
 
@@ -139,14 +147,14 @@ Part 1.1 只有一个权威 Schema：`core/schemas/model_output_v1.schema.json`�
 
 ## 插件概览
 
-启动时，Registry 扫描 `client/plugins` 并按 API version 1 验证每个 manifest。
+启动时，Registry 扫描 Main 的 `plugin_roots`（默认为 `client/plugins`），并按 API version 1 验证 manifest、抽象 Stage 继承和方法参数。Source 默认按 priority 路由，只有显式配置 `source_plugin_id` 才优先指定插件。
 
-- Source：`image_sequence_source` 读取归一化目录；`single_image_source` 将 PNG/JPG/JPEG 适配为一个索引帧。
+- Source：`image_sequence_source` 读取归一化目录；`single_image_source` 将 PNG/JPG/JPEG 适配为一个索引帧。Main 调用插件的 `can_open` 路由，通过 `get_presentation` 获取文件或服务器来源的浏览信息，不硬编码扩展名、`image_path` 或产物文件名分支。
 - Render：`canvas_region_renderer` 通过共享视口变换绘制图像坐标中的区域。
-- Edit：`basic_edit_tools` 实现 Add Box、Fill、Erase、Selection、Move / Resize，并向有界 history 提交已验证命令；其余七个工具停留在界面层的 `待开发` 边界。
-- 导出/回传：`file_training_handoff` 验证修正快照，保留每条记录原有的帧来源，并原子写入单独的 JSONL。它不会覆盖 `model_output_v1.jsonl`；Part 1 中不启用其界面按钮。
+- Edit：`basic_edit_tools` 提供工具描述和通用 `invoke` 动作，实现 Add Box、Fill、Erase、Selection、Move / Resize 以及可撤销的 `range_propagate`；其余七个工具保持明确的 `待开发` 边界。
+- 导出/回传：`file_training_handoff` 验证修正快照并原子发布 `training_update_v1/`。包内 manifest 记录源数据/模型摘要、范围操作和 corrected JSONL 的字节数与 SHA-256；它不会覆盖 `model_output_v1.jsonl`。
 
-新增插件需要新插件目录和 `plugin.json`，不应修改 Registry。精确方法、生命周期、所有权规则和兼容性测试见 [docs/plugin-api.md](docs/plugin-api.md)。
+新增插件只需要新插件目录、七字段 `plugin.json` 和对应 Stage 实现；独立团队目录追加到 `plugin_roots`，不应修改 Registry、Main 或 ToolPanel 的分支。精确方法、生命周期、所有权规则和兼容性测试见 [docs/plugin-api.md](docs/plugin-api.md)。
 
 ## 仓库布局
 

@@ -52,7 +52,14 @@ static func run(support: TestSupport) -> void:
 	support.expect_equal(store.replace_corrected_record(0, corrected), PackedStringArray(), "corrected edit should apply")
 	var feedback = FEEDBACK_SCRIPT.new()
 	support.expect_equal(
-		feedback.export({"records": store.snapshot_corrected(), "output_path": root.path_join("corrected.jsonl")}),
+		feedback.export({
+			"records": store.snapshot_corrected(),
+			"output_path": root.path_join("training_update_v1"),
+			"source_manifest": manifest,
+			"model_digest": store.model_digest(),
+			"dirty_frames": [0],
+			"batch_operations": [],
+		}),
 		PackedStringArray(),
 		"corrected export should succeed at a different path",
 	)

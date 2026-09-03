@@ -7,6 +7,7 @@ const VALIDATOR_SCRIPT := preload("res://client/domain/model_output_validator.gd
 var _model_records: Dictionary = {}
 var _corrected_records: Dictionary = {}
 var _dirty_frames: Dictionary = {}
+var _batch_operations: Array[Dictionary] = []
 var _validator = VALIDATOR_SCRIPT.new()
 
 
@@ -38,6 +39,7 @@ func load_model_records(records: Variant) -> PackedStringArray:
 	_model_records = next_model
 	_corrected_records = next_model.duplicate(true)
 	_dirty_frames.clear()
+	_batch_operations.clear()
 	return errors
 
 
@@ -68,20 +70,49 @@ func _model_output_projection(record: Variant) -> Variant:
 
 
 func replace_corrected_record(frame: int, record: Variant) -> PackedStringArray:
-	var errors: PackedStringArray = _validator.validate_record(
-		_model_output_projection(record)
-	)
-	if not _corrected_records.has(frame):
-		errors.append("frame: frame %d does not exist" % frame)
-	if record is Dictionary:
-		var record_frame: Variant = record.get("frame")
-		if not _is_logical_integer(record_frame) or int(record_frame) != frame:
-			errors.append("frame: record frame must match key %d" % frame)
+	var errors := _validate_replacement(frame, record)
 	if not errors.is_empty():
 		return errors
 	_corrected_records[frame] = record.duplicate(true)
 	_dirty_frames[frame] = true
 	return errors
+
+
+func replace_corrected_records(replacements: Dictionary, operation: Dictionary = {}) -> PackedStringArray:
+	var errors := PackedStringArray()
+	if replacements.is_empty():
+		return PackedStringArray(["replacements: expected at least one frame"])
+	var frames: Array[int] = []
+	for frame_value: Variant in replacements:
+		if not _is_logical_integer(frame_value):
+			errors.append("replacements.%s: frame key must be an integer" % str(frame_value))
+		else:
+			frames.append(int(frame_value))
+	if not errors.is_empty():
+		return errors
+	frames.sort()
+	for frame: int in frames:
+		for error: String in _validate_replacement(frame, replacements[frame]):
+			errors.append("replacements.%d.%s" % [frame, error])
+	if not errors.is_empty():
+		return errors
+	for frame: int in frames:
+		_corrected_records[frame] = (replacements[frame] as Dictionary).duplicate(true)
+		_dirty_frames[frame] = true
+	if not operation.is_empty():
+		_batch_operations.append(operation.duplicate(true))
+	return errors
+
+
+func restore_corrected_records(replacements: Dictionary, operation_count: int) -> void:
+	var errors := replace_corrected_records(replacements)
+	if not errors.is_empty():
+		return
+	_batch_operations.resize(clampi(operation_count, 0, _batch_operations.size()))
+
+
+func snapshot_batch_operations() -> Array:
+	return _batch_operations.duplicate(true)
 
 
 func get_frame_count() -> int:
@@ -111,6 +142,17 @@ func snapshot_corrected() -> Array:
 func model_digest() -> String:
 	var canonical_records: Array = _canonicalize(_sorted_record_copies(_model_records))
 	return JSON.stringify(canonical_records).sha256_text()
+
+
+func _validate_replacement(frame: int, record: Variant) -> PackedStringArray:
+	var errors: PackedStringArray = _validator.validate_record(_model_output_projection(record))
+	if not _corrected_records.has(frame):
+		errors.append("frame: frame %d does not exist" % frame)
+	if record is Dictionary:
+		var record_frame: Variant = record.get("frame")
+		if not _is_logical_integer(record_frame) or int(record_frame) != frame:
+			errors.append("frame: record frame must match key %d" % frame)
+	return errors
 
 
 func _sorted_record_copies(records: Dictionary) -> Array:

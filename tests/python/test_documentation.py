@@ -75,26 +75,38 @@ def test_architecture_document_contains_required_pipeline_and_ownership() -> Non
 def test_plugin_api_documents_the_stable_version1_contract() -> None:
     api = _read("docs/plugin-api.md")
     lower = api.lower()
-    for manifest_field in ("id", "version", "api_version", "stage", "entry"):
+    for manifest_field in (
+        "id",
+        "version",
+        "api_version",
+        "stage",
+        "entry",
+        "priority",
+        "capabilities",
+    ):
         assert f"`{manifest_field}`" in api
     for stage in ("source", "render", "edit", "feedback"):
         assert stage in lower
     for method in (
+        "can_open",
         "open",
         "get_frame_count",
         "get_frame_entry",
         "get_model_records",
         "get_manifest",
+        "get_presentation",
         "load_texture",
         "close",
         "set_state",
         "draw",
         "hit_test",
         "activate",
+        "get_tool_descriptors",
         "set_active_tool",
         "get_active_tool",
         "handle_pointer",
         "handle_key",
+        "invoke",
         "begin_add_box",
         "cancel",
         "relabel_selected",
@@ -117,6 +129,20 @@ def test_plugin_api_documents_the_stable_version1_contract() -> None:
         "不修改 registry",
     ):
         assert phrase in lower
+
+
+def test_plugin_contracts_and_manifests_ship_in_exported_builds() -> None:
+    for relative_path in (
+        "client/pipeline/stages/source_stage.gd",
+        "client/pipeline/stages/render_stage.gd",
+        "client/pipeline/stages/edit_stage.gd",
+        "client/pipeline/stages/feedback_stage.gd",
+        "client/pipeline/plugin_descriptor.gd",
+    ):
+        assert (ROOT / relative_path).is_file()
+
+    export_config = _read("export_presets.cfg")
+    assert "client/plugins/**/*.json" in export_config
 
 
 def test_traceability_covers_part1_and_blocks_later_scope() -> None:

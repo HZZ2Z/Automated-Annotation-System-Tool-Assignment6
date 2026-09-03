@@ -3,5 +3,7 @@
   "version": "1.0.0",
   "api_version": 1,
   "stage": "render",
-  "entry": "plugin.gd"
+  "entry": "plugin.gd",
+  "priority": 100,
+  "capabilities": ["draw.image", "draw.regions", "hit_test"]
 }

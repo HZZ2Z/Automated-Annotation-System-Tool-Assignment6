@@ -97,6 +97,129 @@ def make_two_stream_video(tmp_path: Path) -> Path:
     return video_path
 
 
+def make_rotated_video(tmp_path: Path) -> Path:
+    source_dir = tmp_path / "rotated-source"
+    source_dir.mkdir()
+    for index, color in enumerate(((20, 40, 80), (50, 90, 140), (90, 150, 210)), start=1):
+        image = np.full((24, 32, 3), color, dtype=np.uint8)
+        assert cv2.imwrite(str(source_dir / f"source_{index:02d}.png"), image)
+
+    base_path = tmp_path / "unrotated.mp4"
+    encode_result = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "2",
+            "-i",
+            str(source_dir / "source_%02d.png"),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(base_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert encode_result.returncode == 0, encode_result.stderr
+
+    rotated_path = tmp_path / "rotated.mp4"
+    rotate_result = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-display_rotation",
+            "90",
+            "-i",
+            str(base_path),
+            "-c",
+            "copy",
+            str(rotated_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert rotate_result.returncode == 0, rotate_result.stderr
+    return rotated_path
+
+
+def make_negative_pts_video(tmp_path: Path) -> Path:
+    source_dir = tmp_path / "negative-pts-source"
+    source_dir.mkdir()
+    for index in range(1, 5):
+        image = np.full((24, 32, 3), 40 * index, dtype=np.uint8)
+        assert cv2.imwrite(str(source_dir / f"source_{index:02d}.png"), image)
+
+    video_path = tmp_path / "negative-pts.mkv"
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "2",
+            "-i",
+            str(source_dir / "source_%02d.png"),
+            "-vf",
+            "setpts=PTS-1/TB",
+            "-fps_mode",
+            "passthrough",
+            "-avoid_negative_ts",
+            "disabled",
+            "-c:v",
+            "ffv1",
+            str(video_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return video_path
+
+
+def make_timestamp_less_h264(tmp_path: Path) -> Path:
+    source_dir = tmp_path / "raw-h264-source"
+    source_dir.mkdir()
+    for index, color in enumerate(((20, 10, 60), (80, 40, 120), (160, 90, 220)), start=1):
+        image = np.full((24, 32, 3), color, dtype=np.uint8)
+        assert cv2.imwrite(str(source_dir / f"source_{index:02d}.png"), image)
+
+    video_path = tmp_path / "timestamp-less.h264"
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-framerate",
+            "25",
+            "-i",
+            str(source_dir / "source_%02d.png"),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-f",
+            "h264",
+            str(video_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return video_path
+
+
 @requires_ffmpeg
 def test_decode_video_normalizes_a_real_lossless_video(tmp_path: Path) -> None:
     video_path = make_three_frame_video(tmp_path)
@@ -138,6 +261,73 @@ def test_decode_video_uses_first_stream_even_when_second_is_default(tmp_path: Pa
     assert all(
         cv2.imread(str(path), cv2.IMREAD_COLOR).shape == (24, 32, 3)
         for path in sorted((output_dir / "frames").glob("*.png"))
+    )
+
+
+@requires_ffmpeg
+def test_decode_video_uses_display_oriented_pixel_dimensions(tmp_path: Path) -> None:
+    video_path = make_rotated_video(tmp_path)
+    output_dir = tmp_path / "normalized"
+
+    result = decode_video(video_path, output_dir)
+
+    assert (result["width"], result["height"], result["frame_count"]) == (24, 32, 3)
+    assert all(
+        cv2.imread(str(path), cv2.IMREAD_COLOR).shape == (32, 24, 3)
+        for path in sorted((output_dir / "frames").glob("*.png"))
+    )
+
+
+@requires_ffmpeg
+def test_decode_video_normalizes_negative_start_time_without_changing_intervals(
+    tmp_path: Path,
+) -> None:
+    video_path = make_negative_pts_video(tmp_path)
+    output_dir = tmp_path / "normalized"
+
+    result = decode_video(video_path, output_dir)
+
+    assert result["frame_count"] == 4
+    assert [entry["frame"] for entry in result["frames"]] == [0, 1, 2, 3]
+    assert [entry["time_s"] for entry in result["frames"]] == pytest.approx(
+        [0.0, 0.5, 1.0, 1.5]
+    )
+
+
+@requires_ffmpeg
+def test_decode_video_synthesizes_times_when_all_frame_timestamps_are_missing(
+    tmp_path: Path,
+) -> None:
+    video_path = make_timestamp_less_h264(tmp_path)
+    probe_result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_frames",
+            "-show_entries",
+            "frame=best_effort_timestamp_time",
+            "-of",
+            "json",
+            str(video_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert probe_result.returncode == 0, probe_result.stderr
+    probed_frames = json.loads(probe_result.stdout)["frames"]
+    assert probed_frames
+    assert all("best_effort_timestamp_time" not in frame for frame in probed_frames)
+
+    result = decode_video(video_path, tmp_path / "normalized")
+
+    assert result["frame_count"] == 3
+    assert [entry["frame"] for entry in result["frames"]] == [0, 1, 2]
+    assert [entry["time_s"] for entry in result["frames"]] == pytest.approx(
+        [0.0, 0.04, 0.08]
     )
 
 

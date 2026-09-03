@@ -1,4 +1,4 @@
-extends RefCounted
+extends "res://client/pipeline/stages/source_stage.gd"
 
 const SUPPORTED_EXTENSIONS := ["png", "jpg", "jpeg"]
 
@@ -8,6 +8,11 @@ var _manifest: Dictionary = {}
 var _record: Dictionary = {}
 var _image: Image
 var _texture: Texture2D
+
+
+func can_open(locator: String) -> bool:
+	var absolute := ProjectSettings.globalize_path(locator).simplify_path()
+	return not DirAccess.dir_exists_absolute(absolute) and absolute.get_extension().to_lower() in SUPPORTED_EXTENSIONS
 
 
 func open(path: String) -> PackedStringArray:
@@ -88,6 +93,17 @@ func get_model_records() -> Array[Dictionary]:
 
 func get_manifest() -> Dictionary:
 	return _manifest.duplicate(true)
+
+
+func get_presentation() -> Dictionary:
+	if _path.is_empty():
+		return {}
+	return {
+		"display_name": _path.get_file(),
+		"source_path": _path,
+		"frames": [{"index": 0, "label": _path.get_file(), "path": _path}],
+		"artifacts": [],
+	}
 
 
 func load_texture(index: int) -> Texture2D:

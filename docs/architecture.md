@@ -50,20 +50,52 @@ MainVBox
 
 `DatasetExplorer` 只是 `AnnotationMain` 已接受数据源的只读投影，不是通用文件管理器。只有候选数据源事务完整提交后，它才接收由标签和路径组成的深拷贝视图模型。用户选择帧只发出一次导航请求；程序更新当前帧高亮时会抑制反向事件，避免反馈循环。单图模式只显示真实图像及一个索引帧；规范化目录显示 manifest 中的帧，并只列出确实存在的元数据文件。
 
-中央 `AnnotationViewport`、既有 Renderer 和图像坐标变换仍是唯一显示路径。右侧 `InspectorPanel` 位于可滚动区域中，其下方固定无分类、四列的十二槽工具区。Add Box、Fill、Erase、Selection、Move / Resize 进入现有 Edit 插件；Subtract、Lasso、Close、Paint、Wipe、Region Growing、Live Wire 只进入界面层不可用信号，精确显示 `待开发`，不会修改当前工具、选择、标注、手势或历史。
+中央 `AnnotationViewport`、所选 Renderer 和图像坐标变换是唯一显示路径。右侧 `InspectorPanel` 位于可滚动区域中，其下方固定无分类、四列工具区。十二个按钮的 ID、名称、图标和可用性由 `basic_edit_tools` 的 descriptors 提供；ToolPanel 只负责校验和呈现。Add Box、Fill、Erase、Selection、Move / Resize 进入 Edit 插件，其余七项发出不可用意图并精确显示 `待开发`。
 
 各层所有权如下：
 
-- `AnnotationMain` 组装应用并执行失败原子的 Source 替换，不实现解码、绘制、编辑或导出细节。
+- `AnnotationMain` 组装应用并执行失败原子的 Source 替换，只通过 Stage API 调用插件，不实现解码、绘制、编辑或导出细节。
 - `DatasetExplorer` 只拥有当前数据集的呈现和帧请求意图，不打开、验证、缓存、编辑或写入源数据。
-- `ToolPanel` 拥有声明式十二槽呈现表，并把可用编辑意图与不可用工具意图分开。
+- `ToolPanel` 消费 Edit 插件的声明式工具描述，并把可用编辑意图与不可用工具意图分开。
 - Source 插件拥有文件句柄和缓存，并返回 manifest 与模型记录的深拷贝。
 - `AnnotationStore` 分别拥有不可变模型基线和可编辑修正副本。
-- `AnnotationViewport` 负责输入到图像坐标的转换，并把绘制委托给 Render 插件。
-- Edit 插件只拥有临时手势状态；完成的修改作为一条命令进入 `CommandHistory`。
-- Feedback 插件验证修正快照并通过同目录临时文件加重命名原子发布独立 JSONL；它不覆盖 `model_output_v1.jsonl`。
+- `AnnotationViewport` 负责输入到图像坐标的转换，并把绘制委托给注入的 Render 插件；未注入时只使用无业务依赖的 NullRenderer。
+- Edit 插件拥有工具描述和临时手势状态；单帧修改或整段传播都作为一条命令进入 `CommandHistory`。
+- Feedback 插件验证修正快照，在目标同级 staging 后原子发布带 manifest 和 SHA-256 的训练交接目录；它不覆盖 `model_output_v1.jsonl`。
 
 这一界面组合不改变 Plugin API version 1，也不改变 Part 1 的 Source、Render、Edit、Feedback、Schema、Store、History、Renderer 或 Python 边界。
+
+### 3.1 Part 1.4 插件结构
+
+```text
+client/pipeline/
+├── plugin_api.gd                 # V1 方法/参数数量
+├── plugin_descriptor.gd          # 发现元数据
+├── plugin_registry.gd            # 多目录发现、Stage 继承校验、工厂、Source 路由
+├── null_renderer.gd              # 视口的中性缺省对象
+└── stages/
+    ├── source_stage.gd
+    ├── render_stage.gd
+    ├── edit_stage.gd
+    └── feedback_stage.gd
+
+client/plugins/<stage>/<plugin>/
+├── plugin.json                   # id/version/api/stage/entry/priority/capabilities
+└── plugin.gd                     # 对应抽象 Stage 的实现
+```
+
+Registry 启动时从 Main 的 `plugin_roots` 发现 manifest，强制入口脚本继承声明的抽象 Stage，保存 descriptor 和 Script，不保存有状态插件单例。Main 使用 `create_plugin` 获得独立实例。Source 是否接受 locator 由 `can_open` 决定，默认按 priority 选择；文件、帧服务器等来源的浏览元数据由 `get_presentation` 提供，Main 不再推测文件名。Edit 的按钮由 `get_tool_descriptors` 决定，Inspector 行为经 `invoke` 进入插件。因此增加新来源或替换工具不需要修改 Registry、Main 或 ToolPanel 的格式分支。
+
+范围传播把 keyframe 区域以 `overwrite` 或 `merge` 模式复制到闭区间目标帧。命令先构建并验证全部记录，然后由 Store 原子替换；目标记录的 `source`、`frame` 和 `time_s` 不变，整段只占一个 undo/redo 项。传播 marker 存入独立 batch operation 列表，Model Output V1 仍只包含其 Schema 允许的字段。
+
+Feedback 输出如下，`manifest.json` 保存源数据集/模型/taxonomy 身份、覆盖信息、batch operations 与 artifact 的字节数和 SHA-256：
+
+```text
+training_update_v1/
+├── manifest.json
+└── data/
+    └── corrected_annotations.jsonl
+```
 
 ## 4. Part 1.1 模块所有权
 
@@ -143,6 +175,8 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 | 编辑命令 | `client/domain/commands/`、`command_history.gd` | 已验证的可撤销修改 |
 | 样本生成 | `python/annotool/sample.py`、`python/make_sample_input.py` | 生成 `sample_v1` 和 `model_output_v1.jsonl` |
 | 帧源归一化 | `python/annotool/frame_source.py`、`python/frame_source.py` | 将视频解码为索引帧和内部数据清单 |
+
+帧源归一化先用 `ffprobe` 获取第一个视频流的帧时间，再用同一个 `0:v:0` 流逐帧输出 PNG。FFmpeg 默认应用显示旋转，manifest 因此从实际 PNG 读回显示后宽高，并拒绝中途变尺寸的序列。负起始 PTS 整体平移到零而不改变帧间隔；整段无 PTS 时用 nominal FPS 合成时间，部分缺失则拒绝。发布前还会核对探测帧数与 PNG 帧数，然后原子替换到目标目录。客户端只读这个索引帧目录契约，因此视频与原生图像序列走同一 Source 路径。
 
 ## 7. 常见修改导航
 

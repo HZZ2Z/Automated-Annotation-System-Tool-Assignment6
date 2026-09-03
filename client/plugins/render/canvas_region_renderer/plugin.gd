@@ -1,4 +1,4 @@
-extends RefCounted
+extends "res://client/pipeline/stages/render_stage.gd"
 
 const TAXONOMY_PATH := "res://core/taxonomy/classes.json"
 const DEFAULT_COLOR := Color("#a855f7")

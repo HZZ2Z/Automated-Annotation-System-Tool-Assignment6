@@ -1,4 +1,4 @@
-extends RefCounted
+extends "res://client/pipeline/stages/edit_stage.gd"
 
 
 const MOVE_COMMAND := preload("res://client/domain/commands/move_region_command.gd")
@@ -8,8 +8,23 @@ const DELETE_COMMAND := preload("res://client/domain/commands/delete_region_comm
 const RELABEL_COMMAND := preload("res://client/domain/commands/relabel_region_command.gd")
 const TRACK_COMMAND := preload("res://client/domain/commands/set_track_id_command.gd")
 const FILL_COMMAND := preload("res://client/domain/commands/toggle_fill_command.gd")
+const PROPAGATE_COMMAND := preload("res://client/domain/commands/propagate_range_command.gd")
 const HANDLE_TOLERANCE_VIEWPORT_PX := 8.0
 const TOOL_IDS: Array[StringName] = [&"select", &"move", &"box", &"fill", &"delete"]
+const TOOL_DESCRIPTORS: Array[Dictionary] = [
+	{"id": &"box", "node_name": "Box", "label": "Add Box", "presentation_text": "Add\nBox", "implemented": true, "tooltip": "Drag to add a box", "icon_path": "res://client/ui/icons/tools/add_box.svg"},
+	{"id": &"subtract", "node_name": "Subtract", "label": "Subtract", "implemented": false, "tooltip": "Reserved 2D subtraction tool", "icon_path": "res://client/ui/icons/tools/subtract.svg"},
+	{"id": &"lasso", "node_name": "Lasso", "label": "Lasso", "implemented": false, "tooltip": "Reserved freehand lasso tool", "icon_path": "res://client/ui/icons/tools/lasso.svg"},
+	{"id": &"fill", "node_name": "Fill", "label": "Fill", "implemented": true, "tooltip": "Toggle fill on the selected region", "icon_path": "res://client/ui/icons/tools/fill.svg"},
+	{"id": &"delete", "node_name": "Delete", "label": "Erase", "implemented": true, "tooltip": "Click a region to erase it", "icon_path": "res://client/ui/icons/tools/erase.svg"},
+	{"id": &"close", "node_name": "Close", "label": "Close", "implemented": false, "tooltip": "Reserved contour-closing tool", "icon_path": "res://client/ui/icons/tools/close.svg"},
+	{"id": &"paint", "node_name": "Paint", "label": "Paint", "implemented": false, "tooltip": "Reserved brush painting tool", "icon_path": "res://client/ui/icons/tools/paint.svg"},
+	{"id": &"wipe", "node_name": "Wipe", "label": "Wipe", "implemented": false, "tooltip": "Reserved wipe tool", "icon_path": "res://client/ui/icons/tools/wipe.svg"},
+	{"id": &"region_growing", "node_name": "RegionGrowing", "label": "Region Growing", "presentation_text": "Region\nGrowing", "implemented": false, "tooltip": "Reserved region-growing tool", "icon_path": "res://client/ui/icons/tools/region_growing.svg"},
+	{"id": &"live_wire", "node_name": "LiveWire", "label": "Live Wire", "presentation_text": "Live\nWire", "implemented": false, "tooltip": "Reserved live-wire tool", "icon_path": "res://client/ui/icons/tools/live_wire.svg"},
+	{"id": &"select", "node_name": "Select", "label": "Selection", "implemented": true, "default": true, "tooltip": "Select a region", "icon_path": "res://client/ui/icons/tools/selection.svg"},
+	{"id": &"move", "node_name": "Move", "label": "Move / Resize", "presentation_text": "Move /\nResize", "implemented": true, "tooltip": "Move or resize the selected region", "icon_path": "res://client/ui/icons/tools/move_resize.svg"},
+]
 
 var _store: Variant
 var _history: Variant
@@ -31,6 +46,39 @@ var _drag_before: Dictionary = {}
 var _resize_handle := -1
 var _preview_record: Dictionary = {}
 var _keyboard_box: Array = []
+
+
+func get_tool_descriptors() -> Array[Dictionary]:
+	return TOOL_DESCRIPTORS.duplicate(true)
+
+
+func invoke(action_id: StringName, payload: Dictionary = {}) -> PackedStringArray:
+	match action_id:
+		&"begin_add_box":
+			begin_add_box()
+			return PackedStringArray()
+		&"relabel_selected":
+			return relabel_selected(str(payload.get("class", "")))
+		&"set_selected_track_id":
+			return set_selected_track_id(payload.get("track_id"))
+		&"set_selected_fill":
+			return set_selected_fill(bool(payload.get("filled", false)))
+		&"set_selected_geometry":
+			var box: Variant = payload.get("box")
+			return set_selected_geometry(box if box is Array else [])
+		&"delete_selected":
+			return delete_selected()
+		&"range_propagate":
+			var command = PROPAGATE_COMMAND.new(
+				payload.get("keyframe"), payload.get("start_frame"), payload.get("end_frame"), str(payload.get("mode", ""))
+			)
+			var errors: PackedStringArray = _history.execute(command, _store) if _active else PackedStringArray(["edit plugin is not active"])
+			if errors.is_empty():
+				_refresh_current_frame()
+			else:
+				_report_errors(errors)
+			return errors
+	return PackedStringArray(["Unsupported edit action: %s" % action_id])
 
 
 func activate(context: Dictionary) -> PackedStringArray:

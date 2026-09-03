@@ -1,7 +1,7 @@
 extends RefCounted
 
 const TOOL_PANEL_SCENE := "res://client/ui/tool_panel.tscn"
-const TOOL_PANEL_SCRIPT := preload("res://client/ui/tool_panel.gd")
+const EDIT_PLUGIN := preload("res://client/plugins/edit/basic_edit_tools/plugin.gd")
 
 
 func run(support, tree: SceneTree) -> void:
@@ -13,6 +13,17 @@ func run(support, tree: SceneTree) -> void:
 	tree.root.add_child(panel)
 	await tree.process_frame
 	panel.size = Vector2(320, 226)
+	await tree.process_frame
+	var grid := panel.get_node("ToolGrid") as GridContainer
+	support.expect(panel.has_method("configure_tools"), "ToolPanel should accept descriptors supplied by an Edit plugin")
+	if not panel.has_method("configure_tools"):
+		panel.queue_free()
+		await tree.process_frame
+		return
+	support.expect_equal(grid.get_child_count(), 0, "ToolPanel core should not construct hard-coded tools")
+	var plugin = EDIT_PLUGIN.new()
+	var definitions: Array[Dictionary] = plugin.get_tool_descriptors()
+	support.expect_equal(panel.configure_tools(definitions), PackedStringArray(), "the working Edit plugin should configure its tool UI")
 	await tree.process_frame
 
 	var expected := [
@@ -29,8 +40,6 @@ func run(support, tree: SceneTree) -> void:
 		["Select", &"select", "Selection", true, "Selection"],
 		["Move", &"move", "Move / Resize", true, "Move /\nResize"],
 	]
-	var grid := panel.get_node("ToolGrid") as GridContainer
-	var definitions: Array[Dictionary] = TOOL_PANEL_SCRIPT.TOOL_DEFINITIONS
 	support.expect_equal(panel.custom_minimum_size.x, 320.0,
 		"ToolPanel should retain the approved 320px minimum width")
 	support.expect(panel.get_combined_minimum_size().x <= 320.0,

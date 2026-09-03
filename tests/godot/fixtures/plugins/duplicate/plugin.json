@@ -1,7 +1,9 @@
 {
-  "id": "fixture-source",
+  "id": "fixture_source",
   "version": "2.0.0",
   "api_version": 1,
   "stage": "source",
-  "entry": "plugin.gd"
+  "entry": "plugin.gd",
+  "priority": 10,
+  "capabilities": ["frames", "model_annotations", "locator.fixture"]
 }

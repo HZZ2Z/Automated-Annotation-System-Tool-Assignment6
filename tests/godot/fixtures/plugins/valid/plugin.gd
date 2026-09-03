@@ -1,4 +1,8 @@
-extends RefCounted
+extends "res://client/pipeline/stages/source_stage.gd"
+
+
+func can_open(_locator: String) -> bool:
+	return true
 
 
 func open(_path: String) -> PackedStringArray:
@@ -18,6 +22,10 @@ func get_model_records() -> Array[Dictionary]:
 
 
 func get_manifest() -> Dictionary:
+	return {}
+
+
+func get_presentation() -> Dictionary:
 	return {}
 
 
