@@ -1,6 +1,7 @@
 extends RefCounted
 
 const TOOL_PANEL_SCENE := "res://client/ui/tool_panel.tscn"
+const TOOL_PANEL_SCRIPT := preload("res://client/ui/tool_panel.gd")
 
 
 func run(support, tree: SceneTree) -> void:
@@ -11,32 +12,70 @@ func run(support, tree: SceneTree) -> void:
 	var panel := packed.instantiate()
 	tree.root.add_child(panel)
 	await tree.process_frame
+	panel.size = Vector2(320, 226)
+	await tree.process_frame
 
 	var expected := [
-		["Box", &"box", "Add Box", true],
-		["Subtract", &"subtract", "Subtract", false],
-		["Lasso", &"lasso", "Lasso", false],
-		["Fill", &"fill", "Fill", true],
-		["Delete", &"delete", "Erase", true],
-		["Close", &"close", "Close", false],
-		["Paint", &"paint", "Paint", false],
-		["Wipe", &"wipe", "Wipe", false],
-		["RegionGrowing", &"region_growing", "Region Growing", false],
-		["LiveWire", &"live_wire", "Live Wire", false],
-		["Select", &"select", "Selection", true],
-		["Move", &"move", "Move / Resize", true],
+		["Box", &"box", "Add Box", true, "Add\nBox"],
+		["Subtract", &"subtract", "Subtract", false, "Subtract"],
+		["Lasso", &"lasso", "Lasso", false, "Lasso"],
+		["Fill", &"fill", "Fill", true, "Fill"],
+		["Delete", &"delete", "Erase", true, "Erase"],
+		["Close", &"close", "Close", false, "Close"],
+		["Paint", &"paint", "Paint", false, "Paint"],
+		["Wipe", &"wipe", "Wipe", false, "Wipe"],
+		["RegionGrowing", &"region_growing", "Region Growing", false, "Region\nGrowing"],
+		["LiveWire", &"live_wire", "Live Wire", false, "Live\nWire"],
+		["Select", &"select", "Selection", true, "Selection"],
+		["Move", &"move", "Move / Resize", true, "Move /\nResize"],
 	]
 	var grid := panel.get_node("ToolGrid") as GridContainer
+	var definitions: Array[Dictionary] = TOOL_PANEL_SCRIPT.TOOL_DEFINITIONS
+	support.expect_equal(panel.custom_minimum_size.x, 320.0,
+		"ToolPanel should retain the approved 320px minimum width")
+	support.expect(panel.get_combined_minimum_size().x <= 320.0,
+		"ToolPanel content should fit its real 320px width")
 	support.expect_equal(grid.columns, 4, "ToolPanel should use one flat four-column grid")
 	support.expect_equal(grid.get_child_count(), 12, "ToolPanel should expose twelve stable slots")
+	support.expect_equal(definitions.size(), expected.size(),
+		"ToolPanel should retain twelve approved registry entries")
+	var button_height := -1.0
 	for position in range(expected.size()):
 		var row: Array = expected[position]
+		var definition: Dictionary = definitions[position]
+		support.expect_equal(definition.get("node_name"), row[0],
+			"registry position %d should retain its approved node" % position)
+		support.expect_equal(definition.get("id"), row[1],
+			"%s should retain its approved registry ID" % row[0])
+		support.expect_equal(definition.get("label"), row[2],
+			"%s should retain its approved registry label" % row[0])
+		support.expect_equal(definition.get("implemented"), row[3],
+			"%s should retain its implemented/reserved behavior" % row[0])
 		var button := grid.get_node_or_null(row[0]) as Button
 		support.expect(button != null, "ToolPanel should expose %s" % row[0])
 		if button != null:
 			support.expect_equal(button.get_index(), position,
 				"%s should retain its approved position" % row[0])
-			support.expect_equal(button.text, row[2], "%s should show its approved label" % row[0])
+			support.expect_equal(button.text, row[4],
+				"%s should use the approved compact presentation" % row[0])
+			support.expect(button.text.split("\n").size() <= 2,
+				"%s should use at most two explicit text lines" % row[0])
+			support.expect_equal(button.autowrap_mode, TextServer.AUTOWRAP_OFF,
+				"%s should not add automatic lines at 320px" % row[0])
+			var icon_max_width := button.get_theme_constant("icon_max_width")
+			support.expect(icon_max_width >= 16 and icon_max_width <= 18,
+				"%s should keep a clear icon within the narrow cell" % row[0])
+			var font_size := button.get_theme_font_size("font_size")
+			support.expect(font_size >= 11 and font_size <= 12,
+				"%s should use a readable compact font" % row[0])
+			var minimum_width := button.get_combined_minimum_size().x
+			support.expect(minimum_width <= 77.0,
+				"%s should fit one quarter of the real 320px grid (got %.1fpx)" % [row[0], minimum_width])
+			if button_height < 0.0:
+				button_height = button.size.y
+			else:
+				support.expect(is_equal_approx(button.size.y, button_height),
+					"%s should match every tool button height" % row[0])
 			support.expect(button.icon != null, "%s should use an original local icon" % row[0])
 			support.expect(not button.tooltip_text.is_empty(), "%s should explain its intent" % row[0])
 

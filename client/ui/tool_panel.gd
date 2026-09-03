@@ -32,6 +32,14 @@ const TOOL_DEFINITIONS: Array[Dictionary] = [
 		"tooltip": "Move or resize the selected region",
 		"icon": preload("res://client/ui/icons/tools/move_resize.svg")},
 ]
+const TOOL_PRESENTATION_TEXT := {
+	&"box": "Add\nBox",
+	&"region_growing": "Region\nGrowing",
+	&"live_wire": "Live\nWire",
+	&"move": "Move /\nResize",
+}
+const COMPACT_ICON_MAX_WIDTH := 16
+const COMPACT_FONT_SIZE := 11
 
 @onready var _grid: GridContainer = $ToolGrid
 
@@ -47,12 +55,14 @@ func _ready() -> void:
 		var implemented: bool = definition["implemented"]
 		var button := Button.new()
 		button.name = definition["node_name"]
-		button.text = definition["label"]
+		button.text = str(TOOL_PRESENTATION_TEXT.get(tool_id, definition["label"]))
 		button.tooltip_text = definition["tooltip"]
 		button.icon = definition["icon"]
 		button.custom_minimum_size = Vector2(76, 62)
 		button.expand_icon = false
-		button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		button.autowrap_mode = TextServer.AUTOWRAP_OFF
+		button.add_theme_constant_override("icon_max_width", COMPACT_ICON_MAX_WIDTH)
+		button.add_theme_font_size_override("font_size", COMPACT_FONT_SIZE)
 		button.toggle_mode = implemented
 		if implemented:
 			button.button_group = _button_group
