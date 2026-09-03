@@ -100,6 +100,10 @@ func close() -> void:
 
 func _load_texture_uncached(index: int) -> Texture2D:
 	var entry: Dictionary = _manifest["frames"][index]
+	var link_error := _path_link_error(_root, entry["image_path"])
+	if not link_error.is_empty():
+		last_error = "frame %d path is unsafe: %s" % [index, link_error]
+		return null
 	var frame_path := _root.path_join(entry["image_path"])
 	if not FileAccess.file_exists(frame_path):
 		last_error = "frame %d file is missing: %s" % [index, entry["image_path"]]
@@ -184,6 +188,10 @@ func _validate_manifest(manifest: Dictionary, root: String, errors: PackedString
 		if paths.has(image_path):
 			errors.append("%s.image_path: duplicate path %s" % [entry_path, image_path])
 		paths[image_path] = true
+		var link_error := _path_link_error(root, image_path)
+		if not link_error.is_empty():
+			errors.append("%s.image_path: %s" % [entry_path, link_error])
+			continue
 		var resolved := root.path_join(image_path).simplify_path()
 		if not resolved.begins_with(root + "/"):
 			errors.append("%s.image_path: path escapes source root" % entry_path)
@@ -303,6 +311,18 @@ func _is_safe_relative_path(path: String) -> bool:
 		if segment.is_empty() or segment == "." or segment == "..":
 			return false
 	return true
+
+
+func _path_link_error(root: String, relative_path: String) -> String:
+	var current := root
+	for segment: String in relative_path.split("/", false):
+		var directory := DirAccess.open(current)
+		if directory == null:
+			return "cannot inspect path component %s" % current
+		if directory.is_link(segment):
+			return "symbolic link or junction is not allowed: %s" % current.path_join(segment)
+		current = current.path_join(segment)
+	return ""
 
 
 func _is_sha256(value: String) -> bool:

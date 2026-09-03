@@ -2,17 +2,24 @@ extends RefCounted
 
 const CACHE_SCRIPT = preload("res://client/services/frame_cache.gd")
 const SOURCE_SCRIPT = preload("res://client/plugins/source/image_sequence_source/plugin.gd")
+const TEMP_PREFIX := "/tmp/annotool-task6-"
+
+static var _owned_temp_paths: Array[String] = []
+static var _temp_sequence := 0
 
 
 static func run(support) -> void:
+	_owned_temp_paths.clear()
+	_temp_sequence = 0
 	_test_lru_cache(support)
 	var sample_dir := _generate_sample(support)
-	if sample_dir.is_empty():
-		return
-	_test_generated_sample_and_transaction(support, sample_dir)
+	if not sample_dir.is_empty():
+		_test_generated_sample_and_transaction(support, sample_dir)
 	_test_normalized_video_without_model_output(support)
 	_test_texture_errors_are_recoverable(support)
 	_test_manifest_and_model_failures(support)
+	_test_symlink_paths_are_contained(support)
+	_cleanup_owned_temp_paths(support)
 
 
 static func _test_lru_cache(support) -> void:
@@ -43,7 +50,7 @@ static func _test_lru_cache(support) -> void:
 
 
 static func _generate_sample(support) -> String:
-	var sample_dir := "/tmp/annotool-task6-%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
+	var sample_dir := _new_temp_path("sample")
 	var output: Array = []
 	var python := ProjectSettings.globalize_path("res://.venv/bin/python")
 	var result := OS.execute(python, ["python/make_sample_input.py", "--output", sample_dir, "--seed", "6006"], output, true)
@@ -80,7 +87,7 @@ static func _test_generated_sample_and_transaction(support, sample_dir: String) 
 
 
 static func _test_normalized_video_without_model_output(support) -> void:
-	var root := "/tmp/annotool-task6-normalized-%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
+	var root := _new_temp_path("normalized")
 	DirAccess.make_dir_recursive_absolute(root.path_join("frames"))
 	var image := Image.create(8, 6, false, Image.FORMAT_RGBA8)
 	image.fill(Color.BLUE)
@@ -102,7 +109,7 @@ static func _test_normalized_video_without_model_output(support) -> void:
 
 
 static func _test_manifest_and_model_failures(support) -> void:
-	var root := "/tmp/annotool-task6-invalid-%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
+	var root := _new_temp_path("invalid")
 	DirAccess.make_dir_recursive_absolute(root.path_join("frames"))
 	var image := Image.create(8, 6, false, Image.FORMAT_RGBA8)
 	image.save_png(root.path_join("frames/frame_000000.png"))
@@ -161,25 +168,69 @@ static func _test_manifest_and_model_failures(support) -> void:
 
 
 static func _test_texture_errors_are_recoverable(support) -> void:
-	var missing_root := "/tmp/annotool-task6-missing-frame-%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
+	var missing_root := _new_temp_path("missing-frame")
 	_make_one_frame_source(missing_root, 8, 6)
 	var missing_source = SOURCE_SCRIPT.new()
 	support.expect_equal(missing_source.open(missing_root), PackedStringArray(), "missing-frame fixture should open before its file is removed")
 	DirAccess.remove_absolute(missing_root.path_join("frames/frame_000000.png"))
 	support.expect(missing_source.load_texture(0) == null and "missing" in missing_source.last_error, "missing frame after open should return a readable recoverable error")
 
-	var corrupt_root := "/tmp/annotool-task6-corrupt-frame-%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
+	var corrupt_root := _new_temp_path("corrupt-frame")
 	_make_one_frame_source(corrupt_root, 8, 6)
 	var corrupt_source = SOURCE_SCRIPT.new()
 	support.expect_equal(corrupt_source.open(corrupt_root), PackedStringArray(), "corrupt-frame fixture should open before its file is changed")
 	_write_text(corrupt_root.path_join("frames/frame_000000.png"), "not png data")
 	support.expect(corrupt_source.load_texture(0) == null and "corrupt" in corrupt_source.last_error, "corrupt frame should return a readable recoverable error")
 
-	var wrong_size_root := "/tmp/annotool-task6-wrong-size-%d-%d" % [OS.get_process_id(), Time.get_ticks_usec()]
+	var wrong_size_root := _new_temp_path("wrong-size")
 	_make_one_frame_source(wrong_size_root, 9, 6)
 	var wrong_size_source = SOURCE_SCRIPT.new()
 	support.expect_equal(wrong_size_source.open(wrong_size_root), PackedStringArray(), "wrong-size fixture should open without eagerly decoding textures")
 	support.expect(wrong_size_source.load_texture(0) == null and "dimensions" in wrong_size_source.last_error, "decoded texture dimensions should match the manifest")
+
+
+static func _test_symlink_paths_are_contained(support) -> void:
+	var preserved_root := _new_temp_path("symlink-preserved")
+	_make_one_frame_source(preserved_root, 8, 6)
+	var source = SOURCE_SCRIPT.new()
+	support.expect_equal(source.open(preserved_root), PackedStringArray(), "transaction baseline source should open")
+	var preserved_dataset: String = source.get_manifest().get("dataset_id", "")
+
+	var outside_file_root := _new_temp_path("outside-file")
+	DirAccess.make_dir_recursive_absolute(outside_file_root)
+	var outside_image := Image.create(13, 7, false, Image.FORMAT_RGBA8)
+	outside_image.fill(Color.MAGENTA)
+	var outside_file := outside_file_root.path_join("outside.png")
+	support.expect_equal(outside_image.save_png(outside_file), OK, "outside symlink target should be created")
+
+	var leaf_link_root := _new_temp_path("leaf-link")
+	_make_one_frame_source(leaf_link_root, 8, 6)
+	var leaf_path := leaf_link_root.path_join("frames/frame_000000.png")
+	support.expect_equal(DirAccess.remove_absolute(leaf_path), OK, "leaf fixture file should be removed before linking")
+	support.expect_equal(_create_link(outside_file, leaf_path), OK, "leaf frame symlink should be created")
+	var errors: PackedStringArray = source.open(leaf_link_root)
+	support.expect(_contains(errors, "link"), "open should reject a symlink frame file")
+	support.expect_equal(source.get_manifest().get("dataset_id"), preserved_dataset, "rejected leaf symlink should preserve the prior source")
+
+	var outside_directory_root := _new_temp_path("outside-directory")
+	DirAccess.make_dir_recursive_absolute(outside_directory_root)
+	support.expect_equal(outside_image.save_png(outside_directory_root.path_join("frame_000000.png")), OK, "outside directory target frame should be created")
+	var directory_link_root := _new_temp_path("directory-link")
+	DirAccess.make_dir_recursive_absolute(directory_link_root)
+	_write_json(directory_link_root.path_join("manifest.json"), _base_manifest("directory-link", "none", 8, 6))
+	support.expect_equal(_create_link(outside_directory_root, directory_link_root.path_join("frames")), OK, "intermediate directory symlink should be created")
+	errors = source.open(directory_link_root)
+	support.expect(_contains(errors, "link"), "open should reject a symlink in an intermediate path component")
+	support.expect_equal(source.get_manifest().get("dataset_id"), preserved_dataset, "rejected directory symlink should preserve the prior source")
+
+	var swapped_root := _new_temp_path("swapped-link")
+	_make_one_frame_source(swapped_root, 8, 6)
+	var swapped_source = SOURCE_SCRIPT.new()
+	support.expect_equal(swapped_source.open(swapped_root), PackedStringArray(), "TOCTOU fixture should open before its uncached frame changes")
+	var swapped_path := swapped_root.path_join("frames/frame_000000.png")
+	support.expect_equal(DirAccess.remove_absolute(swapped_path), OK, "TOCTOU frame should be removed before linking")
+	support.expect_equal(_create_link(outside_file, swapped_path), OK, "TOCTOU frame symlink should be created")
+	support.expect(swapped_source.load_texture(0) == null and "link" in swapped_source.last_error, "load_texture should recheck and reject a frame replaced by a symlink")
 
 
 static func _make_one_frame_source(root: String, image_width: int, image_height: int) -> void:
@@ -220,3 +271,52 @@ static func _contains(values: PackedStringArray, fragment: String) -> bool:
 		if fragment in value:
 			return true
 	return false
+
+
+static func _new_temp_path(label: String) -> String:
+	_temp_sequence += 1
+	var path := "%s%s-%d-%d-%d" % [TEMP_PREFIX, label, OS.get_process_id(), Time.get_ticks_usec(), _temp_sequence]
+	_owned_temp_paths.append(path)
+	return path
+
+
+static func _cleanup_owned_temp_paths(support) -> void:
+	for path: String in _owned_temp_paths:
+		if not path.begins_with(TEMP_PREFIX) or path == TEMP_PREFIX:
+			support.expect(false, "refusing to clean unowned temporary path: %s" % path)
+			continue
+		_remove_tree_without_following_links(path)
+		support.expect(not FileAccess.file_exists(path) and not DirAccess.dir_exists_absolute(path) and not _is_link(path), "temporary test path should be removed: %s" % path)
+	_owned_temp_paths.clear()
+
+
+static func _remove_tree_without_following_links(path: String) -> void:
+	if _is_link(path) or FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+		return
+	if not DirAccess.dir_exists_absolute(path):
+		return
+	var directory := DirAccess.open(path)
+	if directory == null:
+		return
+	for file_name: String in directory.get_files():
+		DirAccess.remove_absolute(path.path_join(file_name))
+	for directory_name: String in directory.get_directories():
+		var child := path.path_join(directory_name)
+		if directory.is_link(directory_name):
+			DirAccess.remove_absolute(child)
+		else:
+			_remove_tree_without_following_links(child)
+	DirAccess.remove_absolute(path)
+
+
+static func _is_link(path: String) -> bool:
+	var parent := DirAccess.open(path.get_base_dir())
+	return parent != null and parent.is_link(path.get_file())
+
+
+static func _create_link(source: String, target: String) -> Error:
+	var parent := DirAccess.open(target.get_base_dir())
+	if parent == null:
+		return ERR_CANT_OPEN
+	return parent.create_link(source, target)
