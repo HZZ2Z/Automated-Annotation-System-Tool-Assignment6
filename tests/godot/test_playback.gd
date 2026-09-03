@@ -30,11 +30,11 @@ func run(support, tree: SceneTree) -> void:
 	var edit_plugin = main.get("_edit_plugin")
 	support.expect_equal(tool_panel.call("get_active_tool"), &"select", "Main should show Select after opening a source")
 	support.expect_equal(edit_plugin.call("get_active_tool"), &"select", "the installed edit plugin should agree with the ToolPanel")
-	(tool_panel.get_node("Move") as Button).pressed.emit()
+	(tool_panel.get_node("ToolGrid/Move") as Button).pressed.emit()
 	support.expect_equal(edit_plugin.call("get_active_tool"), &"move", "ToolPanel Move should update the edit plugin")
 	support.expect("Move" in _status(main), "tool changes should be visible in the status bar")
 
-	(tool_panel.get_node("Box") as Button).pressed.emit()
+	(tool_panel.get_node("ToolGrid/Box") as Button).pressed.emit()
 	var preview_press := InputEventMouseButton.new()
 	preview_press.button_index = MOUSE_BUTTON_LEFT
 	preview_press.pressed = true
@@ -43,7 +43,7 @@ func run(support, tree: SceneTree) -> void:
 	main.call("_on_image_pointer_event", preview_press, Vector2(0.5, 0.5))
 	main.call("_on_image_pointer_event", preview_motion, Vector2(2.5, 2.5))
 	support.expect(not _find_region(main.get_node("MainVBox/Workspace/ViewportPanel/AnnotationViewport").get("_record"), "__new_box_preview").is_empty(), "Main should display a Box preview before commit")
-	(tool_panel.get_node("Select") as Button).pressed.emit()
+	(tool_panel.get_node("ToolGrid/Select") as Button).pressed.emit()
 	support.expect(_find_region(main.get_node("MainVBox/Workspace/ViewportPanel/AnnotationViewport").get("_record"), "__new_box_preview").is_empty(), "switching tools through Main should cancel the Box preview")
 	support.expect_equal(main.get("_history").get_undo_count(), 0, "cancelled Main preview should not create edit history")
 
