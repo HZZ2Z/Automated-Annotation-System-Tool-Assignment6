@@ -5,11 +5,13 @@ const SOURCE_SCRIPT = preload("res://client/plugins/source/image_sequence_source
 const TEMP_PREFIX := "/tmp/annotool-task6-"
 
 static var _owned_temp_paths: Array[String] = []
+static var _cleanup_target_checks: Dictionary = {}
 static var _temp_sequence := 0
 
 
 static func run(support) -> void:
 	_owned_temp_paths.clear()
+	_cleanup_target_checks.clear()
 	_temp_sequence = 0
 	_test_lru_cache(support)
 	var sample_dir := _generate_sample(support)
@@ -19,6 +21,7 @@ static func run(support) -> void:
 	_test_texture_errors_are_recoverable(support)
 	_test_manifest_and_model_failures(support)
 	_test_symlink_paths_are_contained(support)
+	_test_linked_metadata_is_rejected(support)
 	_cleanup_owned_temp_paths(support)
 
 
@@ -208,6 +211,7 @@ static func _test_symlink_paths_are_contained(support) -> void:
 	var leaf_path := leaf_link_root.path_join("frames/frame_000000.png")
 	support.expect_equal(DirAccess.remove_absolute(leaf_path), OK, "leaf fixture file should be removed before linking")
 	support.expect_equal(_create_link(outside_file, leaf_path), OK, "leaf frame symlink should be created")
+	_register_cleanup_target_check(leaf_link_root, outside_file)
 	var errors: PackedStringArray = source.open(leaf_link_root)
 	support.expect(_contains(errors, "link"), "open should reject a symlink frame file")
 	support.expect_equal(source.get_manifest().get("dataset_id"), preserved_dataset, "rejected leaf symlink should preserve the prior source")
@@ -219,6 +223,7 @@ static func _test_symlink_paths_are_contained(support) -> void:
 	DirAccess.make_dir_recursive_absolute(directory_link_root)
 	_write_json(directory_link_root.path_join("manifest.json"), _base_manifest("directory-link", "none", 8, 6))
 	support.expect_equal(_create_link(outside_directory_root, directory_link_root.path_join("frames")), OK, "intermediate directory symlink should be created")
+	_register_cleanup_target_check(directory_link_root, outside_directory_root)
 	errors = source.open(directory_link_root)
 	support.expect(_contains(errors, "link"), "open should reject a symlink in an intermediate path component")
 	support.expect_equal(source.get_manifest().get("dataset_id"), preserved_dataset, "rejected directory symlink should preserve the prior source")
@@ -230,7 +235,68 @@ static func _test_symlink_paths_are_contained(support) -> void:
 	var swapped_path := swapped_root.path_join("frames/frame_000000.png")
 	support.expect_equal(DirAccess.remove_absolute(swapped_path), OK, "TOCTOU frame should be removed before linking")
 	support.expect_equal(_create_link(outside_file, swapped_path), OK, "TOCTOU frame symlink should be created")
+	_register_cleanup_target_check(swapped_root, outside_file)
 	support.expect(swapped_source.load_texture(0) == null and "link" in swapped_source.last_error, "load_texture should recheck and reject a frame replaced by a symlink")
+
+
+static func _test_linked_metadata_is_rejected(support) -> void:
+	var manifest_baseline_root := _new_temp_path("manifest-baseline")
+	_make_one_frame_source(manifest_baseline_root, 8, 6)
+	var manifest_source = SOURCE_SCRIPT.new()
+	support.expect_equal(manifest_source.open(manifest_baseline_root), PackedStringArray(), "normal source should open before linked manifest replacement")
+	var manifest_baseline_dataset: String = manifest_source.get_manifest().get("dataset_id", "")
+	var manifest_cached_texture: Texture2D = manifest_source.load_texture(0)
+	support.expect(manifest_cached_texture != null, "baseline source texture should enter the cache")
+
+	var outside_manifest_root := _new_temp_path("outside-manifest")
+	DirAccess.make_dir_recursive_absolute(outside_manifest_root)
+	var outside_manifest := outside_manifest_root.path_join("manifest.json")
+	_write_json(outside_manifest, _base_manifest("linked-manifest", "none", 8, 6))
+	var linked_manifest_root := _new_temp_path("linked-manifest")
+	_make_one_frame_source(linked_manifest_root, 8, 6)
+	var linked_manifest_path := linked_manifest_root.path_join("manifest.json")
+	support.expect_equal(DirAccess.remove_absolute(linked_manifest_path), OK, "local manifest should be removed before linking")
+	support.expect_equal(_create_link(outside_manifest, linked_manifest_path), OK, "manifest symlink should be created")
+	_register_cleanup_target_check(linked_manifest_root, outside_manifest)
+	var errors: PackedStringArray = manifest_source.open(linked_manifest_root)
+	support.expect(_contains(errors, "manifest.json") and _contains(errors, "link"), "open should identify and reject a linked manifest before reading it")
+	support.expect_equal(manifest_source.get_manifest().get("dataset_id"), manifest_baseline_dataset, "linked manifest rejection should preserve the prior source")
+	DirAccess.remove_absolute(manifest_baseline_root.path_join("frames/frame_000000.png"))
+	support.expect(manifest_source.load_texture(0) == manifest_cached_texture, "linked manifest rejection should preserve the prior frame cache")
+
+	var model_baseline_root := _new_temp_path("model-baseline")
+	_make_one_frame_source(model_baseline_root, 8, 6)
+	var model_source = SOURCE_SCRIPT.new()
+	support.expect_equal(model_source.open(model_baseline_root), PackedStringArray(), "normal source should open before linked model replacement")
+	var model_baseline_dataset: String = model_source.get_manifest().get("dataset_id", "")
+	var model_cached_texture: Texture2D = model_source.load_texture(0)
+	support.expect(model_cached_texture != null, "model baseline texture should enter the cache")
+
+	var outside_model_root := _new_temp_path("outside-model")
+	DirAccess.make_dir_recursive_absolute(outside_model_root)
+	var linked_model_root := _new_temp_path("linked-model")
+	_make_one_frame_source(linked_model_root, 8, 6)
+	var linked_model_manifest := _base_manifest("linked-model", "real-model-v1", 8, 6)
+	_write_json(linked_model_root.path_join("manifest.json"), linked_model_manifest)
+	var outside_model := outside_model_root.path_join("model_output.jsonl")
+	var valid_record := {
+		"schema_version": 1,
+		"dataset_id": "linked-model",
+		"source": "model_output_v1",
+		"frame": 0,
+		"time_s": 0.0,
+		"image_size": [8, 6],
+		"regions": [],
+	}
+	_write_text(outside_model, JSON.stringify(valid_record) + "\n")
+	var linked_model_path := linked_model_root.path_join("model_output.jsonl")
+	support.expect_equal(_create_link(outside_model, linked_model_path), OK, "model output symlink should be created")
+	_register_cleanup_target_check(linked_model_root, outside_model)
+	errors = model_source.open(linked_model_root)
+	support.expect(_contains(errors, "model_output.jsonl") and _contains(errors, "link"), "open should identify and reject linked model output before reading it")
+	support.expect_equal(model_source.get_manifest().get("dataset_id"), model_baseline_dataset, "linked model rejection should preserve the prior source")
+	DirAccess.remove_absolute(model_baseline_root.path_join("frames/frame_000000.png"))
+	support.expect(model_source.load_texture(0) == model_cached_texture, "linked model rejection should preserve the prior frame cache")
 
 
 static func _make_one_frame_source(root: String, image_width: int, image_height: int) -> void:
@@ -281,13 +347,18 @@ static func _new_temp_path(label: String) -> String:
 
 
 static func _cleanup_owned_temp_paths(support) -> void:
-	for path: String in _owned_temp_paths:
+	var cleanup_paths := _owned_temp_paths.duplicate()
+	cleanup_paths.reverse()
+	for path: String in cleanup_paths:
 		if not path.begins_with(TEMP_PREFIX) or path == TEMP_PREFIX:
 			support.expect(false, "refusing to clean unowned temporary path: %s" % path)
 			continue
 		_remove_tree_without_following_links(path)
 		support.expect(not FileAccess.file_exists(path) and not DirAccess.dir_exists_absolute(path) and not _is_link(path), "temporary test path should be removed: %s" % path)
+		for target: String in _cleanup_target_checks.get(path, []):
+			support.expect(FileAccess.file_exists(target) or DirAccess.dir_exists_absolute(target), "removing a linked fixture must not remove its outside target: %s" % target)
 	_owned_temp_paths.clear()
+	_cleanup_target_checks.clear()
 
 
 static func _remove_tree_without_following_links(path: String) -> void:
@@ -320,3 +391,9 @@ static func _create_link(source: String, target: String) -> Error:
 	if parent == null:
 		return ERR_CANT_OPEN
 	return parent.create_link(source, target)
+
+
+static func _register_cleanup_target_check(link_root: String, outside_target: String) -> void:
+	var targets: Array = _cleanup_target_checks.get(link_root, [])
+	targets.append(outside_target)
+	_cleanup_target_checks[link_root] = targets

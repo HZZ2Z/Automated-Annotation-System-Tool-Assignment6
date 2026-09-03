@@ -37,6 +37,10 @@ func open(path: String) -> PackedStringArray:
 	if not DirAccess.dir_exists_absolute(root):
 		errors.append("source directory does not exist: %s" % path)
 		return _finish_errors(errors)
+	var manifest_link_error := _path_link_error(root, "manifest.json")
+	if not manifest_link_error.is_empty():
+		errors.append("manifest.json: %s" % manifest_link_error)
+		return _finish_errors(errors)
 	var manifest := _read_json_object(root.path_join("manifest.json"), "manifest", errors)
 	if manifest.is_empty() and not errors.is_empty():
 		return _finish_errors(errors)
@@ -214,6 +218,10 @@ func _validate_manifest(manifest: Dictionary, root: String, errors: PackedString
 
 func _read_model_records(root: String, manifest: Dictionary, errors: PackedStringArray) -> Array[Dictionary]:
 	var records: Array[Dictionary] = []
+	var model_link_error := _path_link_error(root, "model_output.jsonl")
+	if not model_link_error.is_empty():
+		errors.append("model_output.jsonl: %s" % model_link_error)
+		return records
 	var model_path := root.path_join("model_output.jsonl")
 	if not FileAccess.file_exists(model_path):
 		if manifest["model_version"] != "none":
