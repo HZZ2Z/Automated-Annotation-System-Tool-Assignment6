@@ -28,6 +28,7 @@ def decode_video(input_path: Path, output_dir: Path) -> dict[str, Any]:
     """
     input_path = Path(input_path)
     output_dir = Path(output_dir)
+    #检查输入和输出路径
     if output_dir.exists():
         raise FileExistsError(f"output directory already exists: {output_dir}")
     if not input_path.exists():
@@ -36,10 +37,10 @@ def decode_video(input_path: Path, output_dir: Path) -> dict[str, Any]:
         raise ValueError(f"input video is not a file: {input_path}")
     if not output_dir.parent.is_dir():
         raise ValueError(f"output parent directory does not exist: {output_dir.parent}")
-
+    #使用隐藏工作目录防止错误
     staging_dir = output_dir.parent / f".{output_dir.name}.tmp-{uuid4().hex}"
     try:
-        probe = _probe_video(input_path)
+        probe = _probe_video(input_path) #用 FFprobe 读取视频信息
         staging_dir.mkdir()
         frames_dir = staging_dir / "frames"
         frames_dir.mkdir()
@@ -89,11 +90,12 @@ def _probe_video(input_path: Path) -> dict[str, Any]:
     width, height = stream.get("width"), stream.get("height")
     if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
         raise ValueError("video has invalid dimensions")
-    nominal_fps = _parse_fps(stream.get("avg_frame_rate"))
+    # 处理视频帧率
+    nominal_fps = _parse_fps(stream.get("avg_frame_rate")) #程序优先读取：avg_frame_rate
     if nominal_fps is None:
-        nominal_fps = _parse_fps(stream.get("r_frame_rate"))
+        nominal_fps = _parse_fps(stream.get("r_frame_rate")) #如果读取不到，再使用：r_frame_rate
     if nominal_fps is None:
-        raise ValueError("video has no valid nominal frame rate")
+        raise ValueError("video has no valid nominal frame rate") #都读取不到 -报错
 
     frames = payload.get("frames")
     if not isinstance(frames, list) or not frames:
@@ -121,7 +123,7 @@ def _probe_video(input_path: Path) -> dict[str, Any]:
     timestamps: list[float] = []
     for index, raw_timestamp in enumerate(raw_timestamps):
         try:
-            timestamp = float(raw_timestamp)
+            timestamp = float(raw_timestamp) #将时间戳转换成浮点数
         except (TypeError, ValueError):
             raise ValueError(f"video frame {index} has invalid timestamp") from None
         if not math.isfinite(timestamp):
