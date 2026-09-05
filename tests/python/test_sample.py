@@ -8,13 +8,13 @@ import cv2
 import numpy as np
 import pytest
 
-from annotool.contracts import (
+from annotation_data.contracts import (
     validate_instance,
     validate_manifest_semantics,
 )
-from annotool.jsonl import read_jsonl
-from annotool.sample import generate_sample
-from annotool.similarity import contiguous_run
+from annotation_data.jsonl import read_jsonl
+from annotation_data.sample import generate_sample
+from annotation_data.similarity import contiguous_run
 from validate_model_output import validate_model_output
 
 
@@ -71,6 +71,21 @@ def test_cli_without_arguments_generates_the_canonical_sample(
     assert generated_hashes == canonical_hashes
 
 
+def test_cli_help_keeps_the_public_description_concise() -> None:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "python/make_sample_input.py"), "--help"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Generate the deterministic synthetic annotation sample." in result.stdout
+    assert ":mod:`" not in result.stdout
+    assert "Reusable rendering and defect planting" not in result.stdout
+
+
 def test_sample_model_output_matches_assignment_contract(
     samples: tuple[Path, dict[str, str], Path],
 ) -> None:
@@ -98,6 +113,7 @@ def test_sample_model_output_matches_assignment_contract(
     records = read_jsonl(model_path)
     assert len(records) == 120
     region_counts = []
+    complex_polygon_counts = []
     for frame, record in enumerate(records):
         assert record["schema_version"] == 1
         assert record["source"] == "sample_v1"
@@ -107,8 +123,20 @@ def test_sample_model_output_matches_assignment_contract(
         assert "dataset_id" not in record
         assert "image_size" not in record
         region_counts.append(len(record["regions"]))
+        complex_regions = [
+            region
+            for region in record["regions"]
+            if len(region.get("polygon", [])) >= 12
+        ]
+        complex_polygon_counts.append(len(complex_regions))
+        for region in complex_regions:
+            contour = np.asarray(region["polygon"], dtype=np.int32)
+            assert not cv2.isContourConvex(contour)
+            assert np.all(contour[:, 0] >= 0) and np.all(contour[:, 0] <= 640)
+            assert np.all(contour[:, 1] >= 0) and np.all(contour[:, 1] <= 360)
     assert set(region_counts) == {19, 20, 21}
     assert all(19 <= count <= 21 for count in region_counts)
+    assert set(complex_polygon_counts) == {1}
     assert not any(sample_dir.glob("*ground_truth*"))
     assert manifest["source_name"] == "sample_v1"
     assert manifest["model_version"] == "model_output_v1"

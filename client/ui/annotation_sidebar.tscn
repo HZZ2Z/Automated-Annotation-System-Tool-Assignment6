@@ -1,0 +1,44 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://client/ui/annotation_sidebar.gd" id="1_sidebar"]
+
+[node name="AnnotationSidebar" type="VBoxContainer"]
+custom_minimum_size = Vector2(320, 0)
+theme_override_constants/separation = 8
+script = ExtResource("1_sidebar")
+
+[node name="ProjectLabels" type="PanelContainer" parent="."]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Title" type="Label" parent="ProjectLabels"]
+layout_mode = 2
+text = "Project Labels"
+
+[node name="Tree" type="Tree" parent="ProjectLabels"]
+custom_minimum_size = Vector2(0, 150)
+layout_mode = 2
+size_flags_vertical = 3
+columns = 3
+column_titles_visible = true
+hide_root = true
+select_mode = 0
+allow_reselect = false
+
+[node name="FrameAnnotations" type="PanelContainer" parent="."]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Title" type="Label" parent="FrameAnnotations"]
+layout_mode = 2
+text = "Current Frame Annotations"
+
+[node name="Tree" type="Tree" parent="FrameAnnotations"]
+custom_minimum_size = Vector2(0, 180)
+layout_mode = 2
+size_flags_vertical = 3
+columns = 4
+column_titles_visible = true
+hide_root = true
+select_mode = 1
+allow_reselect = false

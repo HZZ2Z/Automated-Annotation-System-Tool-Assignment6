@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "media_id": "VID68",
+  "media_type": "image_sequence",
+  "source_relative_path": "videos/VID68",
+  "source_sha256": null,
+  "frame_digits": 6,
+  "frames": {
+    "16": {
+      "schema_version": 1,
+      "source": "VID68",
+      "frame": 16,
+      "time_s": 16.0,
+      "regions": []
+    }
+  }
+}

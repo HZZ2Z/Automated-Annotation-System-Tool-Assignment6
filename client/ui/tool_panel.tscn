@@ -3,7 +3,7 @@
 [ext_resource type="Script" path="res://client/ui/tool_panel.gd" id="1_tool_panel"]
 
 [node name="ToolPanel" type="VBoxContainer"]
-custom_minimum_size = Vector2(320, 226)
+custom_minimum_size = Vector2(320, 262)
 theme_override_constants/separation = 6
 script = ExtResource("1_tool_panel")
 
@@ -17,3 +17,18 @@ layout_mode = 2
 columns = 4
 theme_override_constants/h_separation = 4
 theme_override_constants/v_separation = 4
+
+[node name="OptionRow" type="HBoxContainer" parent="."]
+visible = false
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Label" type="Label" parent="OptionRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Value" type="SpinBox" parent="OptionRow"]
+custom_minimum_size = Vector2(104, 0)
+layout_mode = 2
+allow_greater = true
+allow_lesser = true

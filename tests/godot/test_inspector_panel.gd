@@ -11,6 +11,7 @@ func run(support: TestSupport, tree: SceneTree) -> void:
 		return
 	await _test_empty_and_population_are_safe(packed, support, tree)
 	await _test_deep_snapshot_and_request_signals(packed, support, tree)
+	await _test_inspector_remains_intent_only(packed, support, tree)
 	await _test_polygon_disables_box_geometry(packed, support, tree)
 	await _test_malformed_population_recovers_cleanly(packed, support, tree)
 
@@ -21,7 +22,7 @@ func _test_empty_and_population_are_safe(packed: PackedScene, support: TestSuppo
 	await tree.process_frame
 	support.expect_equal(panel.call("get_region_snapshot"), {}, "inspector should start with a safe empty snapshot")
 	var emissions := [0]
-	for signal_name in ["relabel_requested", "delete_requested", "fill_requested", "geometry_requested", "track_id_requested"]:
+	for signal_name in ["relabel_requested", "fill_requested", "geometry_requested", "track_id_requested"]:
 		panel.connect(signal_name, func(_a = null, _b = null): emissions[0] += 1)
 	panel.call("set_taxonomy", _taxonomy())
 	panel.call("populate", _box_record())
@@ -29,9 +30,32 @@ func _test_empty_and_population_are_safe(packed: PackedScene, support: TestSuppo
 	support.expect_equal(panel.get_node("Fields/RegionId").text, "box-1", "region ID should populate read-only")
 	support.expect_equal(panel.get_node("Fields/Kind").text, "instrument", "kind should populate read-only")
 	support.expect_equal(panel.get_node("Fields/Confidence").text, "0.90", "confidence should populate read-only")
-	for path in ["Fields/ClassTaxonomy", "Fields/ClassFreeText", "Fields/TrackId", "Fields/BoxX", "Fields/BoxY", "Fields/BoxWidth", "Fields/BoxHeight", "Fields/Fill", "Fields/Delete"]:
+	for path in ["Fields/ClassTaxonomy", "Fields/ClassFreeText", "Fields/TrackId", "Fields/BoxX", "Fields/BoxY", "Fields/BoxWidth", "Fields/BoxHeight", "Fields/Fill"]:
 		var control := panel.get_node(path) as Control
 		support.expect_equal(control.focus_mode, Control.FOCUS_ALL, "%s should participate in normal keyboard focus" % path)
+	support.expect(panel.get_node_or_null("Fields/Delete") == null,
+		"Inspector must not expose a whole-region Delete button")
+	support.expect_equal((panel.get_node("Fields/Fill") as CheckButton).text, "Show overlay fill",
+		"Inspector visibility control must not be labeled as geometry Fill")
+	panel.queue_free()
+	await tree.process_frame
+
+
+func _test_inspector_remains_intent_only(packed: PackedScene, support: TestSupport, tree: SceneTree) -> void:
+	var panel := packed.instantiate()
+	tree.root.add_child(panel)
+	await tree.process_frame
+	for signal_name: String in [
+		"relabel_requested", "fill_requested", "geometry_requested", "track_id_requested",
+	]:
+		support.expect(panel.has_signal(signal_name),
+			"Inspector should expose the existing %s edit intent" % signal_name)
+	support.expect(not panel.has_signal("delete_requested"),
+		"Inspector must not acquire whole-region deletion ownership")
+	support.expect(not panel.has_method("undo") and not panel.has_method("redo"),
+		"Inspector must not acquire command-history ownership")
+	support.expect(panel.get_node_or_null("Fields/Delete") == null,
+		"Inspector intent surface must retain no Delete control")
 	panel.queue_free()
 	await tree.process_frame
 
@@ -49,12 +73,10 @@ func _test_deep_snapshot_and_request_signals(packed: PackedScene, support: TestS
 	support.expect_equal(panel.call("get_region_snapshot").box[0], 10, "nested geometry should be isolated from caller mutation")
 
 	var relabels: Array = []
-	var deletes: Array = []
 	var fills: Array = []
 	var geometries: Array = []
 	var tracks: Array = []
 	panel.relabel_requested.connect(func(id: String, label: String): relabels.append([id, label]))
-	panel.delete_requested.connect(func(id: String): deletes.append(id))
 	panel.fill_requested.connect(func(id: String, filled: bool): fills.append([id, filled]))
 	panel.geometry_requested.connect(func(id: String, box: Array): geometries.append([id, box.duplicate(true)]))
 	panel.track_id_requested.connect(func(id: String, value: Variant): tracks.append([id, value]))
@@ -84,8 +106,6 @@ func _test_deep_snapshot_and_request_signals(packed: PackedScene, support: TestS
 	var width := panel.get_node("Fields/BoxWidth") as SpinBox
 	width.value = 25
 	support.expect_equal(geometries, [["box-1", [10.0, 10.0, 25.0, 15.0]]], "one numeric edit should emit one complete target box")
-	panel.get_node("Fields/Delete").pressed.emit()
-	support.expect_equal(deletes, ["box-1"], "delete should use the retained snapshot ID")
 	panel.queue_free()
 	await tree.process_frame
 
@@ -97,6 +117,11 @@ func _test_polygon_disables_box_geometry(packed: PackedScene, support: TestSuppo
 	panel.call("populate", {"id": "poly", "class": "gallbladder", "kind": "anatomy", "polygon": [[1, 1], [5, 1], [3, 4]], "filled": false})
 	for path in ["Fields/BoxX", "Fields/BoxY", "Fields/BoxWidth", "Fields/BoxHeight"]:
 		support.expect(panel.get_node(path).editable == false, "polygon selection should disable %s" % path)
+	panel.call("populate", {"id": "hybrid", "class": "gallbladder", "kind": "anatomy", "box": [0, 0, 10, 10], "polygon": [[1, 1], [5, 1], [3, 4]]})
+	for path in ["Fields/BoxX", "Fields/BoxY", "Fields/BoxWidth", "Fields/BoxHeight"]:
+		support.expect(panel.get_node(path).editable == false, "polygon-first hybrid selection should disable fallback-box editing in %s" % path)
+	support.expect_equal(panel.get_node("Status").text, "", "a schema-valid region with both geometries should not be reported as invalid")
+	support.expect(panel.get_node("Fields/Fill").button_pressed, "a schema-valid region without filled should reflect its visible default overlay")
 	panel.call("populate", _box_record())
 	for path in ["Fields/BoxX", "Fields/BoxY", "Fields/BoxWidth", "Fields/BoxHeight"]:
 		support.expect(panel.get_node(path).editable == true, "box selection should enable %s" % path)
@@ -109,7 +134,7 @@ func _test_malformed_population_recovers_cleanly(packed: PackedScene, support: T
 	tree.root.add_child(panel)
 	await tree.process_frame
 	var request_count := [0]
-	for signal_name in ["relabel_requested", "delete_requested", "fill_requested", "geometry_requested", "track_id_requested"]:
+	for signal_name in ["relabel_requested", "fill_requested", "geometry_requested", "track_id_requested"]:
 		panel.connect(signal_name, func(_a = null, _b = null): request_count[0] += 1)
 	var malformed_cases := [
 		{"field": "box", "value": null, "geometry_editable": false},

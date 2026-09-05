@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from annotool.contracts import validate_instance
+from annotation_data.contracts import validate_instance
 from validate_model_output import (
     load_schema,
     main,
@@ -17,8 +17,8 @@ from validate_model_output import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
-VALID = ROOT / "core/fixtures/valid"
-INVALID = ROOT / "core/fixtures/invalid"
+VALID = ROOT / "tests/fixtures/model_output_v1/valid"
+INVALID = ROOT / "tests/fixtures/model_output_v1/invalid"
 SCHEMA = "model_output_v1.schema.json"
 
 
@@ -64,6 +64,7 @@ def test_assignment_example_is_preserved_and_valid() -> None:
     "name",
     [
         "model-output-v1-box-only.json",
+        "model-output-v1-integral-numbers.json",
         "model-output-v1-polygon-only.json",
         "model-output-v1-empty-regions.json",
     ],

@@ -77,12 +77,7 @@ tooltip_text = "Box height"
 [node name="Fill" type="CheckButton" parent="Fields"]
 layout_mode = 2
 focus_mode = 2
-text = "Fill region"
-
-[node name="Delete" type="Button" parent="Fields"]
-layout_mode = 2
-focus_mode = 2
-text = "Delete region"
+text = "Show overlay fill"
 
 [node name="Status" type="Label" parent="."]
 layout_mode = 2

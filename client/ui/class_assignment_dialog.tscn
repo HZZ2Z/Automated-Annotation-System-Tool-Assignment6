@@ -1,0 +1,68 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://client/ui/class_assignment_dialog.gd" id="1_dialog"]
+
+[node name="ClassAssignmentDialog" type="Window"]
+title = "Assign annotation class"
+initial_position = 1
+size = Vector2i(560, 460)
+min_size = Vector2i(500, 360)
+unresizable = true
+transient = true
+exclusive = true
+visible = false
+script = ExtResource("1_dialog")
+
+[node name="Margin" type="MarginContainer" parent="."]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 18
+theme_override_constants/margin_top = 18
+theme_override_constants/margin_right = 18
+theme_override_constants/margin_bottom = 18
+
+[node name="Content" type="VBoxContainer" parent="Margin"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ClassLabel" type="LineEdit" parent="Margin/Content"]
+layout_mode = 2
+placeholder_text = "Class label"
+
+[node name="Kind" type="LineEdit" parent="Margin/Content"]
+layout_mode = 2
+placeholder_text = "Kind (free text)"
+
+[node name="ColorPreview" type="ColorRect" parent="Margin/Content"]
+custom_minimum_size = Vector2(0, 18)
+layout_mode = 2
+color = Color(0.658824, 0.333333, 0.968627, 1)
+
+[node name="Suggestions" type="Tree" parent="Margin/Content"]
+custom_minimum_size = Vector2(0, 220)
+layout_mode = 2
+size_flags_vertical = 3
+columns = 2
+column_titles_visible = true
+hide_root = true
+select_mode = 1
+
+[node name="Status" type="Label" parent="Margin/Content"]
+custom_minimum_size = Vector2(0, 30)
+layout_mode = 2
+autowrap_mode = 2
+
+[node name="Actions" type="HBoxContainer" parent="Margin/Content"]
+layout_mode = 2
+alignment = 2
+
+[node name="Cancel" type="Button" parent="Margin/Content/Actions"]
+layout_mode = 2
+text = "Cancel"
+
+[node name="Confirm" type="Button" parent="Margin/Content/Actions"]
+layout_mode = 2
+text = "Confirm"

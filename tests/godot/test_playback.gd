@@ -31,7 +31,7 @@ func run(support, tree: SceneTree) -> void:
 	support.expect(FileAccess.file_exists(handoff_path.path_join("manifest.json")), "Main export should publish the training handoff package")
 	support.expect_equal(main.call("get_current_frame"), 0, "opening should select frame zero")
 	support.expect_equal(_label(main, "FrameLabel"), "Frame 0 (120 total)", "frame label should show zero-based current index and total frame count")
-	support.expect_equal(_label(main, "TimeLabel"), "00:00.125", "initial timestamp should come from manifest entry zero")
+	support.expect_equal(_label(main, "TimeLabel"), "00:00:00.125", "initial timestamp should come from manifest entry zero")
 	var explorer = main.get_node(
 		"MainVBox/WorkspaceSplit/DatasetExplorerContainer/DatasetExplorer"
 	)
@@ -58,9 +58,11 @@ func run(support, tree: SceneTree) -> void:
 	var edit_plugin = main.get("_edit_plugin")
 	support.expect_equal(tool_panel.call("get_active_tool"), &"select", "Main should show Select after opening a source")
 	support.expect_equal(edit_plugin.call("get_active_tool"), &"select", "the installed edit plugin should agree with the ToolPanel")
-	(tool_panel.get_node("ToolGrid/Move") as Button).pressed.emit()
-	support.expect_equal(edit_plugin.call("get_active_tool"), &"move", "ToolPanel Move should update the edit plugin")
-	support.expect("Move" in _status(main), "tool changes should be visible in the status bar")
+	support.expect(tool_panel.get_node_or_null("ToolGrid/Move") == null,
+		"Selection should absorb direct manipulation without a separate Move / Resize button")
+	main.call("_on_unavailable_tool_requested", &"future_tool")
+	support.expect_equal(_status(main), "待开发",
+		"a future unimplemented descriptor should remain clickable and report the exact requested message")
 
 	(tool_panel.get_node("ToolGrid/Box") as Button).pressed.emit()
 	var preview_press := InputEventMouseButton.new()
@@ -68,11 +70,17 @@ func run(support, tree: SceneTree) -> void:
 	preview_press.pressed = true
 	var preview_motion := InputEventMouseMotion.new()
 	preview_motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+	var initial_viewport = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport")
+	var initial_committed_record: Dictionary = initial_viewport.get("_record").duplicate(true)
 	main.call("_on_image_pointer_event", preview_press, Vector2(0.5, 0.5))
 	main.call("_on_image_pointer_event", preview_motion, Vector2(2.5, 2.5))
-	support.expect(not _find_region(main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport").get("_record"), "__new_box_preview").is_empty(), "Main should display a Box preview before commit")
+	var initial_overlay: Dictionary = initial_viewport.call("get_edit_overlay_state")
+	support.expect_equal(initial_overlay.get("phase"), &"drawing", "Main should display a Drawing overlay before Box commit")
+	support.expect_equal(initial_overlay.get("path", PackedVector2Array()).size(), 5, "Main Box overlay should carry a closed image-space path")
+	support.expect_equal(initial_viewport.get("_record"), initial_committed_record, "Main Box overlay must not enter the committed record")
 	(tool_panel.get_node("ToolGrid/Select") as Button).pressed.emit()
-	support.expect(_find_region(main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport").get("_record"), "__new_box_preview").is_empty(), "switching tools through Main should cancel the Box preview")
+	support.expect_equal(initial_viewport.call("get_edit_overlay_state"), {}, "switching tools through Main should cancel the Box overlay")
+	support.expect_equal(initial_viewport.get("_record"), initial_committed_record, "tool switching should leave the committed record unchanged")
 	support.expect_equal(main.get("_history").get_undo_count(), 0, "cancelled Main preview should not create edit history")
 
 	support.expect(main.call("seek", 0), "lower-bound setup seek should succeed")
@@ -90,20 +98,40 @@ func run(support, tree: SceneTree) -> void:
 	support.expect(main.call("seek", 2), "playback setup seek should succeed")
 	main.call("play")
 	support.expect(main.call("is_playing"), "play should start before the last frame")
-	main.call("_on_playback_timeout")
+	main.call("_process", 1.999)
+	support.expect_equal(main.call("get_current_frame"), 2,
+		"playback should wait for the exact manifest interval")
+	main.call("_process", 0.001)
 	support.expect_equal(main.call("get_current_frame"), 3, "one timeout should advance exactly one explicit index")
-	support.expect_equal(_label(main, "TimeLabel"), "00:06.125", "displayed timestamp must use manifest time_s rather than index divided by FPS")
-	main.call("_on_playback_timeout")
+	support.expect_equal(_label(main, "TimeLabel"), "00:00:06.125", "displayed timestamp must use manifest time_s rather than index divided by FPS")
+	main.call("_process", 20.0)
 	support.expect_equal(main.call("get_current_frame"), 4, "successive timeouts should advance indices one by one")
+	main.call("_process", 0.0)
+	support.expect_equal(main.call("get_current_frame"), 4,
+		"late playback must discard excess time instead of catching up or skipping")
 	main.call("pause")
 	support.expect(not main.call("is_playing"), "pause should stop playback")
 
+	support.expect(main.call("seek", 2), "keyboard-edit playback setup seek should succeed")
+	main.call("play")
+	var keyboard_add := InputEventKey.new()
+	keyboard_add.keycode = KEY_A
+	keyboard_add.pressed = true
+	main.call("_unhandled_key_input", keyboard_add)
+	support.expect(not main.call("is_playing"),
+		"a handled edit shortcut should pause playback before the next frame can replace its preview")
+	support.expect_equal(main.call("get_current_frame"), 2,
+		"starting a keyboard edit while playing should freeze the accepted frame")
+	support.expect_equal(main.get("_edit_plugin").get("_drag_kind"), "keyboard_add",
+		"the paused frame should retain the keyboard edit state")
+	main.get("_edit_plugin").cancel()
+
 	support.expect(main.call("seek", 118), "penultimate frame should be seekable")
 	main.call("play")
-	main.call("_on_playback_timeout")
+	main.call("_process", 2.0)
 	support.expect_equal(main.call("get_current_frame"), 119, "final timeout should select the last frame")
 	support.expect(not main.call("is_playing"), "playback should pause on the last frame")
-	main.call("_on_playback_timeout")
+	main.call("_process", 2.0)
 	support.expect_equal(main.call("get_current_frame"), 119, "timeout at the end should never wrap")
 	main.call("play")
 	support.expect(not main.call("is_playing"), "play at the final frame should remain stopped")
@@ -117,6 +145,21 @@ func run(support, tree: SceneTree) -> void:
 	support.expect_equal(main.call("get_current_frame"), 50, "texture failure should preserve current frame")
 	support.expect(viewport.get("_texture") == preserved_texture, "texture failure should preserve the visible texture")
 	support.expect_equal(viewport.get("_record"), preserved_record, "texture failure should preserve the visible annotation record")
+	support.expect(main.seek(116), "playback-load-failure setup should select the prior frame")
+	var playback_failure_texture: Texture2D = viewport.get("_texture")
+	var playback_failure_record: Dictionary = viewport.get("_record").duplicate(true)
+	main.play()
+	main.call("_process", 2.0)
+	support.expect_equal(main.get_current_frame(), 116,
+		"a playback load failure should keep the last successfully displayed frame")
+	support.expect(not main.is_playing(), "a playback load failure should pause immediately")
+	support.expect(viewport.get("_texture") == playback_failure_texture,
+		"a playback load failure should preserve the visible texture")
+	support.expect_equal(viewport.get("_record"), playback_failure_record,
+		"a playback load failure should preserve visible annotations")
+	support.expect(main.seek(50), "navigation-failure tests should restore the accepted frame")
+	preserved_texture = viewport.get("_texture")
+	preserved_record = viewport.get("_record").duplicate(true)
 	var missing_frame_item := _frame_item(explorer, 117)
 	support.expect(missing_frame_item != null,
 		"missing-frame navigation should exercise a real explorer TreeItem")
@@ -133,9 +176,8 @@ func run(support, tree: SceneTree) -> void:
 		"failed explorer navigation should preserve the visible record")
 	support.expect_equal(_selected_frame(explorer), 50,
 		"failed explorer navigation should restore the accepted highlight")
-	support.expect(main.is_playing(),
-		"failed explorer navigation should preserve active playback")
-	main.pause()
+	support.expect(not main.is_playing(),
+		"explorer navigation should pause even when the requested frame fails")
 	support.expect(explorer.select_frame(50),
 		"gesture preservation setup should select the accepted frame")
 
@@ -148,6 +190,8 @@ func run(support, tree: SceneTree) -> void:
 	main.call("_on_add_box_pressed")
 	main.call("_on_image_pointer_event", commit_press, Vector2(0.5, 0.5))
 	main.call("_on_image_pointer_event", commit_release, Vector2(2.5, 2.5))
+	support.expect(_confirm_main_pending_box(main).is_empty(),
+		"gesture preservation setup should explicitly classify its Box")
 	var navigation_selection_before: String = main.call("_get_selected_region_id")
 	support.expect(not navigation_selection_before.is_empty(),
 		"gesture preservation setup should have a real selected region")
@@ -160,13 +204,16 @@ func run(support, tree: SceneTree) -> void:
 	main.call("_on_image_pointer_event", gesture_press, Vector2(0.25, 0.25))
 	main.call("_on_image_pointer_event", gesture_motion, Vector2(1.5, 1.5))
 	var navigation_store_record: Dictionary = main.get("_store").get_corrected_record(50)
-	var navigation_visible_preview: Dictionary = viewport.get("_record").duplicate(true)
+	var navigation_committed_record: Dictionary = viewport.get("_record").duplicate(true)
+	var navigation_overlay_snapshot: Dictionary = viewport.call("get_edit_overlay_state")
 	var navigation_undo_before: int = main.get("_history").get_undo_count()
 	var navigation_redo_before: int = main.get("_history").get_redo_count()
 	support.expect_equal(edit_plugin.get("_drag_kind"), "add",
 		"gesture preservation setup should have an active edit gesture")
-	support.expect(not _find_region(navigation_visible_preview, "__new_box_preview").is_empty(),
-		"gesture preservation setup should display a transient preview")
+	support.expect_equal(navigation_overlay_snapshot.get("phase"), &"drawing",
+		"gesture preservation setup should display a Drawing overlay")
+	support.expect_equal(viewport.get("_record"), navigation_store_record,
+		"gesture preservation setup should keep committed content separate")
 	if missing_frame_item != null:
 		missing_frame_item.select(0)
 	await tree.process_frame
@@ -178,8 +225,10 @@ func run(support, tree: SceneTree) -> void:
 		"failed explorer navigation should preserve region selection")
 	support.expect_equal(main.get("_store").get_corrected_record(50), navigation_store_record,
 		"failed explorer navigation should preserve annotation data")
-	support.expect_equal(viewport.get("_record"), navigation_visible_preview,
-		"failed explorer navigation should preserve the visible edit preview")
+	support.expect_equal(viewport.get("_record"), navigation_committed_record,
+		"failed explorer navigation should preserve the committed visible record")
+	support.expect_equal(viewport.call("get_edit_overlay_state"), navigation_overlay_snapshot,
+		"failed explorer navigation should preserve the independent edit overlay")
 	support.expect_equal(edit_plugin.get("_drag_kind"), "add",
 		"failed explorer navigation should preserve the active edit gesture")
 	support.expect_equal(main.get("_history").get_undo_count(), navigation_undo_before,
@@ -232,7 +281,10 @@ func run(support, tree: SceneTree) -> void:
 	release.pressed = false
 	main.call("_on_image_pointer_event", press, Vector2(0.5, 0.5))
 	main.call("_on_image_pointer_event", release, Vector2(2.5, 2.5))
-	support.expect(not (main.get_node("MainVBox/TopToolbar/Undo") as Button).disabled, "a committed mouse edit should enable Undo")
+	support.expect(_confirm_main_pending_box(main).is_empty(),
+		"standalone image Box should explicitly confirm its class and kind")
+	support.expect(main.get("_history").can_undo(),
+		"a committed mouse edit should remain undoable through Ctrl+Z")
 	support.expect_equal(_status(main), "Modified", "a committed mouse edit should show in-memory Modified state")
 	var added_region_id: String = main.call("_get_selected_region_id")
 	var image_edit_plugin = main.get("_edit_plugin")
@@ -246,38 +298,84 @@ func run(support, tree: SceneTree) -> void:
 	main.call("_on_image_pointer_event", reserved_motion, Vector2(1.5, 1.5))
 	var image_store = main.get("_store")
 	var image_history = main.get("_history")
-	var reserved_record_before: Dictionary = image_store.get_corrected_record(main.get_current_frame())
-	var reserved_visible_before: Dictionary = viewport.get("_record").duplicate(true)
-	var reserved_selection_before: String = main.call("_get_selected_region_id")
-	var reserved_active_before: StringName = tool_panel.get_active_tool()
-	var reserved_undo_before: int = image_history.get_undo_count()
-	var reserved_redo_before: int = image_history.get_redo_count()
-	support.expect_equal(reserved_selection_before, added_region_id,
-		"reserved-tool setup should retain a real selected region")
+	var tool_record_before: Dictionary = image_store.get_corrected_record(main.get_current_frame())
+	var tool_selection_before: String = main.call("_get_selected_region_id")
+	var tool_undo_before: int = image_history.get_undo_count()
+	var tool_redo_before: int = image_history.get_redo_count()
+	support.expect_equal(tool_selection_before, added_region_id,
+		"tool-switch setup should retain a real selected region")
 	support.expect_equal(image_edit_plugin.get("_drag_kind"), "add",
-		"reserved-tool setup should have an active edit gesture")
-	support.expect(not _find_region(reserved_visible_before, "__new_box_preview").is_empty(),
-		"reserved-tool setup should display a transient preview")
-	(tool_panel.get_node("ToolGrid/Subtract") as Button).pressed.emit()
-	support.expect_equal(main.get_node("MainVBox/StatusBar").text, "待开发",
-		"reserved tools should produce the exact approved status")
-	support.expect_equal(tool_panel.get_active_tool(), reserved_active_before,
-		"reserved tools should preserve active edit mode")
-	support.expect_equal(main.call("_get_selected_region_id"), reserved_selection_before,
-		"reserved tools should preserve region selection")
-	support.expect_equal(image_store.get_corrected_record(main.get_current_frame()), reserved_record_before,
-		"reserved tools should not mutate annotation data")
-	support.expect_equal(viewport.get("_record"), reserved_visible_before,
-		"reserved tools should preserve the visible edit preview")
-	support.expect_equal(image_edit_plugin.get("_drag_kind"), "add",
-		"reserved tools should preserve the active edit gesture")
-	support.expect_equal(image_history.get_undo_count(), reserved_undo_before,
-		"reserved tools should preserve exact undo history")
-	support.expect_equal(image_history.get_redo_count(), reserved_redo_before,
-		"reserved tools should preserve exact redo history")
+		"tool-switch setup should have an active edit gesture")
+	support.expect_equal(viewport.call("get_edit_overlay_state").get("phase"), &"drawing",
+		"tool-switch setup should display a Drawing overlay")
+	support.expect_equal(viewport.get("_record"), tool_record_before,
+		"tool-switch setup should keep committed content separate")
+	for tool_case: Array in [
+		["Subtract", &"subtract", "Subtract"],
+		["Lasso", &"lasso", "Lasso"],
+		["Paint", &"paint", "Paint"],
+		["Eraser", &"eraser", "Eraser"],
+	]:
+		(tool_panel.get_node("ToolGrid/" + tool_case[0]) as Button).pressed.emit()
+		support.expect_equal(main.get_node("MainVBox/StatusBar").text, "Tool: %s" % tool_case[2],
+			"%s should activate as a real tool" % tool_case[0])
+		support.expect_equal(tool_panel.get_active_tool(), tool_case[1],
+			"%s should become the active edit mode" % tool_case[0])
+		support.expect_equal(main.call("_get_selected_region_id"), tool_selection_before,
+			"%s activation should preserve region selection" % tool_case[0])
+		support.expect_equal(image_store.get_corrected_record(main.get_current_frame()), tool_record_before,
+			"%s activation alone should not mutate annotation data" % tool_case[0])
+		support.expect_equal(image_edit_plugin.get("_drag_kind"), "",
+			"%s activation should cancel the prior Box preview" % tool_case[0])
+		var activation_overlay: Dictionary = viewport.call("get_edit_overlay_state")
+		if tool_case[1] in [&"paint", &"eraser"]:
+			support.expect_equal(activation_overlay.get("phase"), &"brush_cursor",
+				"%s activation should replace the stale Box overlay with its idle brush cursor" % tool_case[0])
+		else:
+			support.expect_equal(activation_overlay, {},
+				"%s activation should leave no stale Box overlay" % tool_case[0])
+		support.expect_equal(image_history.get_undo_count(), tool_undo_before,
+			"%s activation should preserve undo history" % tool_case[0])
+		support.expect_equal(image_history.get_redo_count(), tool_redo_before,
+			"%s activation should preserve redo history" % tool_case[0])
 	image_edit_plugin.cancel()
-	main.call("_on_geometry_requested", added_region_id, [0.5, 0.5, -1.0, 2.0])
+	var refused_geometry: PackedStringArray = image_edit_plugin.invoke(&"set_selected_geometry", {
+		"box": [0.5, 0.5, -1.0, 2.0],
+	})
+	support.expect(not refused_geometry.is_empty(),
+		"the current Edit API should reject invalid selected geometry")
 	support.expect(_status(main) != "Modified" and "positive" in _status(main).to_lower(), "a refused edit should remain visible even when the dataset was already modified")
+
+	var import_input := source_root.path_join("cancel-fixture.mkv")
+	_write_text(import_input, "video import fixture")
+	var import_output := source_root.path_join("cancelled-video-output")
+	var import_controller = main.get_node("VideoImportController")
+	import_controller.python_path = "res://.venv/bin/python"
+	import_controller.cli_path = "res://tests/fixtures/fake_video_import.py"
+	import_controller.job_root = source_root.path_join("video-import-jobs")
+	var preserved_import_frame: int = main.get_current_frame()
+	var preserved_import_manifest: Dictionary = main.get("_manifest").duplicate(true)
+	main.call("_begin_video_import", import_input)
+	main.call("_on_video_output_parent_selected", source_root)
+	var import_name := main.get_node("VideoImportDialog/Margin/Content/DirectoryName") as LineEdit
+	import_name.text = import_output.get_file()
+	main.call("_on_video_import_start_pressed")
+	support.expect(import_controller.is_running(), "modal video import should start in the background")
+	main.call("_on_video_import_cancel_pressed")
+	var cancel_heartbeats := 0
+	while import_controller.is_running() and cancel_heartbeats < 300:
+		cancel_heartbeats += 1
+		await tree.create_timer(0.01).timeout
+	support.expect(cancel_heartbeats > 0, "modal cancellation should keep the UI process responsive")
+	support.expect_equal(main.get_current_frame(), preserved_import_frame,
+		"cancelled modal import should preserve the current frame")
+	support.expect_equal(main.get("_manifest"), preserved_import_manifest,
+		"cancelled modal import should preserve the active dataset")
+	support.expect(FileAccess.file_exists(import_input), "cancelled modal import should preserve the input")
+	support.expect(not DirAccess.dir_exists_absolute(import_output),
+		"cancelled modal import should not publish its target")
+	support.expect(not (main.get_node("VideoImportDialog") as Window).visible,
+		"the modal should close after cancellation settles")
 
 	var registry_renderer = main.call("get_discovered_plugin", "render", "canvas_region_renderer")
 	support.expect(registry_renderer != null and viewport.get("_renderer").get_script() == registry_renderer.get_script(), "integrated Main should inject a renderer instance created by the registry")
@@ -286,6 +384,235 @@ func run(support, tree: SceneTree) -> void:
 	await tree.process_frame
 	await _test_external_source_through_main(support, tree, packed)
 	_cleanup(support)
+
+
+func _test_working_mask_navigation_guards(
+	support,
+	tree: SceneTree,
+	main: Control,
+	source_root: String,
+	explorer: Node,
+) -> void:
+	var viewport = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport")
+	var timeline = main.get_node("MainVBox/TimelinePanel/TimelineColumn/Timeline")
+	var edit_plugin = main.get("_edit_plugin")
+	var resolution_message := "Use Fill, Close Gaps, or Escape before changing frames"
+	var history = main.get("_history")
+	support.expect(history.can_undo(), "WorkingMask history-guard setup should start from one real committed edit")
+	var surviving_region_id: String = main.call("_get_selected_region_id")
+	support.expect(not surviving_region_id.is_empty(),
+		"WorkingMask sidebar setup should retain the first real committed region")
+	main.call("_on_add_box_pressed")
+	var second_press := InputEventMouseButton.new()
+	second_press.button_index = MOUSE_BUTTON_LEFT
+	second_press.pressed = true
+	var second_release := InputEventMouseButton.new()
+	second_release.button_index = MOUSE_BUTTON_LEFT
+	second_release.pressed = false
+	main.call("_on_image_pointer_event", second_press, Vector2(2.75, 0.25))
+	main.call("_on_image_pointer_event", second_release, Vector2(3.75, 1.25))
+	support.expect(_confirm_main_pending_box(main).is_empty(),
+		"WorkingMask history setup should explicitly classify its second Box")
+	support.expect_equal(history.get_undo_count(), 2,
+		"WorkingMask setup should create a second real command for a residual Redo without removing the inspected region")
+	support.expect(history.undo(main.get("_store")), "history setup should create one real residual Redo command")
+	support.expect_equal(history.get_undo_count(), 1, "history-guard setup should retain the first real Undo command")
+	support.expect_equal(history.get_redo_count(), 1, "history-guard setup should expose one real Redo command")
+	main.call("_set_selected_region", surviving_region_id)
+	# These direct boundary rows supplement Task 10's mounted real-control
+	# Play/Previous/Next/timeline/Explorer matrix; both routes must converge on
+	# the same atomic navigation guard.
+	var navigation_cases := [
+		{"name": "direct set_frame", "action": func(): return main.set_frame(51), "returns_bool": true},
+		{"name": "direct seek", "action": func(): return main.seek(51), "returns_bool": true},
+		{"name": "direct step", "action": func(): return main.step(1), "returns_bool": true},
+		{"name": "Previous wrapper", "action": func(): main.call("_on_previous_pressed"), "returns_bool": false},
+		{"name": "Next wrapper", "action": func(): main.call("_on_next_pressed"), "returns_bool": false},
+		{"name": "timeline request", "action": func(): timeline.frame_requested.emit(51), "returns_bool": false},
+		{"name": "Explorer request", "action": func(): explorer.frame_requested.emit(51), "returns_bool": false},
+		{"name": "Play", "action": func(): main.play(), "returns_bool": false},
+	]
+	for case: Dictionary in navigation_cases:
+		_clear_main_transient(edit_plugin)
+		if main.get_current_frame() != 50:
+			support.expect(main.seek(50), "%s setup should return to frame 50" % case.name)
+		_install_main_working_mask(main, resolution_message)
+		var overlay_before: Dictionary = viewport.get_edit_overlay_state()
+		var record_before: Dictionary = main.get("_store").get_corrected_record(50)
+		var undo_before: int = main.get("_history").get_undo_count()
+		var redo_before: int = main.get("_history").get_redo_count()
+		var result: Variant = case.action.call()
+		if bool(case.returns_bool):
+			support.expect_equal(result, false, "%s should be refused while a WorkingMask exists" % case.name)
+		support.expect_equal(main.get_current_frame(), 50, "%s should keep the accepted frame" % case.name)
+		support.expect(not main.is_playing(), "%s should leave playback paused" % case.name)
+		support.expect_equal(main.get("_store").get_corrected_record(50), record_before, "%s should preserve Store" % case.name)
+		support.expect_equal(main.get("_history").get_undo_count(), undo_before, "%s should preserve undo history" % case.name)
+		support.expect_equal(main.get("_history").get_redo_count(), redo_before, "%s should preserve redo history" % case.name)
+		support.expect_equal(viewport.get_edit_overlay_state(), overlay_before, "%s should preserve every WorkingMask byte" % case.name)
+		support.expect_equal(timeline.get("_current_frame"), 50, "%s should restore the timeline highlight" % case.name)
+		support.expect_equal(_selected_frame(explorer), 50, "%s should restore the Explorer highlight" % case.name)
+		support.expect_equal(_status(main), resolution_message, "%s should explain how to resolve the blocking edit" % case.name)
+
+	_clear_main_transient(edit_plugin)
+	if main.get_current_frame() != 50:
+		support.expect(main.seek(50), "playback-tick guard setup should return to frame 50")
+	var tool_panel = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/ToolPanel")
+	(tool_panel.get_node("ToolGrid/Paint") as Button).pressed.emit()
+	var radius := tool_panel.get_node("OptionRow/Value") as SpinBox
+	support.expect_equal(radius.value, 8.0, "WorkingMask option setup should start from the accepted shared radius")
+	_install_main_working_mask(main, resolution_message)
+	var tick_overlay: Dictionary = viewport.get_edit_overlay_state()
+	var option_store_before: Dictionary = main.get("_store").get_corrected_record(50)
+	var option_history_before := [history.get_undo_count(), history.get_redo_count()]
+	radius.value = 20.0
+	support.expect_equal(radius.value, 8.0,
+		"a WorkingMask-refused radius request should visibly roll back to the accepted value")
+	support.expect_equal(edit_plugin.get("_brush_radius_image_px"), 8.0,
+		"a WorkingMask-refused radius request must not mutate the Edit plugin")
+	support.expect_equal(main.get("_store").get_corrected_record(50), option_store_before,
+		"a WorkingMask-refused radius request must preserve Store bytes")
+	support.expect_equal([history.get_undo_count(), history.get_redo_count()], option_history_before,
+		"a WorkingMask-refused radius request must preserve both history stacks")
+	support.expect_equal(viewport.get_edit_overlay_state(), tick_overlay,
+		"a WorkingMask-refused radius request must preserve every overlay byte")
+	support.expect(main.get("_playback_controller").play(50), "test setup should bypass Main and arm the playback controller")
+	main.call("_process", 2.0)
+	support.expect_equal(main.get_current_frame(), 50, "a playback tick should be refused at the same set_frame boundary")
+	support.expect(not main.is_playing(), "a blocked playback tick should pause the controller")
+	support.expect_equal(viewport.get_edit_overlay_state(), tick_overlay, "a blocked playback tick should preserve the WorkingMask")
+
+	var state_before: Dictionary = edit_plugin.get_edit_state() if edit_plugin.has_method("get_edit_state") else {}
+	var transform = viewport.get_image_transform()
+	main.call("_on_zoom_pressed", 1.2)
+	support.expect_equal(viewport.get_edit_overlay_state(), tick_overlay, "Zoom should preserve the WorkingMask overlay")
+	main.call("_on_fit_pressed")
+	support.expect_equal(viewport.get_edit_overlay_state(), tick_overlay, "Fit should preserve the WorkingMask overlay")
+	var middle_press := InputEventMouseButton.new()
+	middle_press.button_index = MOUSE_BUTTON_MIDDLE
+	middle_press.pressed = true
+	viewport.call("_gui_input", middle_press)
+	var pan_motion := InputEventMouseMotion.new()
+	pan_motion.relative = Vector2(7, -3)
+	pan_motion.button_mask = MOUSE_BUTTON_MASK_MIDDLE
+	viewport.call("_gui_input", pan_motion)
+	var middle_release := InputEventMouseButton.new()
+	middle_release.button_index = MOUSE_BUTTON_MIDDLE
+	middle_release.pressed = false
+	viewport.call("_gui_input", middle_release)
+	support.expect_equal(viewport.get_edit_overlay_state(), tick_overlay, "middle-button pan should preserve the WorkingMask overlay")
+	viewport.notification(Node.NOTIFICATION_WM_WINDOW_FOCUS_OUT)
+	support.expect_equal(viewport.get_edit_overlay_state(), tick_overlay, "focus loss should preserve the WorkingMask overlay")
+	if edit_plugin.has_method("get_edit_state"):
+		support.expect_equal(edit_plugin.get_edit_state(), state_before, "transform and focus changes should preserve the complete edit state")
+	support.expect(transform.is_configured(), "transform preservation checks should keep the shared image transform configured")
+
+	var old_source = main.get("_source")
+	var old_store = main.get("_store")
+	var old_history = main.get("_history")
+	var old_manifest: Dictionary = main.get("_manifest").duplicate(true)
+	var replacement_errors: PackedStringArray = main.open_source(source_root)
+	support.expect(not replacement_errors.is_empty(), "source replacement should be refused while a WorkingMask exists")
+	support.expect(main.get("_source") == old_source, "blocked source replacement should preserve source identity")
+	support.expect(main.get("_store") == old_store, "blocked source replacement should preserve Store identity")
+	support.expect(main.get("_history") == old_history, "blocked source replacement should preserve History identity")
+	support.expect_equal(main.get("_manifest"), old_manifest, "blocked source replacement should preserve the accepted manifest")
+	support.expect_equal(main.get_current_frame(), 50, "blocked source replacement should preserve the frame")
+	support.expect_equal(viewport.get_edit_overlay_state(), tick_overlay, "candidate activation must not overwrite the old WorkingMask state")
+
+	var sidebar_record: Dictionary = old_store.get_corrected_record(50)
+	var sidebar_undo: int = old_history.get_undo_count()
+	var sidebar_redo: int = old_history.get_redo_count()
+	var sidebar_selection: String = main.call("_get_selected_region_id")
+	var sidebar_state: Dictionary = edit_plugin.get_edit_state()
+	var sidebar = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/AnnotationSidebar")
+	var sidebar_snapshot := {
+		"project": sidebar.get_project_rows_snapshot(),
+		"frame": sidebar.get_frame_rows_snapshot(),
+	}
+	var accepted_region := _find_region(sidebar_record, sidebar_selection).duplicate(true)
+	support.expect(not accepted_region.is_empty(),
+		"sidebar refusal setup should use a selected region that still exists in Store")
+	main.call("_open_reclassification_dialog", sidebar_selection)
+	support.expect(not main.get_node("ClassAssignmentDialog").call("is_assignment_open"),
+		"reclassification should be refused before opening a modal behind WorkingMask")
+	support.expect_equal({
+		"project": sidebar.get_project_rows_snapshot(),
+		"frame": sidebar.get_frame_rows_snapshot(),
+	}, sidebar_snapshot, "a refused reclassification should preserve the complete sidebar snapshot")
+	support.expect_equal(old_store.get_corrected_record(50), sidebar_record,
+		"sidebar reclassification should be refused behind a WorkingMask")
+	support.expect_equal(old_history.get_undo_count(), sidebar_undo,
+		"sidebar refusal should not enter history")
+	support.expect_equal(main.call("_get_selected_region_id"), sidebar_selection,
+		"sidebar refusal should not change selection before the guard")
+	support.expect_equal(edit_plugin.get_edit_state(), sidebar_state,
+		"sidebar refusal should preserve the complete WorkingMask session state")
+	support.expect_equal(_status(main), resolution_message,
+		"sidebar refusal must not overwrite Main's WorkingMask resolution message")
+	main.call("_on_redo_pressed")
+	support.expect_equal(old_history.get_undo_count(), sidebar_undo, "Redo should be refused behind a WorkingMask")
+	support.expect_equal(old_history.get_redo_count(), sidebar_redo, "Redo refusal should preserve a real residual redo command")
+	support.expect_equal(old_store.get_corrected_record(50), sidebar_record, "Redo refusal should not replay geometry behind a WorkingMask")
+	support.expect_equal(viewport.get_edit_overlay_state(), tick_overlay, "sidebar/history refusals should preserve the WorkingMask")
+
+	var history_before_escape: int = old_history.get_undo_count()
+	support.expect(edit_plugin.handle_key(_pressed_key(KEY_ESCAPE)), "Escape should resolve the guarded WorkingMask")
+	support.expect_equal(viewport.get_edit_overlay_state(), {}, "Escape should clear only the transient WorkingMask")
+	support.expect_equal(old_history.get_undo_count(), history_before_escape, "Escape should create zero history entries")
+	(tool_panel.get_node("ToolGrid/Paint") as Button).pressed.emit()
+	main.call("_on_image_pointer_event", second_press, Vector2(1.0, 1.0))
+	support.expect_equal(viewport.get_edit_overlay_state().get("brush_radius"), 8.0,
+		"after Escape, Paint should still render with the last accepted shared radius")
+	support.expect(edit_plugin.handle_key(_pressed_key(KEY_ESCAPE)), "Paint radius verification should cancel without history")
+	main.call("_set_selected_region", surviving_region_id)
+	(tool_panel.get_node("ToolGrid/Eraser") as Button).pressed.emit()
+	main.call("_on_image_pointer_event", second_press, Vector2(1.0, 1.0))
+	support.expect_equal(viewport.get_edit_overlay_state().get("brush_radius"), 8.0,
+		"after Escape, Eraser should share the unchanged accepted radius")
+	support.expect(edit_plugin.handle_key(_pressed_key(KEY_ESCAPE)), "Eraser radius verification should cancel without history")
+	support.expect_equal(old_history.get_undo_count(), history_before_escape,
+		"Paint/Eraser radius verification previews should create zero history")
+	support.expect(main.seek(51), "navigation should resume after Escape resolves the WorkingMask")
+	support.expect(main.seek(50), "WorkingMask navigation test should restore its caller's accepted frame")
+	await tree.process_frame
+
+
+func _install_main_working_mask(main: Control, message: String) -> void:
+	var edit_plugin = main.get("_edit_plugin")
+	var session: Variant = edit_plugin.get("_session")
+	var frame: int = main.get_current_frame()
+	session.begin(&"paint", frame, "", main.get("_store").get_corrected_record(frame))
+	session.set_working_mask({
+		"roi": Rect2i(0, 0, 4, 3),
+		"mask": PackedByteArray([1, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1]),
+	}, message)
+	edit_plugin.call("_push_session_overlay")
+
+
+func _confirm_main_pending_box(main: Control) -> PackedStringArray:
+	var edit_plugin = main.get("_edit_plugin")
+	var request: Dictionary = edit_plugin.get("_session").pending_request()
+	var errors: PackedStringArray = edit_plugin.invoke(&"confirm_pending_region", {
+		"candidate_token": request.get("candidate_token"),
+		"class": "test class",
+		"kind": "free kind",
+	})
+	if errors.is_empty():
+		main.call("_refresh_after_edit", true)
+	return errors
+
+
+func _clear_main_transient(edit_plugin: Variant) -> void:
+	if edit_plugin != null:
+		edit_plugin.handle_key(_pressed_key(KEY_ESCAPE))
+
+
+func _pressed_key(keycode: Key) -> InputEventKey:
+	var event := InputEventKey.new()
+	event.keycode = keycode
+	event.pressed = true
+	return event
 
 
 func _test_external_source_through_main(support, tree: SceneTree, packed: PackedScene) -> void:

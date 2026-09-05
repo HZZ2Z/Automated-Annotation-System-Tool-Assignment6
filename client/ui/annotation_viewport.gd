@@ -5,6 +5,7 @@ signal region_selected(region_id: String)
 signal image_pointer_event(event: InputEvent, image_position: Vector2)
 signal transform_changed
 signal edit_cancel_requested
+signal selection_cancel_requested
 
 const TRANSFORM_SCRIPT := preload("res://client/services/viewport_transform.gd")
 const RENDERER_SCRIPT := preload("res://client/pipeline/null_renderer.gd")
@@ -13,12 +14,17 @@ const WHEEL_ZOOM_FACTOR := 1.1
 var _viewport_transform = TRANSFORM_SCRIPT.new()
 var _renderer = RENDERER_SCRIPT.new()
 var _texture: Texture2D
+var _current_image: Image
+var _current_image_capture_count := 0
 var _record: Dictionary = {}
 var _selected_id := ""
+var _hovered_id := ""
 var _opacity := 0.35
-var _space_held := false
 var _pan_button := MOUSE_BUTTON_NONE
+var _left_edit_active := false
+var _edit_selection_authoritative := false
 var _last_transform_signature: Array = []
+var _edit_overlay_state: Dictionary = {}
 
 
 func _ready() -> void:
@@ -27,6 +33,7 @@ func _ready() -> void:
 	if _configure_transform():
 		transform_changed.emit()
 	_sync_renderer()
+	_sync_edit_overlay()
 
 
 func set_renderer(renderer: Variant) -> void:
@@ -37,15 +44,21 @@ func set_renderer(renderer: Variant) -> void:
 			return
 	_renderer = renderer
 	_sync_renderer()
+	_sync_suppressed_region_to_renderer()
+	_sync_hover_to_renderer()
 	queue_redraw()
 
 
 func set_texture(texture: Texture2D) -> void:
-	if _texture == texture:
+	var texture_identity_changed := _texture != texture
+	_refresh_current_image(texture)
+	if not texture_identity_changed and _image_dimensions_match_configured_transform():
 		return
 	_texture = texture
 	var transform_did_change := _configure_transform()
 	_sync_renderer()
+	if transform_did_change:
+		_sync_edit_overlay_transform()
 	queue_redraw()
 	if transform_did_change:
 		transform_changed.emit()
@@ -57,6 +70,8 @@ func set_record(record: Dictionary) -> void:
 	_record = record.duplicate(true)
 	var transform_did_change := _configure_transform()
 	_sync_renderer()
+	if transform_did_change:
+		_sync_edit_overlay_transform()
 	queue_redraw()
 	if transform_did_change:
 		transform_changed.emit()
@@ -70,6 +85,18 @@ func set_selected_region_id(region_id: String) -> void:
 	queue_redraw()
 
 
+func set_hovered_region_id(region_id: String) -> void:
+	if _hovered_id == region_id:
+		return
+	_hovered_id = region_id
+	_sync_hover_to_renderer()
+	queue_redraw()
+
+
+func get_hovered_region_id() -> String:
+	return _hovered_id
+
+
 func set_overlay_opacity(opacity: float) -> void:
 	var next_opacity := clampf(opacity, 0.0, 1.0) if is_finite(opacity) else 0.35
 	if is_equal_approx(_opacity, next_opacity):
@@ -81,7 +108,10 @@ func set_overlay_opacity(opacity: float) -> void:
 
 func set_state(texture: Texture2D, record: Dictionary, selected_id: String, opacity: float) -> void:
 	var next_opacity := clampf(opacity, 0.0, 1.0) if is_finite(opacity) else 0.35
-	if _texture == texture and _record == record and _selected_id == selected_id and is_equal_approx(_opacity, next_opacity):
+	var texture_identity_changed := _texture != texture
+	_refresh_current_image(texture)
+	if (not texture_identity_changed and _record == record and _selected_id == selected_id
+			and is_equal_approx(_opacity, next_opacity) and _image_dimensions_match_configured_transform()):
 		return
 	_texture = texture
 	_record = record.duplicate(true)
@@ -89,6 +119,8 @@ func set_state(texture: Texture2D, record: Dictionary, selected_id: String, opac
 	_opacity = next_opacity
 	var transform_did_change := _configure_transform()
 	_sync_renderer()
+	if transform_did_change:
+		_sync_edit_overlay_transform()
 	queue_redraw()
 	if transform_did_change:
 		transform_changed.emit()
@@ -98,14 +130,50 @@ func get_image_transform():
 	return _viewport_transform
 
 
+func get_current_image() -> Image:
+	return _current_image
+
+
+func set_edit_selection_authoritative(value: bool) -> void:
+	_edit_selection_authoritative = value
+
+
+func set_edit_overlay(state: Dictionary) -> void:
+	_edit_overlay_state = state.duplicate(true)
+	_sync_suppressed_region_to_renderer()
+	_sync_edit_overlay()
+	queue_redraw()
+
+
+func clear_edit_overlay() -> void:
+	if _edit_overlay_state.is_empty():
+		return
+	_edit_overlay_state = {}
+	_sync_suppressed_region_to_renderer()
+	_sync_edit_overlay()
+	queue_redraw()
+
+
+func get_edit_overlay_state() -> Dictionary:
+	return _edit_overlay_state.duplicate(true)
+
+
 func notify_transform_changed() -> void:
 	if not _viewport_transform.is_configured():
 		return
 	if _last_transform_signature == _transform_signature():
 		return
 	_sync_renderer()
+	_sync_edit_overlay_transform()
 	queue_redraw()
 	transform_changed.emit()
+
+
+func reset_view_to_fit() -> bool:
+	if not _viewport_transform.reset_to_fit():
+		return false
+	notify_transform_changed()
+	return true
 
 
 func _draw() -> void:
@@ -115,26 +183,20 @@ func _draw() -> void:
 func _notification(what: int) -> void:
 	match what:
 		NOTIFICATION_WM_WINDOW_FOCUS_OUT:
-			edit_cancel_requested.emit()
-			_space_held = false
 			_pan_button = MOUSE_BUTTON_NONE
+			_left_edit_active = false
 		NOTIFICATION_RESIZED:
 			if _viewport_transform == null or _renderer == null:
 				return
 			if _configure_transform():
 				_sync_renderer()
+				_sync_edit_overlay_transform()
 				queue_redraw()
 				transform_changed.emit()
 
 
-func _input(event: InputEvent) -> void:
-	if event is InputEventKey:
-		_track_space_state(event)
-
-
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventKey:
-		_update_space_state(event)
 		return
 	if event is InputEventMouseButton:
 		_handle_mouse_button(event)
@@ -143,15 +205,9 @@ func _gui_input(event: InputEvent) -> void:
 		_handle_mouse_motion(event)
 
 
-func _unhandled_key_input(event: InputEvent) -> void:
-	if event is InputEventKey:
-		_update_space_state(event)
-
-
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 		if event.pressed and _viewport_transform.is_configured():
-			edit_cancel_requested.emit()
 			var factor := WHEEL_ZOOM_FACTOR if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / WHEEL_ZOOM_FACTOR
 			_viewport_transform.zoom_at(event.position, factor)
 			notify_transform_changed()
@@ -159,35 +215,49 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		return
 	if event.button_index == MOUSE_BUTTON_MIDDLE:
 		if event.pressed:
-			edit_cancel_requested.emit()
-		_pan_button = MOUSE_BUTTON_MIDDLE if event.pressed else MOUSE_BUTTON_NONE
+			_pan_button = MOUSE_BUTTON_MIDDLE
+		else:
+			_pan_button = MOUSE_BUTTON_NONE
+		accept_event()
+		return
+	if event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.pressed:
+			selection_cancel_requested.emit()
 		accept_event()
 		return
 	if event.button_index != MOUSE_BUTTON_LEFT:
-		return
-	if event.pressed and _space_held:
-		edit_cancel_requested.emit()
-		_pan_button = MOUSE_BUTTON_LEFT
-		accept_event()
 		return
 	if not event.pressed:
 		if _pan_button == MOUSE_BUTTON_LEFT:
 			_pan_button = MOUSE_BUTTON_NONE
 			accept_event()
 			return
-		_emit_image_pointer(event)
+		if _left_edit_active:
+			_emit_image_pointer(event, true)
+			_left_edit_active = false
 		return
 	if not _viewport_transform.is_configured():
 		return
-	var hit: Dictionary = _renderer.hit_test(_viewport_transform.viewport_to_image(event.position))
-	if not hit.is_empty():
+	if not _viewport_transform.contains_viewport_point(event.position):
+		_left_edit_active = false
+		region_selected.emit("")
+		accept_event()
+		return
+	_left_edit_active = true
+	var image_position: Vector2 = _viewport_transform.viewport_to_image(event.position)
+	var hit: Dictionary = _renderer.hit_test(image_position)
+	if not _edit_selection_authoritative:
 		region_selected.emit(str(hit.get("id", "")))
-	_emit_image_pointer(event)
+	image_pointer_event.emit(event, image_position)
 
 
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	if _pan_button == MOUSE_BUTTON_NONE:
-		_emit_image_pointer(event)
+		if event.button_mask & MOUSE_BUTTON_MASK_LEFT:
+			if _left_edit_active:
+				_emit_image_pointer(event, true)
+		else:
+			_emit_image_pointer(event)
 		return
 	if not _viewport_transform.is_configured():
 		return
@@ -195,31 +265,23 @@ func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	notify_transform_changed()
 	accept_event()
 
-
-func _update_space_state(event: InputEventKey) -> void:
-	if _track_space_state(event):
-		accept_event()
-
-
-func _track_space_state(event: InputEventKey) -> bool:
-	if event.keycode != KEY_SPACE and event.physical_keycode != KEY_SPACE:
-		return false
-	_space_held = event.pressed
-	if not _space_held and _pan_button == MOUSE_BUTTON_LEFT:
-		_pan_button = MOUSE_BUTTON_NONE
-	return true
-
-
-func _emit_image_pointer(event: InputEventMouse) -> void:
+func _emit_image_pointer(event: InputEventMouse, clamp_to_image: bool = false) -> void:
 	if not _viewport_transform.is_configured():
 		return
-	image_pointer_event.emit(event, _viewport_transform.viewport_to_image(event.position))
+	if not clamp_to_image and not _viewport_transform.contains_viewport_point(event.position):
+		return
+	var image_position: Vector2 = _viewport_transform.viewport_to_image(event.position)
+	if clamp_to_image:
+		image_position.x = clampf(image_position.x, 0.0, _viewport_transform.image_size.x)
+		image_position.y = clampf(image_position.y, 0.0, _viewport_transform.image_size.y)
+	image_pointer_event.emit(event, image_position)
 
 
 func _configure_transform() -> bool:
 	var new_image_size := _state_image_size()
 	var new_viewport_rect := Rect2(Vector2.ZERO, size)
 	if not _valid_size(new_image_size) or not _valid_size(new_viewport_rect.size):
+		_left_edit_active = false
 		if _viewport_transform.is_configured():
 			_viewport_transform.configure(Vector2.ZERO, Rect2())
 			return true
@@ -238,9 +300,53 @@ func _state_image_size() -> Vector2:
 	return Vector2.ZERO
 
 
+func _image_dimensions_match_configured_transform() -> bool:
+	var current_size := _state_image_size()
+	if not _valid_size(current_size):
+		return not _viewport_transform.is_configured()
+	return _viewport_transform.is_configured() and _viewport_transform.image_size.is_equal_approx(current_size)
+
+
+func _refresh_current_image(texture: Texture2D) -> void:
+	if texture == null:
+		_current_image = null
+		return
+	# Every explicit texture/state submission is a cache invalidation boundary,
+	# including a same-identity ImageTexture that may have been updated in place.
+	# Pointer events only reuse this detached snapshot and never read back again.
+	_current_image_capture_count += 1
+	var texture_image := texture.get_image()
+	if texture_image == null or texture_image.is_empty():
+		_current_image = null
+		return
+	_current_image = texture_image.duplicate() as Image
+
+
 func _sync_renderer() -> void:
 	_renderer.set_state(_texture, _record, _viewport_transform, _selected_id, _opacity)
 	_last_transform_signature = _transform_signature()
+
+
+func _sync_hover_to_renderer() -> void:
+	if _renderer != null and _renderer.has_method("set_hovered_region_id"):
+		_renderer.set_hovered_region_id(_hovered_id)
+
+
+func _sync_suppressed_region_to_renderer() -> void:
+	if _renderer != null and _renderer.has_method("set_suppressed_region_id"):
+		_renderer.set_suppressed_region_id(str(_edit_overlay_state.get("suppress_region_id", "")))
+
+
+func _sync_edit_overlay() -> void:
+	var overlay := get_node_or_null("EditOverlay")
+	if overlay != null and overlay.has_method("set_state"):
+		overlay.set_state(_edit_overlay_state, _viewport_transform)
+
+
+func _sync_edit_overlay_transform() -> void:
+	var overlay := get_node_or_null("EditOverlay")
+	if overlay != null and overlay.has_method("set_transform"):
+		overlay.set_transform(_viewport_transform)
 
 
 func _transform_signature() -> Array:

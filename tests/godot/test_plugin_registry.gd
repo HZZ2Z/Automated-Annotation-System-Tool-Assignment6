@@ -47,6 +47,29 @@ static func run(support) -> void:
 	support.expect(registry.get_plugin("edit", "basic_edit_tools") != null, "production edit plugin should be discovered")
 	support.expect(registry.get_plugin("source", "fixture_source") == null, "discover should replace prior registry state")
 	support.expect(registry.get_plugin("source", "image_sequence_source") != registry.get_plugin("source", "missing"), "plugin lookup should return only the requested instance")
+	var manifest_value: Variant = JSON.parse_string(FileAccess.get_file_as_string(
+		"res://client/plugins/edit/basic_edit_tools/plugin.json"
+	))
+	support.expect(manifest_value is Dictionary, "the basic edit manifest should remain valid JSON")
+	if manifest_value is Dictionary:
+		var capabilities: Array = manifest_value.get("capabilities", [])
+		support.expect("delete" in capabilities,
+			"Delete remains an EditStage capability for the Select keyboard path")
+		support.expect(not "wipe" in capabilities, "Wipe must not remain an EditStage capability")
+		support.expect(not "close_gaps" in capabilities and "eraser" in capabilities,
+			"the manifest must remove Close Gaps while retaining Eraser")
+	var edit: Variant = registry.create_plugin("edit", "basic_edit_tools")
+	if edit != null:
+		support.expect_equal(edit.invoke(&"set_tool_option", {
+			"option_id": &"brush_radius", "value": 13.0,
+		}), PackedStringArray(), "the shared brush radius should accept a finite in-range value")
+		support.expect_equal(edit.get("_brush_radius_image_px"), 13.0,
+			"accepted brush-radius options should update plugin state")
+		support.expect(not edit.invoke(&"set_tool_option", {
+			"option_id": &"brush_radius", "value": INF,
+		}).is_empty(), "non-finite brush radius must be refused")
+		support.expect_equal(edit.get("_brush_radius_image_px"), 13.0,
+			"a refused brush radius must preserve the accepted value")
 
 	var extension_errors: PackedStringArray = registry.discover("res://tests/godot/fixtures/extension_plugins")
 	support.expect_equal(extension_errors, PackedStringArray(), "an external fixture directory should load without registry changes")

@@ -2,13 +2,11 @@ import json
 import math
 from pathlib import Path
 
-import pytest
-
-from annotool.contracts import validate_instance, validate_manifest_semantics
+from annotation_data.contracts import validate_instance, validate_manifest_semantics
 
 
 ROOT = Path(__file__).resolve().parents[2]
-FIXTURES = ROOT / "core/frame_source/fixtures"
+FIXTURES = ROOT / "tests/fixtures/dataset_manifest_v1"
 
 
 def load(path: Path) -> dict:
@@ -55,20 +53,25 @@ def test_manifest_semantics_compares_integral_float_frame_count() -> None:
     schema_errors = validate_instance(manifest, "dataset-manifest-v1.schema.json")
     errors = validate_manifest_semantics(manifest)
 
-    assert any(error.startswith("frame_count:") for error in schema_errors)
-    assert any(error.startswith("frame_count:") for error in errors)
+    assert schema_errors == []
+    assert any("expected 2 entries" in error for error in errors)
 
 
-@pytest.mark.parametrize(
-    ("frame_count", "frame_entries"),
-    [(2.0, 2), (True, 1)],
-)
-def test_manifest_requires_an_exact_integer_frame_count(
-    frame_count: int | float | bool, frame_entries: int
-) -> None:
+def test_manifest_accepts_integral_float_frame_count() -> None:
     manifest = load(FIXTURES / "valid/dataset-manifest.json")
-    manifest["frame_count"] = frame_count
-    manifest["frames"] = manifest["frames"][:frame_entries]
+    manifest["frame_count"] = 2.0
+
+    schema_errors = validate_instance(manifest, "dataset-manifest-v1.schema.json")
+    semantic_errors = validate_manifest_semantics(manifest)
+
+    assert schema_errors == []
+    assert semantic_errors == []
+
+
+def test_manifest_rejects_boolean_frame_count() -> None:
+    manifest = load(FIXTURES / "valid/dataset-manifest.json")
+    manifest["frame_count"] = True
+    manifest["frames"] = manifest["frames"][:1]
 
     schema_errors = validate_instance(manifest, "dataset-manifest-v1.schema.json")
     semantic_errors = validate_manifest_semantics(manifest)

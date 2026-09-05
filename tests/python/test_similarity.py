@@ -4,8 +4,8 @@ import cv2
 import numpy as np
 import pytest
 
-from annotool.sample import generate_sample
-from annotool.similarity import contiguous_run, normalized_mad
+from annotation_data.sample import generate_sample
+from annotation_data.similarity import contiguous_run, normalized_mad
 
 
 def test_identical_frames_have_zero_distance() -> None:

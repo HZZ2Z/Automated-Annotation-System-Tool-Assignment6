@@ -16,6 +16,12 @@ func execute(command: Variant, store: Variant) -> PackedStringArray:
 		return PackedStringArray(["command: expected an object with apply(store) and revert(store)"])
 	if not command.has_method("apply") or not command.has_method("revert"):
 		return PackedStringArray(["command: expected apply(store) and revert(store)"])
+	if command.has_method("is_noop"):
+		var no_op: Variant = command.is_noop()
+		if typeof(no_op) != TYPE_BOOL:
+			return PackedStringArray(["command: is_noop must return bool"])
+		if no_op:
+			return PackedStringArray()
 	var result: Variant = command.apply(store)
 	if not result is PackedStringArray:
 		return PackedStringArray(["command: apply must return PackedStringArray"])

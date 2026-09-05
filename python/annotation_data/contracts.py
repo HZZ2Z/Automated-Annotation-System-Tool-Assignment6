@@ -15,11 +15,20 @@ SCHEMA_PATHS = {
     "model_output_v1.schema.json": ROOT / "core/schemas/model_output_v1.schema.json",
     "dataset-manifest-v1.schema.json": ROOT
     / "core/frame_source/dataset-manifest-v1.schema.json",
+    "media-label-v1.schema.json": ROOT
+    / "core/workspace/media-label-v1.schema.json",
 }
 
 
-def _is_exact_integer(_checker: Any, instance: Any) -> bool:
-    return type(instance) is int
+def _is_integral_json_number(instance: Any) -> bool:
+    """Match JSON Schema integer semantics without accepting booleans."""
+    if type(instance) is int:
+        return True
+    return type(instance) is float and math.isfinite(instance) and instance.is_integer()
+
+
+def _is_json_schema_integer(_checker: Any, instance: Any) -> bool:
+    return _is_integral_json_number(instance)
 
 
 def _is_finite_json_number(_checker: Any, instance: Any) -> bool:
@@ -32,7 +41,7 @@ StrictDraft202012Validator = extend(
     Draft202012Validator,
     type_checker=(
         Draft202012Validator.TYPE_CHECKER
-        .redefine("integer", _is_exact_integer)
+        .redefine("integer", _is_json_schema_integer)
         .redefine("number", _is_finite_json_number)
     ),
 )
@@ -82,16 +91,19 @@ def validate_manifest_semantics(record: dict[str, Any]) -> list[str]:
         return errors
 
     frame_count = record.get("frame_count")
-    if type(frame_count) is not int:
-        errors.append("frame_count: must be an exact integer")
-    elif frame_count != len(frames):
+    if not _is_integral_json_number(frame_count):
+        errors.append("frame_count: must be an integer")
+    elif int(frame_count) != len(frames):
         errors.append(
             f"frame_count: expected {len(frames)} entries, got {frame_count}"
         )
 
     similarity_scores = record.get("similarity_scores")
     if "similarity_scores" in record and isinstance(similarity_scores, list):
-        if type(frame_count) is int and len(similarity_scores) != frame_count - 1:
+        if (
+            _is_integral_json_number(frame_count)
+            and len(similarity_scores) != int(frame_count) - 1
+        ):
             errors.append(
                 "similarity_scores: expected "
                 f"{frame_count - 1} entries, got {len(similarity_scores)}"

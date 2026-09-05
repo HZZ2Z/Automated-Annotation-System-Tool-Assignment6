@@ -22,6 +22,13 @@ func apply(store: Variant) -> PackedStringArray:
 	return store.replace_corrected_record(frame, after.duplicate(true))
 
 
+func is_noop() -> bool:
+	# A rejected constructor often leaves `after == before`; it is still an
+	# invalid command and must surface its explanatory error instead of being
+	# mistaken for a successful no-op.
+	return _construction_errors.is_empty() and before == after
+
+
 func revert(store: Variant) -> void:
 	if store is Object and store.has_method("replace_corrected_record"):
 		store.replace_corrected_record(frame, before.duplicate(true))
