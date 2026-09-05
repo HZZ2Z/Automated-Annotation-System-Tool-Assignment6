@@ -28,26 +28,40 @@ func run(support, tree: SceneTree) -> void:
 
 	var expected := [
 		["Box", &"box", "Add Box", true, "Add\nBox"],
-		["Subtract", &"subtract", "Subtract", false, "Subtract"],
-		["Lasso", &"lasso", "Lasso", false, "Lasso"],
+		["Subtract", &"subtract", "Subtract", true, "Subtract"],
+		["Lasso", &"lasso", "Lasso", true, "Lasso"],
 		["Fill", &"fill", "Fill", true, "Fill"],
-		["Delete", &"delete", "Erase", true, "Erase"],
-		["Close", &"close", "Close", false, "Close"],
-		["Paint", &"paint", "Paint", false, "Paint"],
-		["Wipe", &"wipe", "Wipe", false, "Wipe"],
-		["RegionGrowing", &"region_growing", "Region Growing", false, "Region\nGrowing"],
-		["LiveWire", &"live_wire", "Live Wire", false, "Live\nWire"],
+		["Paint", &"paint", "Paint", true, "Paint"],
+		["Eraser", &"eraser", "Eraser", true, "Eraser"],
 		["Select", &"select", "Selection", true, "Selection"],
-		["Move", &"move", "Move / Resize", true, "Move /\nResize"],
 	]
+	var expected_ids := [
+		&"box", &"subtract", &"lasso", &"fill",
+		&"paint", &"eraser", &"select",
+	]
+	support.expect_equal(definitions.map(func(definition): return definition.id), expected_ids,
+		"the toolbar must expose the approved seven distinct tools in order")
+	support.expect(not definitions.any(func(definition): return definition.id in [&"delete", &"wipe"]),
+		"whole-region Erase and Wipe descriptors must not exist")
+	support.expect(not definitions.any(func(definition): return definition.id == &"close_gaps"),
+		"Close Gaps must not remain in the toolbar contract")
+	var brush_option := {
+		"id": &"brush_radius", "label": "Brush radius", "kind": &"float_range",
+		"min": 1.0, "max": 40.0, "step": 1.0, "default": 8.0,
+		"shared_key": &"brush_radius",
+	}
+	support.expect_equal(definitions[4].get("options"), [brush_option],
+		"Paint must declare the shared image-space radius")
+	support.expect_equal(definitions[5].get("options"), [brush_option],
+		"Eraser must declare the same shared image-space radius")
 	support.expect_equal(panel.custom_minimum_size.x, 320.0,
 		"ToolPanel should retain the approved 320px minimum width")
 	support.expect(panel.get_combined_minimum_size().x <= 320.0,
 		"ToolPanel content should fit its real 320px width")
 	support.expect_equal(grid.columns, 4, "ToolPanel should use one flat four-column grid")
-	support.expect_equal(grid.get_child_count(), 12, "ToolPanel should expose twelve stable slots")
+	support.expect_equal(grid.get_child_count(), 7, "ToolPanel should expose seven stable slots")
 	support.expect_equal(definitions.size(), expected.size(),
-		"ToolPanel should retain twelve approved registry entries")
+		"ToolPanel should retain seven approved registry entries")
 	var button_height := -1.0
 	for position in range(expected.size()):
 		var row: Array = expected[position]
@@ -90,6 +104,12 @@ func run(support, tree: SceneTree) -> void:
 
 	support.expect_equal(panel.get_active_tool(), &"select", "Select should be active by default")
 	_assert_one_pressed(support, panel, "Select")
+	var option_row := panel.get_node_or_null("OptionRow") as Control
+	var option_value := panel.get_node_or_null("OptionRow/Value") as SpinBox
+	support.expect(option_row != null and option_value != null,
+		"ToolPanel should provide a descriptor-driven numeric option row")
+	if option_row != null:
+		support.expect(not option_row.visible, "tools without options should hide the option row")
 
 	var requested: Array[StringName] = []
 	var unavailable: Array[StringName] = []
@@ -97,33 +117,83 @@ func run(support, tree: SceneTree) -> void:
 	panel.unavailable_tool_requested.connect(
 		func(tool_id: StringName) -> void: unavailable.append(tool_id)
 	)
-	for route: Array in [
-		["Box", &"box"],
-		["Fill", &"fill"],
-		["Delete", &"delete"],
-		["Select", &"select"],
-		["Move", &"move"],
-	]:
+	var option_changes: Array = []
+	panel.tool_option_changed.connect(
+		func(tool_id: StringName, option_id: StringName, value: Variant) -> void:
+			option_changes.append([tool_id, option_id, value])
+	)
+	(grid.get_node("Paint") as Button).pressed.emit()
+	if option_row != null and option_value != null:
+		support.expect(option_row.visible, "Paint should reveal its descriptor option")
+		support.expect_equal(option_value.value, 8.0, "Paint should start with the approved default radius")
+		option_value.value = 13.0
+	support.expect_equal(option_changes, [[&"paint", &"brush_radius", 13.0]],
+		"numeric option changes should identify the active tool and option")
+	if option_value != null:
+		support.expect_equal(option_value.value, 8.0,
+			"an option request must remain provisional until its owner explicitly accepts it")
+	var has_accept_api := panel.has_method("accept_tool_option")
+	support.expect(has_accept_api,
+		"ToolPanel should expose an explicit acceptance boundary for transactional options")
+	if has_accept_api:
+		support.expect(panel.call("accept_tool_option", &"paint", &"brush_radius", 13.0),
+			"the owner should be able to accept a valid requested radius")
+	if option_value != null:
+		support.expect_equal(option_value.value, 13.0,
+			"explicit acceptance should update the visible option value")
+	if option_value != null:
+		option_value.value = 0.0
+		support.expect_equal(option_value.value, 13.0,
+			"a below-range radius must restore the prior displayed Paint value")
+		option_value.value = 41.0
+		support.expect_equal(option_value.value, 13.0,
+			"an above-range radius must restore the prior displayed Paint value")
+		option_value.value = NAN
+		support.expect_equal(option_value.value, 13.0,
+			"a non-finite radius must restore the prior displayed Paint value")
+	support.expect_equal(option_changes, [[&"paint", &"brush_radius", 13.0]],
+		"rejected radius inputs must not update the shared ToolPanel value")
+	(grid.get_node("Eraser") as Button).pressed.emit()
+	if option_row != null and option_value != null:
+		support.expect(option_row.visible, "Eraser should reveal its shared descriptor option")
+		support.expect_equal(option_value.value, 13.0,
+			"Paint and Eraser should retain one shared brush-radius value")
+	for route: Array in expected:
 		(grid.get_node(route[0]) as Button).pressed.emit()
-	support.expect_equal(requested, [&"box", &"fill", &"delete", &"select", &"move"],
-		"all five functional tools should use tool_requested with stable IDs")
-	support.expect_equal(panel.get_active_tool(), &"move", "Move should become active")
-
-	for row: Array in expected:
-		if not row[3]:
-			(grid.get_node(row[0]) as Button).pressed.emit()
-	support.expect_equal(unavailable,
-		[&"subtract", &"lasso", &"close", &"paint", &"wipe",
-			&"region_growing", &"live_wire"],
-		"reserved tools should use only the unavailable route")
-	support.expect_equal(requested, [&"box", &"fill", &"delete", &"select", &"move"],
-		"reserved tools must not reach the functional edit route")
-	support.expect_equal(panel.get_active_tool(), &"move",
-		"reserved tools must preserve the active tool")
-	_assert_one_pressed(support, panel, "Move")
+	support.expect_equal(requested,
+		[&"paint", &"eraser", &"box", &"subtract", &"lasso", &"fill",
+			&"paint", &"eraser", &"select"],
+		"all seven functional tools should use tool_requested with stable IDs")
+	support.expect_equal(panel.get_active_tool(), &"select", "Selection should remain active")
+	support.expect_equal(unavailable, [], "implemented tools should never use the pending-development route")
+	_assert_one_pressed(support, panel, "Select")
 	support.expect(not panel.set_active_tool(&"polygon"), "unknown tools should be rejected")
-	support.expect_equal(panel.get_active_tool(), &"move",
+	support.expect_equal(panel.get_active_tool(), &"select",
 		"a rejected tool should preserve the active state")
+
+	var pending_definition: Array[Dictionary] = [{
+		"id": &"future_tool",
+		"node_name": "FutureTool",
+		"label": "Future Tool",
+		"implemented": false,
+		"tooltip": "Reserved without removing its UI slot",
+		"icon_path": "res://client/ui/icons/tools/selection.svg",
+	}]
+	support.expect_equal(
+		panel.configure_tools(pending_definition),
+		PackedStringArray(),
+		"an unimplemented descriptor should remain a valid visible tool contract",
+	)
+	await tree.process_frame
+	var future_button := grid.get_node_or_null("FutureTool") as Button
+	support.expect(future_button != null and not future_button.disabled,
+		"an unimplemented tool must stay visible and clickable instead of being removed")
+	if future_button != null:
+		future_button.pressed.emit()
+	support.expect_equal(unavailable, [&"future_tool"],
+		"clicking an unimplemented tool should route to Main's exact pending-development message")
+	support.expect_equal(requested.size(), 9,
+		"an unimplemented tool click must not enter the functional edit route")
 
 	panel.queue_free()
 	await tree.process_frame

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from annotool.jsonl import read_jsonl, write_jsonl_atomic
+from annotation_data.jsonl import read_jsonl, write_jsonl_atomic
 
 
 def test_jsonl_round_trip_and_invalid_line_number(tmp_path: Path) -> None:

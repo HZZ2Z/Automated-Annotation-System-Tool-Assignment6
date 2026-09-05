@@ -16,19 +16,19 @@ static func run(support: TestSupport) -> void:
 
 
 static func _test_shared_fixtures(validator, support: TestSupport) -> void:
-	for filename: String in DirAccess.get_files_at("res://core/fixtures/valid"):
+	for filename: String in DirAccess.get_files_at("res://tests/fixtures/model_output_v1/valid"):
 		if "model-output-v1" in filename and filename.ends_with(".json"):
 			var record: Variant = JSON.parse_string(
-				FileAccess.get_file_as_string("res://core/fixtures/valid/%s" % filename)
+				FileAccess.get_file_as_string("res://tests/fixtures/model_output_v1/valid/%s" % filename)
 			)
 			support.expect(
 				validator.validate_record(record).is_empty(),
 				"valid shared fixture rejected: %s" % filename,
 			)
-	for filename: String in DirAccess.get_files_at("res://core/fixtures/invalid"):
+	for filename: String in DirAccess.get_files_at("res://tests/fixtures/model_output_v1/invalid"):
 		if filename.begins_with("model-output-v1-") and filename.ends_with(".json"):
 			var record: Variant = JSON.parse_string(
-				FileAccess.get_file_as_string("res://core/fixtures/invalid/%s" % filename)
+				FileAccess.get_file_as_string("res://tests/fixtures/model_output_v1/invalid/%s" % filename)
 			)
 			support.expect(
 				not validator.validate_record(record).is_empty(),
@@ -72,7 +72,7 @@ static func _test_malformed_variants(validator, support: TestSupport) -> void:
 
 static func _read_valid(filename: String) -> Dictionary:
 	return JSON.parse_string(
-		FileAccess.get_file_as_string("res://core/fixtures/valid/%s" % filename)
+		FileAccess.get_file_as_string("res://tests/fixtures/model_output_v1/valid/%s" % filename)
 	)
 
 

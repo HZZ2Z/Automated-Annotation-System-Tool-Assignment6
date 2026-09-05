@@ -1,13 +1,17 @@
-[gd_scene load_steps=6 format=3 uid="uid://cef6fvr8knfvm"]
+[gd_scene format=3 uid="uid://cef6fvr8knfvm"]
 
-[ext_resource type="Script" path="res://client/app/main.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://bj7tb2gyjp24q" path="res://client/app/main.gd" id="1_main"]
 [ext_resource type="PackedScene" path="res://client/ui/annotation_viewport.tscn" id="2_viewport"]
-[ext_resource type="PackedScene" path="res://client/ui/inspector_panel.tscn" id="3_inspector"]
+[ext_resource type="PackedScene" path="res://client/ui/annotation_sidebar.tscn" id="3_sidebar"]
 [ext_resource type="PackedScene" path="res://client/ui/timeline.tscn" id="4_timeline"]
 [ext_resource type="PackedScene" path="res://client/ui/tool_panel.tscn" id="5_tools"]
 [ext_resource type="PackedScene" path="res://client/ui/dataset_explorer.tscn" id="6_explorer"]
+[ext_resource type="Script" uid="uid://ba6dok5pbno3d" path="res://client/services/video_import_controller.gd" id="7_video_import"]
+[ext_resource type="PackedScene" path="res://client/ui/class_assignment_dialog.tscn" id="8_class_dialog"]
 
-[node name="Main" type="Control"]
+[sub_resource type="AnimatedTexture" id="AnimatedTexture_vdyxo"]
+
+[node name="Main" type="Control" unique_id=351336184]
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -16,7 +20,7 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_main")
 
-[node name="MainVBox" type="VBoxContainer" parent="."]
+[node name="MainVBox" type="VBoxContainer" parent="." unique_id=4496458]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -24,159 +28,253 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="TopToolbar" type="HBoxContainer" parent="MainVBox"]
-custom_minimum_size = Vector2(0, 42)
+[node name="TopToolbar" type="HBoxContainer" parent="MainVBox" unique_id=900391321]
+custom_minimum_size = Vector2(0, 10)
 layout_mode = 2
 
-[node name="Open" type="Button" parent="MainVBox/TopToolbar"]
-custom_minimum_size = Vector2(100, 0)
+[node name="Open" type="Button" parent="MainVBox/TopToolbar" unique_id=552315914]
+custom_minimum_size = Vector2(50, 0)
 layout_mode = 2
 text = "Open"
 
-[node name="Save" type="Button" parent="MainVBox/TopToolbar"]
-custom_minimum_size = Vector2(100, 0)
+[node name="Save" type="Button" parent="MainVBox/TopToolbar" unique_id=1378491866]
+custom_minimum_size = Vector2(50, 0)
 layout_mode = 2
+tooltip_text = "Available after persistence is implemented"
 disabled = true
 text = "Save"
-tooltip_text = "Available after persistence is implemented"
 
-[node name="Undo" type="Button" parent="MainVBox/TopToolbar"]
-custom_minimum_size = Vector2(100, 0)
-layout_mode = 2
-text = "Undo"
-
-[node name="Redo" type="Button" parent="MainVBox/TopToolbar"]
-custom_minimum_size = Vector2(100, 0)
+[node name="Redo" type="Button" parent="MainVBox/TopToolbar" unique_id=1050368082]
+custom_minimum_size = Vector2(50, 0)
 layout_mode = 2
 text = "Redo"
 
-[node name="Export" type="Button" parent="MainVBox/TopToolbar"]
-custom_minimum_size = Vector2(100, 0)
+[node name="Export" type="Button" parent="MainVBox/TopToolbar" unique_id=496921619]
+custom_minimum_size = Vector2(50, 0)
 layout_mode = 2
+tooltip_text = "Export a checksummed training_update_v1 package"
 disabled = true
 text = "Export"
-tooltip_text = "Export a checksummed training_update_v1 package"
 
-[node name="WorkspaceSplit" type="HSplitContainer" parent="MainVBox"]
+[node name="WorkspaceSplit" type="HSplitContainer" parent="MainVBox" unique_id=1292000105]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="DatasetExplorerContainer" type="PanelContainer" parent="MainVBox/WorkspaceSplit"]
-custom_minimum_size = Vector2(220, 0)
+[node name="DatasetExplorerContainer" type="PanelContainer" parent="MainVBox/WorkspaceSplit" unique_id=696316886]
+custom_minimum_size = Vector2(150, 0)
 layout_mode = 2
 
-[node name="DatasetExplorer" parent="MainVBox/WorkspaceSplit/DatasetExplorerContainer" instance=ExtResource("6_explorer")]
+[node name="DatasetExplorer" parent="MainVBox/WorkspaceSplit/DatasetExplorerContainer" unique_id=1528119410 instance=ExtResource("6_explorer")]
+custom_minimum_size = Vector2(110, 0)
 layout_mode = 2
 
-[node name="ContentSplit" type="HSplitContainer" parent="MainVBox/WorkspaceSplit"]
+[node name="ContentSplit" type="HSplitContainer" parent="MainVBox/WorkspaceSplit" unique_id=1541141725]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="ViewportPanel" type="PanelContainer" parent="MainVBox/WorkspaceSplit/ContentSplit"]
+[node name="ViewportPanel" type="PanelContainer" parent="MainVBox/WorkspaceSplit/ContentSplit" unique_id=1700707477]
 custom_minimum_size = Vector2(500, 300)
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="AnnotationViewport" parent="MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel" instance=ExtResource("2_viewport")]
+[node name="AnnotationViewport" parent="MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel" unique_id=246641307 instance=ExtResource("2_viewport")]
 layout_mode = 2
 
-[node name="RightSidebarContainer" type="PanelContainer" parent="MainVBox/WorkspaceSplit/ContentSplit"]
-custom_minimum_size = Vector2(320, 0)
+[node name="RightSidebarContainer" type="PanelContainer" parent="MainVBox/WorkspaceSplit/ContentSplit" unique_id=762291149]
+custom_minimum_size = Vector2(200, 0)
 layout_mode = 2
 
-[node name="RightSidebar" type="VBoxContainer" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer"]
+[node name="RightSidebar" type="VBoxContainer" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer" unique_id=1167209085]
+custom_minimum_size = Vector2(200, 0)
 layout_mode = 2
 
-[node name="InspectorScroll" type="ScrollContainer" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar"]
+[node name="AnnotationSidebar" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar" unique_id=1027382484 instance=ExtResource("3_sidebar")]
+custom_minimum_size = Vector2(200, 0)
 layout_mode = 2
 size_flags_vertical = 3
-horizontal_scroll_mode = 0
 
-[node name="InspectorPanel" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/InspectorScroll" instance=ExtResource("3_inspector")]
-layout_mode = 2
-size_flags_horizontal = 3
-
-[node name="Separator" type="HSeparator" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar"]
+[node name="Separator" type="HSeparator" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar" unique_id=1772800558]
 layout_mode = 2
 
-[node name="ToolPanel" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar" instance=ExtResource("5_tools")]
+[node name="ToolPanel" parent="MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar" unique_id=1480417794 instance=ExtResource("5_tools")]
 layout_mode = 2
 
-[node name="TimelinePanel" type="PanelContainer" parent="MainVBox"]
-custom_minimum_size = Vector2(0, 112)
+[node name="TimelinePanel" type="PanelContainer" parent="MainVBox" unique_id=506237041]
+custom_minimum_size = Vector2(0, 20)
 layout_mode = 2
 
-[node name="TimelineColumn" type="VBoxContainer" parent="MainVBox/TimelinePanel"]
+[node name="TimelineColumn" type="VBoxContainer" parent="MainVBox/TimelinePanel" unique_id=915454405]
+custom_minimum_size = Vector2(0, 20)
 layout_mode = 2
 
-[node name="Transport" type="HBoxContainer" parent="MainVBox/TimelinePanel/TimelineColumn"]
-custom_minimum_size = Vector2(0, 36)
+[node name="Transport" type="HBoxContainer" parent="MainVBox/TimelinePanel/TimelineColumn" unique_id=1541387412]
+custom_minimum_size = Vector2(0, 15)
 layout_mode = 2
 
-[node name="Previous" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+[node name="Previous" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=908569867]
 layout_mode = 2
-text = "Previous"
+text = "<<"
 
-[node name="PlayPause" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+[node name="PlayPause" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=442032103]
 layout_mode = 2
-text = "Play"
+text = "⏯
+"
+icon = SubResource("AnimatedTexture_vdyxo")
 
-[node name="Next" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+[node name="Next" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=1017842058]
 layout_mode = 2
-text = "Next"
+text = ">>"
 
-[node name="FrameLabel" type="Label" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+[node name="FrameLabel" type="Label" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=807788897]
 layout_mode = 2
 text = "Frame - / -"
 vertical_alignment = 1
 
-[node name="TimeLabel" type="Label" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+[node name="TimeLabel" type="Label" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=1558459053]
 layout_mode = 2
-text = "--:--.---"
+text = "--:--:--.---"
 vertical_alignment = 1
 
-[node name="Spacer" type="Control" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+[node name="Spacer" type="Control" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=2067385723]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="ZoomOut" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+[node name="ZoomOut" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=602086594]
 layout_mode = 2
-text = "Zoom -"
+text = " -"
 
-[node name="ZoomIn" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+[node name="ZoomIn" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=1354017247]
 layout_mode = 2
-text = "Zoom +"
+text = "+"
 
-[node name="Opacity" type="HSlider" parent="MainVBox/TimelinePanel/TimelineColumn/Transport"]
+[node name="Fit" type="Button" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=731500450]
+layout_mode = 2
+tooltip_text = "Reset zoom and pan to fit the image"
+text = "Fit"
+
+[node name="OpacityLabel" type="Label" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=23433413]
+layout_mode = 2
+text = "Overlay opacity"
+vertical_alignment = 1
+
+[node name="Opacity" type="HSlider" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=1003485190]
 custom_minimum_size = Vector2(110, 0)
 layout_mode = 2
-min_value = 0.0
+tooltip_text = "Class-color fill opacity"
 max_value = 1.0
 step = 0.05
 value = 0.35
-tooltip_text = "Annotation opacity"
 
-[node name="Timeline" parent="MainVBox/TimelinePanel/TimelineColumn" instance=ExtResource("4_timeline")]
+[node name="Timeline" parent="MainVBox/TimelinePanel/TimelineColumn" unique_id=91189370 instance=ExtResource("4_timeline")]
+custom_minimum_size = Vector2(0, 20)
 layout_mode = 2
 
-[node name="StatusBar" type="Label" parent="MainVBox"]
-custom_minimum_size = Vector2(0, 24)
+[node name="StatusBar" type="Label" parent="MainVBox" unique_id=1602815390]
+custom_minimum_size = Vector2(0, 15)
 layout_mode = 2
 text = "Ready"
 text_overrun_behavior = 3
 
-[node name="SourceDialog" type="FileDialog" parent="."]
-title = "Open image or normalized annotation source"
+[node name="ClassAssignmentDialog" parent="." unique_id=1248330344 instance=ExtResource("8_class_dialog")]
+
+[node name="SourceDialog" type="FileDialog" parent="." unique_id=561781533]
+title = "Open a File or Directory"
 file_mode = 3
 access = 2
-filters = PackedStringArray("*.png ; PNG Images", "*.jpg, *.jpeg ; JPEG Images", "*.mp4, *.mov, *.avi, *.mkv ; Video Files")
+filters = PackedStringArray("*.png ; PNG Images", "*.jpg, *.jpeg ; JPEG Images", "*.mp4, *.mov, *.avi, *.mkv, *.m4v, *.mpeg, *.mpg, *.webm ; Common Video Files", "*.* ; Other FFmpeg-readable video")
 
-[node name="ExportDialog" type="FileDialog" parent="."]
-title = "Choose parent directory for training_update_v1"
+[node name="ExportDialog" type="FileDialog" parent="." unique_id=726271485]
+title = "Open a Directory"
 file_mode = 2
 access = 2
 
-[node name="PlaybackTimer" type="Timer" parent="."]
-wait_time = 0.0333333
-one_shot = false
-autostart = false
+[node name="VideoImportController" type="Node" parent="." unique_id=371555567]
+script = ExtResource("7_video_import")
+
+[node name="VideoImportDialog" type="Window" parent="." unique_id=1863216943]
+title = "Import video as indexed frames"
+initial_position = 1
+size = Vector2i(640, 340)
+visible = false
+transient = true
+exclusive = true
+unresizable = true
+min_size = Vector2i(560, 300)
+
+[node name="Margin" type="MarginContainer" parent="VideoImportDialog" unique_id=978862398]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 18
+theme_override_constants/margin_top = 18
+theme_override_constants/margin_right = 18
+theme_override_constants/margin_bottom = 18
+
+[node name="Content" type="VBoxContainer" parent="VideoImportDialog/Margin" unique_id=1722370340]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="SourceTitle" type="Label" parent="VideoImportDialog/Margin/Content" unique_id=360258015]
+layout_mode = 2
+text = "Input video"
+
+[node name="SourceValue" type="Label" parent="VideoImportDialog/Margin/Content" unique_id=1701342773]
+layout_mode = 2
+text = "-"
+text_overrun_behavior = 3
+
+[node name="OutputTitle" type="Label" parent="VideoImportDialog/Margin/Content" unique_id=1780892320]
+layout_mode = 2
+text = "Output parent (choose explicitly)"
+
+[node name="OutputRow" type="HBoxContainer" parent="VideoImportDialog/Margin/Content" unique_id=1210716536]
+layout_mode = 2
+
+[node name="OutputParent" type="LineEdit" parent="VideoImportDialog/Margin/Content/OutputRow" unique_id=2025491336]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "Choose a parent directory"
+editable = false
+
+[node name="Browse" type="Button" parent="VideoImportDialog/Margin/Content/OutputRow" unique_id=1563661092]
+layout_mode = 2
+text = "Browse…"
+
+[node name="DirectoryTitle" type="Label" parent="VideoImportDialog/Margin/Content" unique_id=377277098]
+layout_mode = 2
+text = "New directory name"
+
+[node name="DirectoryName" type="LineEdit" parent="VideoImportDialog/Margin/Content" unique_id=960415938]
+layout_mode = 2
+placeholder_text = "case_frames"
+
+[node name="Progress" type="ProgressBar" parent="VideoImportDialog/Margin/Content" unique_id=1082175129]
+layout_mode = 2
+max_value = 1.0
+step = 0.001
+
+[node name="Status" type="Label" parent="VideoImportDialog/Margin/Content" unique_id=225776400]
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+text = "Choose an output parent and a new directory name."
+autowrap_mode = 2
+
+[node name="Actions" type="HBoxContainer" parent="VideoImportDialog/Margin/Content" unique_id=551493265]
+layout_mode = 2
+alignment = 2
+
+[node name="Start" type="Button" parent="VideoImportDialog/Margin/Content/Actions" unique_id=979456800]
+layout_mode = 2
+disabled = true
+text = "Start import"
+
+[node name="Cancel" type="Button" parent="VideoImportDialog/Margin/Content/Actions" unique_id=626456164]
+layout_mode = 2
+text = "Close"
+
+[node name="VideoOutputParentDialog" type="FileDialog" parent="." unique_id=2115212586]
+title = "Open a Directory"
+file_mode = 2
+access = 2

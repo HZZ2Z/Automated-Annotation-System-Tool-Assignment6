@@ -50,6 +50,8 @@ Godot 导出包默认不会自动携带普通 JSON。仓库的 `export_presets.c
 
 帧、frame entry 和模型记录必须按同一显式索引对齐。manifest、presentation 与记录 getter 返回深拷贝。`get_presentation` 由 Source 自己把文件、localhost 或远程 locator 投影为格式无关的浏览数据：`display_name`、`source_path`、连续的 `frames[{index,label,path}]` 和 `artifacts[{label,path}]`；Main 只校验并消费这些字段，不猜测 `manifest.json`、`image_path` 或模型文件名。现有工作插件是 `image_sequence_source` 和 `single_image_source`；视频先经 `python/frame_source.py` 归一化后，与原生图像序列使用同一个 Source API。
 
+工作区数字图片序列是兼容的应用层 Source：entry 中的 `frame` 仍是连续播放索引，可选 `frame_id` 保留原始稀疏帧号。这不修改 SourceStage V1 的方法签名。工作区发现、单媒体 `label/<media_id>.json`、自动保存和训练 `sample_id` 属于应用协调层，不是插件 API；新插件不应读写这些私有文件。
+
 ### RenderStage
 
 继承 `client/pipeline/stages/render_stage.gd` 并实现：
@@ -59,6 +61,8 @@ Godot 导出包默认不会自动携带普通 JSON。仓库的 `export_presets.c
 - `hit_test(image_point: Vector2) -> Dictionary`
 
 Renderer 只持有短期绘制快照，不拥有标注真值。`AnnotationViewport` 初始只依赖无业务绘制逻辑的 `null_renderer.gd`，启动后由 Main 注入所选 Render 插件。现有工作插件是 `canvas_region_renderer`。
+
+`set_hovered_region_id(region_id: String) -> void` 是可选的表现层扩展，不属于 RenderStage v1 的必需签名。`AnnotationViewport` 会在支持该方法的 renderer 上转发当前列表悬停区域，并在悬停变化时请求重绘；未实现该扩展的合法 v1 renderer 仍然可以正常工作。该状态只影响临时高亮，不进入 Store、History 或 Model Output V1。
 
 ### EditStage
 
@@ -76,7 +80,7 @@ Renderer 只持有短期绘制快照，不拥有标注真值。`AnnotationViewpo
 
 `activate` 的 context 包含 `store`、`history`、`viewport`、`get_current_frame`、`get_selected_region`、`set_selected_region`、`status` 和 `taxonomy`。候选插件必须先验证完整依赖，失败时不接管当前会话；`deactivate` 必须幂等并断开自己建立的信号。
 
-工具描述字段为 `id`、`node_name`、`label`、`implemented`、`tooltip`、`icon_path`，可选 `presentation_text` 和唯一的 `default: true`。ToolPanel 只校验并呈现描述，不硬编码具体工具 ID。现有插件通过 `invoke` 支持以下动作：
+工具描述字段为 `id`、`node_name`、`label`、`implemented`、`tooltip`、`icon_path`，可选 `presentation_text`、唯一的 `default: true` 与 `options`。每个 `options` 条目当前使用 `float_range`：`id`、`label`、`kind`、有限的 `min`/`max`/`step`/`default`，以及可选的 `shared_key`。ToolPanel 只校验并呈现描述，不硬编码具体工具 ID；它发出 `tool_option_changed(tool_id, option_id, value)`，Main 仍通过既有 `invoke` 边界转交。Paint 与 Eraser 以 `brush_radius` / `shared_key: brush_radius` 共用 1–40 image-px 半径，默认 8 px。现有插件通过 `invoke` 支持以下动作：
 
 | action ID | payload | 行为 |
 |---|---|---|
@@ -86,9 +90,10 @@ Renderer 只持有短期绘制快照，不拥有标注真值。`AnnotationViewpo
 | `set_selected_fill` | `{"filled": bool}` | 修改显示填充 |
 | `set_selected_geometry` | `{"box": Array}` | 修改 box |
 | `delete_selected` | `{}` | 删除选中区域 |
+| `set_tool_option` | `{"tool_id": StringName, "option_id": StringName, "value": Variant}` | 设置已声明的工具选项；不支持、非有限或越界值拒绝且保留原值 |
 | `range_propagate` | `{"keyframe": int, "start_frame": int, "end_frame": int, "mode": "overwrite"/"merge"}` | 将关键帧区域传播到连续范围 |
 
-`basic_edit_tools` 还保留 `relabel_selected`、`set_selected_track_id`、`set_selected_fill`、`set_selected_geometry`、`delete_selected` 和 `begin_add_box` 便利方法供自身测试使用，但核心只通过通用 `invoke` 边界调用。范围传播先验证全部目标，再一次性提交；整段是一条 undo/redo history，目标帧的 `source`、`frame`、`time_s` 保持不变，操作 marker 存在 Store 的独立 batch operations 中，不写入 Model Output V1。
+`basic_edit_tools` 的公共描述子顺序为 Add Box、Subtract、Lasso、Fill、Paint、Eraser 和 Select。Close Gaps、Region Growing 和 Live Wire 不再是 descriptor、capability 或快捷键；`C` / `G` / `I` 保持未绑定。`delete` 仍是 Select 的 Delete/Backspace whole-region path 能力，而不是工具按钮。Paint 的普通单环结果可新建对象；闭合空心结果则保留为临时 Working Mask，Fill 逐个合并点击的封闭孔洞，全部填完后才产生一个待分类实心 polygon。Eraser 必须先选中 region。Subtract 有选区时修改单区，无选区时对所有相交 regions 做一次原子整帧替换，允许整区删除；任一剩余几何违反 V1 则全部拒绝。选中任一笔刷就会发布跟随鼠标的空心半径圆；两者在 motion 中发布结果 raw-mask preview，不包含轨迹或中心点。Lasso/Subtract 近距离松手会自动闭合，Space 用于强制闭合；多闭区轨迹经局部 mask 提取后仍只提交 V1 可表达的实心单环。viewport pan 只使用鼠标中键，右键由 Main 清除选区并切回 Select。
 
 ### FeedbackStage
 

@@ -1,30 +1,48 @@
-"""Validate Model Output V1 JSON/JSONL without modifying the input file."""
+"""Part 1.1 read-only Model Output V1 validator facade and CLI.
+
+The JSON Schema in ``core/schemas/model_output_v1.schema.json`` is the sole
+contract authority. This module exposes stable validation helpers and converts
+file, JSON, and schema failures into field-specific messages without modifying
+input or leaking a traceback from expected CLI errors.
+"""
 
 import argparse
 import json
 from pathlib import Path
 from typing import Any, Sequence
 
-from annotool.contracts import load_schema as load_named_schema
-from annotool.contracts import validate_instance
-from annotool.jsonl import read_jsonl, reject_non_finite_constant
+from annotation_data.contracts import load_schema as load_named_schema
+from annotation_data.contracts import validate_instance
+from annotation_data.jsonl import read_jsonl, reject_non_finite_constant
 
 
 SCHEMA_NAME = "model_output_v1.schema.json"
 
 
 def load_schema() -> dict[str, Any]:
-    """读取唯一的 Model Output V1 Schema。"""
+    """Return the sole authoritative Model Output V1 JSON Schema.
+
+    This stable facade keeps callers independent of package-internal schema
+    lookup while ensuring every validator uses the same contract authority.
+    """
     return load_named_schema(SCHEMA_NAME)
 
 
 def validate_record(record: object) -> list[str]:
-    """返回带字段路径的错误；空列表表示通过。"""
+    """Validate one record and return field-path errors, or ``[]`` if valid.
+
+    The record is inspected only; this read-only helper never normalizes or
+    mutates model output before passing it to the canonical schema validator.
+    """
     return validate_instance(record, SCHEMA_NAME)
 
 
 def _load_records(path: Path) -> list[object]:
-    # JSONL 按行读取；普通 JSON 只包含一个 record。
+    """Load one JSON record or ordered JSONL records without writing ``path``.
+
+    Plain JSON contributes exactly one record. JSONL is read line by line in
+    file order so downstream error indices identify the original record order.
+    """
     if path.suffix.lower() == ".jsonl":
         return list(read_jsonl(path))
     payload = json.loads(
@@ -35,7 +53,12 @@ def _load_records(path: Path) -> list[object]:
 
 
 def validate_model_output(path: Path) -> list[str]:
-    """校验单条 JSON 或逐行 JSONL，不向 path 写入任何内容。"""
+    """Validate a read-only JSON or JSONL input and return record-indexed errors.
+
+    JSON produces one record, while JSONL preserves line order. File and parse
+    failures are returned as messages; schema failures are prefixed with their
+    zero-based record index so callers can locate invalid model output exactly.
+    """
     try:
         records = _load_records(path)
     except (OSError, ValueError, json.JSONDecodeError) as error:
@@ -48,6 +71,7 @@ def validate_model_output(path: Path) -> list[str]:
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """Parse the single read-only model-output path accepted by the CLI."""
     parser = argparse.ArgumentParser(
         description="Validate Model Output V1 JSON or JSONL."
     )
@@ -56,6 +80,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Print validation errors for expected CLI failures and return ``0`` or ``1``.
+
+    Successful validation prints the fixed zero-error message and returns ``0``;
+    unreadable, malformed, or schema-invalid input prints its returned errors
+    and returns ``1`` without exposing an expected-error traceback.
+    """
     args = parse_args(argv)
     errors = validate_model_output(args.path)
     if errors:

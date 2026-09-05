@@ -4,10 +4,18 @@
 .venv/
 .tools/
 .worktrees/
+.codex/
+.agents/
 __pycache__/
 .pytest_cache/
+.cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
 *.py[cod]
 generated_sample/
+generated_frames/
+/frames/
 sample/
 exports/
 autosave/
@@ -19,6 +27,36 @@ dist/
 *.import
 icon.svg.import
 docs/000*.png
+
+# Private local configuration and credentials must never be submitted.
+.env
+.env.*
+*.env
+!.env.example
+!.env.*.example
+!*.example.env
+*.local.toml
+credentials.json
+secrets/
+token.txt
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Local datasets, planning notes, and generated test artifacts stay on disk.
+/Dataset_test/
+/plans/
+/tests/output/
+/tests/video_test/
+/tests/laparoscopic_hernia_2d_frames/
+/docs/images.jpeg
+/docs/播放.png
+/docs/laparoscopic_hernia_2d.ogv.uid
 
 # Local AI workflow artifacts are not submission deliverables.
 .superpowers/

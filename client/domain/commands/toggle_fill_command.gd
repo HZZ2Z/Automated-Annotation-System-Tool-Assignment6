@@ -12,4 +12,4 @@ func _init(frame_index: int, old_record: Dictionary, region_id: String, requeste
 		_reject("filled: expected boolean")
 		return
 	var region: Dictionary = after["regions"][index]
-	region["filled"] = not bool(region.get("filled", false)) if requested_fill == null else requested_fill
+	region["filled"] = not bool(region.get("filled", true)) if requested_fill == null else requested_fill

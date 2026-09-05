@@ -1,11 +1,17 @@
-"""Generate the deterministic synthetic annotation sample."""
+"""Part 1.2 CLI for the deterministic synthetic annotation sample.
+
+The no-argument invocation uses the canonical output and fixed seed required by
+the reviewer workflow. Reusable rendering and defect planting remain in
+:mod:`annotation_data.sample`; this adapter owns only arguments, exit codes, and
+human-readable process output.
+"""
 
 import argparse
 from pathlib import Path
 import sys
 from typing import Sequence
 
-from annotool.sample import generate_sample
+from annotation_data.sample import generate_sample
 
 
 DEFAULT_OUTPUT = Path("sample/assignment_v1")
@@ -13,7 +19,14 @@ DEFAULT_SEED = 6006
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    """Parse optional output and seed overrides for deterministic generation.
+
+    Defaults intentionally provide the canonical fixed-seed reviewer invocation;
+    callers can pass ``argv`` to reuse the same contract in tests or automation.
+    """
+    parser = argparse.ArgumentParser(
+        description="Generate the deterministic synthetic annotation sample."
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -30,6 +43,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Generate the requested sample, returning ``0`` or a handled error ``1``.
+
+    The supplied seed controls deterministic bytes. Existing output directories
+    are refused rather than overwritten, preserving a previous reproducible run
+    until a caller deliberately selects a new destination.
+    """
     args = parse_args(argv)
     try:
         generate_sample(args.output, seed=args.seed)

@@ -2,6 +2,9 @@ class_name AnnotationStore
 extends RefCounted
 
 
+signal corrected_records_replaced(frames: PackedInt64Array)
+
+
 const VALIDATOR_SCRIPT := preload("res://client/domain/model_output_validator.gd")
 
 var _model_records: Dictionary = {}
@@ -75,6 +78,7 @@ func replace_corrected_record(frame: int, record: Variant) -> PackedStringArray:
 		return errors
 	_corrected_records[frame] = record.duplicate(true)
 	_dirty_frames[frame] = true
+	corrected_records_replaced.emit(PackedInt64Array([frame]))
 	return errors
 
 
@@ -101,6 +105,7 @@ func replace_corrected_records(replacements: Dictionary, operation: Dictionary =
 		_dirty_frames[frame] = true
 	if not operation.is_empty():
 		_batch_operations.append(operation.duplicate(true))
+	corrected_records_replaced.emit(PackedInt64Array(frames))
 	return errors
 
 

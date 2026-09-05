@@ -9,12 +9,12 @@ from typing import Any
 import cv2
 import numpy as np
 
-from annotool.contracts import (
+from annotation_data.contracts import (
     validate_instance,
     validate_manifest_semantics,
 )
-from annotool.jsonl import write_jsonl_atomic
-from annotool.similarity import normalized_mad
+from annotation_data.jsonl import write_jsonl_atomic
+from annotation_data.similarity import normalized_mad
 
 
 FRAME_COUNT = 120
@@ -162,6 +162,25 @@ def _clean_regions(frame: int, seed: int) -> list[dict[str, Any]]:
         }
         if index < 16:
             region["box"] = [x, y, width, height]
+        elif index == 16:
+            one_third_x = x + width // 3
+            two_thirds_x = x + (2 * width) // 3
+            one_third_y = y + height // 3
+            two_thirds_y = y + (2 * height) // 3
+            region["polygon"] = [
+                [x, y],
+                [x + width, y],
+                [x + width, one_third_y],
+                [two_thirds_x, one_third_y],
+                [two_thirds_x, two_thirds_y],
+                [x + width, two_thirds_y],
+                [x + width, y + height],
+                [x, y + height],
+                [x, two_thirds_y],
+                [one_third_x, two_thirds_y],
+                [one_third_x, one_third_y],
+                [x, one_third_y],
+            ]
         else:
             region["polygon"] = [
                 [x + width // 2, y],

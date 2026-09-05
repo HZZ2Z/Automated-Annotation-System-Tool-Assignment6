@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "source", "frame", "regions"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"type": "integer", "const": 1},
     "source": {"type": "string", "minLength": 1},
     "frame": {"type": "integer", "minimum": 0},
     "time_s": {"type": "number", "minimum": 0},

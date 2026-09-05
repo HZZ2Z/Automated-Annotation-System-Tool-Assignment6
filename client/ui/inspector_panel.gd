@@ -1,9 +1,9 @@
 class_name InspectorPanel
 extends VBoxContainer
 
+const REGION_GEOMETRY := preload("res://client/domain/region_geometry.gd")
 
 signal relabel_requested(region_id: String, class_label: String)
-signal delete_requested(region_id: String)
 signal fill_requested(region_id: String, filled: bool)
 signal geometry_requested(region_id: String, box: Array)
 signal track_id_requested(region_id: String, track_id: Variant)
@@ -19,7 +19,6 @@ signal track_id_requested(region_id: String, track_id: Variant)
 @onready var _box_width: SpinBox = $Fields/BoxWidth
 @onready var _box_height: SpinBox = $Fields/BoxHeight
 @onready var _fill: CheckButton = $Fields/Fill
-@onready var _delete: Button = $Fields/Delete
 @onready var _status: Label = $Status
 
 var _snapshot: Dictionary = {}
@@ -32,7 +31,6 @@ func _ready() -> void:
 	_class_free_text.text_submitted.connect(_on_class_submitted)
 	_track_id.text_submitted.connect(_on_track_submitted)
 	_fill.toggled.connect(_on_fill_toggled)
-	_delete.pressed.connect(_on_delete_pressed)
 	for spin_box: SpinBox in [_box_x, _box_y, _box_width, _box_height]:
 		spin_box.value_changed.connect(_on_geometry_changed)
 	_sync_empty()
@@ -75,7 +73,7 @@ func populate(region: Dictionary, taxonomy: Variant = null) -> void:
 	if _snapshot.has("track_id") and track_value != null and typeof(track_value) != TYPE_STRING:
 		validation_errors.append("Track ID must be a string or null")
 	_track_id.text = track_value if typeof(track_value) == TYPE_STRING else ""
-	var fill_value: Variant = _snapshot.get("filled", false)
+	var fill_value: Variant = _snapshot.get("filled", true)
 	if typeof(fill_value) != TYPE_BOOL:
 		validation_errors.append("Filled must be a boolean")
 		fill_value = false
@@ -83,14 +81,16 @@ func populate(region: Dictionary, taxonomy: Variant = null) -> void:
 	var box: Variant = _snapshot.get("box")
 	var has_box := _snapshot.has("box")
 	var has_polygon := _snapshot.has("polygon")
-	var is_box := has_box and _valid_box(box)
-	if has_box and not is_box:
+	var has_valid_box := has_box and _valid_box(box)
+	var has_valid_polygon := has_polygon and REGION_GEOMETRY.polygon_points(_snapshot).size() >= 3
+	if has_box and not has_valid_box:
 		validation_errors.append("Box must contain four finite values with positive size")
-	if has_polygon and not _snapshot.get("polygon") is Array:
-		validation_errors.append("Polygon must be an array")
-	if has_box == has_polygon:
-		validation_errors.append("Region must contain exactly one geometry")
-	if is_box:
+	if has_polygon and not has_valid_polygon:
+		validation_errors.append("Polygon must contain at least three finite [x, y] vertices")
+	if not has_box and not has_polygon:
+		validation_errors.append("Region must contain box or polygon geometry")
+	var canonical_is_box := REGION_GEOMETRY.canonical_shape(_snapshot) == REGION_GEOMETRY.SHAPE_BOX
+	if canonical_is_box:
 		_box_x.value = float(box[0])
 		_box_y.value = float(box[1])
 		_box_width.value = float(box[2])
@@ -101,7 +101,7 @@ func populate(region: Dictionary, taxonomy: Variant = null) -> void:
 		_box_width.value = 0.0
 		_box_height.value = 0.0
 	_select_current_class()
-	_set_controls_enabled(typeof(id_value) == TYPE_STRING and not String(id_value).is_empty(), is_box)
+	_set_controls_enabled(typeof(id_value) == TYPE_STRING and not String(id_value).is_empty(), canonical_is_box)
 	_status.text = "; ".join(validation_errors)
 	_syncing = false
 
@@ -168,7 +168,6 @@ func _set_controls_enabled(has_region: bool, is_box: bool) -> void:
 	_class_free_text.editable = has_region
 	_track_id.editable = has_region
 	_fill.disabled = not has_region
-	_delete.disabled = not has_region
 	for spin_box: SpinBox in [_box_x, _box_y, _box_width, _box_height]:
 		spin_box.editable = has_region and is_box
 
@@ -215,13 +214,6 @@ func _on_geometry_changed(_value: float) -> void:
 		return
 	_status.text = ""
 	geometry_requested.emit(str(_snapshot.get("id", "")), box.duplicate(true))
-
-
-func _on_delete_pressed() -> void:
-	if _syncing or _snapshot.is_empty():
-		return
-	_status.text = ""
-	delete_requested.emit(str(_snapshot.get("id", "")))
 
 
 func _is_number(value: Variant) -> bool:

@@ -5,5 +5,19 @@
   "stage": "edit",
   "entry": "plugin.gd",
   "priority": 100,
-  "capabilities": ["select", "move", "resize", "relabel", "add", "delete", "range_propagate"]
+  "capabilities": [
+    "select",
+    "move",
+    "resize",
+    "relabel",
+    "add_box",
+    "add_polygon",
+    "subtract",
+    "fill",
+    "delete",
+    "paint",
+    "eraser",
+    "keyboard_only",
+    "range_propagate"
+  ]
 }

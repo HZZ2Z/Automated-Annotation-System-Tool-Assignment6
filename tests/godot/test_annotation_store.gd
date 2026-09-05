@@ -120,11 +120,16 @@ static func _test_transactional_load(store_script, support: TestSupport) -> void
 static func _test_transactional_replace_and_dirty_frames(store_script, support: TestSupport) -> void:
 	var store = store_script.new()
 	store.load_model_records(_two_records())
+	var changed_frames: Array[PackedInt64Array] = []
+	store.corrected_records_replaced.connect(
+		func(frames: PackedInt64Array) -> void: changed_frames.append(frames))
 	var original_model: Dictionary = store.get_model_record(0)
 	var replacement: Dictionary = store.get_corrected_record(0)
 	replacement["regions"][0]["class"] = "reviewed_grasper"
 	replacement["regions"][0]["filled"] = true
 	support.expect(store.replace_corrected_record(0, replacement).is_empty(), "known UI-only fill state should not contaminate model validation")
+	support.expect_equal(changed_frames, [PackedInt64Array([0])],
+		"successful single replacement should emit its exact original frame ID once")
 	support.expect_equal(store.get_corrected_record(0)["regions"][0]["class"], "reviewed_grasper", "replacement should update corrected state")
 	support.expect_equal(store.get_model_record(0), original_model, "replacement should never modify model state")
 	var snapshot: Array = store.snapshot_corrected()
@@ -153,7 +158,11 @@ static func _test_transactional_replace_and_dirty_frames(store_script, support: 
 
 	var frame_two: Dictionary = store.get_corrected_record(2)
 	frame_two["regions"][0]["class"] = "frame-two-edit"
-	store.replace_corrected_record(2, frame_two)
+	var frame_zero: Dictionary = store.get_corrected_record(0)
+	frame_zero["regions"][0]["class"] = "frame-zero-batch"
+	store.replace_corrected_records({2: frame_two, 0: frame_zero})
+	support.expect_equal(changed_frames[-1], PackedInt64Array([0, 2]),
+		"successful batch replacement should emit one sorted frame set")
 	var dirty: PackedInt64Array = store.get_dirty_frames()
 	support.expect_equal(dirty.size(), 2, "two replacements should mark two dirty frames")
 	if dirty.size() == 2:
@@ -308,4 +317,4 @@ static func _two_records() -> Array:
 
 
 static func _valid_box() -> Dictionary:
-	return JSON.parse_string(FileAccess.get_file_as_string("res://core/fixtures/valid/model-output-v1-box-only.json"))
+	return JSON.parse_string(FileAccess.get_file_as_string("res://tests/fixtures/model_output_v1/valid/model-output-v1-box-only.json"))

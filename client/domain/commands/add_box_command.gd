@@ -1,6 +1,7 @@
 class_name AddBoxCommand
 extends "res://client/domain/commands/replace_frame_command.gd"
 
+const REGION_GEOMETRY := preload("res://client/domain/region_geometry.gd")
 
 static var _next_session_id := 1
 
@@ -13,6 +14,7 @@ func _init(
 	requested_box: Variant,
 	class_label: Variant = "unknown",
 	kind: Variant = "region",
+	image_size: Vector2 = Vector2.ZERO,
 ) -> void:
 	super(frame_index, old_record, old_record)
 	if not requested_box is Array or requested_box.size() != 4:
@@ -29,13 +31,23 @@ func _init(
 	if not regions is Array:
 		_reject("add box: record regions must be an array")
 		return
-	regions.append({
+	var region := {
 		"id": _region_id,
 		"class": class_label,
 		"kind": kind,
 		"box": requested_box.duplicate(true),
 		"track_id": null,
-	})
+	}
+	regions.append(region)
+	if image_size == Vector2.ZERO:
+		return
+	if REGION_GEOMETRY.canonical_shape(region) != REGION_GEOMETRY.SHAPE_BOX:
+		after = before.duplicate(true)
+		_reject("add box: dimensions must be finite and positive")
+		return
+	if not REGION_GEOMETRY.fits_image(region, image_size):
+		after = before.duplicate(true)
+		_reject("Geometry must stay inside the current image")
 
 
 func get_region_id() -> String:
