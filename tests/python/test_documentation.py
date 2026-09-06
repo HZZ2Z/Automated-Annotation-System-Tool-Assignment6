@@ -96,6 +96,7 @@ def test_readme_is_a_complete_part1_runbook() -> None:
         assert shortcut in lower
     for plugin_id in (
         "image_sequence_source",
+        "numeric_image_sequence_source",
         "single_image_source",
         "canvas_region_renderer",
         "basic_edit_tools",
@@ -239,6 +240,29 @@ def test_plugin_api_documents_the_stable_version1_contract() -> None:
         "不修改 registry",
     ):
         assert phrase in lower
+
+
+def test_source_pipeline_and_sparse_identity_are_documented() -> None:
+    readme = _read("README.md")
+    architecture = _read("docs/architecture.md")
+    api = _read("docs/plugin-api.md")
+    ledger = _read("docs/requirements-traceability.md")
+
+    for term in (
+        "numeric_image_sequence_source",
+        "SourceFactory",
+        "SourceSessionBuilder",
+        "playback_index",
+        "frame_id",
+    ):
+        assert term in architecture
+    assert "source_sha256: null" in architecture
+    assert "numeric_image_sequence_source" in api
+    assert "SourceFactory" in api
+    assert "SourceSessionBuilder" in api
+    assert "numeric_image_sequence_source" in readme
+    assert "numeric_image_sequence_source" in ledger
+    assert "WorkspaceSequenceSource" not in ledger
 
 
 def test_plugin_contracts_and_manifests_ship_in_exported_builds() -> None:
