@@ -1,6 +1,8 @@
 extends RefCounted
 
 const CONTROLLER_PATH := "res://client/workspace/workspace_media_controller.gd"
+const FACTORY_PATH := "res://client/pipeline/source_factory.gd"
+const REGISTRY_SCRIPT := preload("res://client/pipeline/plugin_registry.gd")
 const TEMP_PREFIX := "/tmp/annotool-workspace-media-"
 
 
@@ -47,7 +49,20 @@ func run(support, tree: SceneTree) -> void:
 	tree.root.add_child(importer)
 	var controller = script.new()
 	tree.root.add_child(controller)
-	controller.configure(root, importer)
+	var factory_script := ResourceLoader.load(FACTORY_PATH, "Script") as Script
+	support.expect(factory_script != null,
+		"workspace media should receive the shared SourceFactory")
+	if factory_script == null:
+		controller.queue_free()
+		importer.queue_free()
+		await tree.process_frame
+		_remove_tree(root)
+		return
+	var registry = REGISTRY_SCRIPT.new()
+	support.expect_equal(
+		registry.discover("res://client/plugins"), PackedStringArray(),
+		"workspace media fixture should discover production Source plugins")
+	controller.configure(root, importer, factory_script.new(registry))
 	var ready_payloads: Array[Dictionary] = []
 	var imports: Array[Dictionary] = []
 	controller.media_ready.connect(

@@ -2,6 +2,7 @@ class_name AnnotationMain
 extends Control
 
 const PLUGIN_REGISTRY_SCRIPT := preload("res://client/pipeline/plugin_registry.gd")
+const SOURCE_FACTORY_SCRIPT := preload("res://client/pipeline/source_factory.gd")
 const STORE_SCRIPT := preload("res://client/domain/annotation_store.gd")
 const HISTORY_SCRIPT := preload("res://client/domain/command_history.gd")
 const PLAYBACK_CONTROLLER_SCRIPT := preload("res://client/services/playback_controller.gd")
@@ -222,6 +223,7 @@ class StagedEditContextBridge:
 @onready var _video_import_cancel: Button = $VideoImportDialog/Margin/Content/Actions/Cancel
 
 var _plugin_registry = PLUGIN_REGISTRY_SCRIPT.new()
+var _source_factory = SOURCE_FACTORY_SCRIPT.new(_plugin_registry)
 var _source: Variant
 var _store = STORE_SCRIPT.new()
 var _history = HISTORY_SCRIPT.new(200)
@@ -338,7 +340,8 @@ func open_workspace(path: String) -> PackedStringArray:
 	_clear_active_source()
 	_workspace_catalog = candidate
 	_workspace_root = candidate.get_root()
-	_workspace_media_controller.configure(_workspace_root, _video_import_controller)
+	_workspace_media_controller.configure(
+		_workspace_root, _video_import_controller, _source_factory)
 	_dataset_explorer.populate_workspace(candidate.get_view_model())
 	_set_status("Workspace opened: %s" % _workspace_root)
 	_refresh_toolbar()
@@ -675,36 +678,36 @@ func open_source(path: String) -> PackedStringArray:
 		candidate_errors.append("Configured source plugin is unavailable: %s" % source_plugin_id)
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
-	var routed_source_plugin_id := _plugin_registry.resolve_source_plugin_id(path, source_plugin_id)
-	if routed_source_plugin_id.is_empty():
-		candidate_errors.append("No source plugin accepts this locator; normalize video with python/frame_source.py")
+	var source_result: Dictionary = _source_factory.open(path, source_plugin_id)
+	var routed_source_plugin_id := String(source_result.get("plugin_id", ""))
+	var result_errors: Variant = source_result.get("errors")
+	if result_errors is PackedStringArray:
+		candidate_errors = PackedStringArray(result_errors)
+	else:
+		candidate_errors.append("Source factory errors must be PackedStringArray")
+	if not candidate_errors.is_empty():
+		if routed_source_plugin_id.is_empty() and "No source plugin accepts" in candidate_errors[0]:
+			candidate_errors[0] += "; normalize video with python/frame_source.py"
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
-	var candidate = _plugin_registry.create_plugin("source", routed_source_plugin_id)
+	var candidate: Variant = source_result.get("source")
 	var render_candidate = _plugin_registry.create_plugin("render", render_plugin_id)
 	var candidate_edit = _plugin_registry.create_plugin("edit", edit_plugin_id)
 	if candidate == null:
-		candidate_errors.append("Configured source plugin is unavailable: %s" % routed_source_plugin_id)
+		candidate_errors.append(
+			"Source factory returned no opened Source: %s" % routed_source_plugin_id)
 	if render_candidate == null:
 		candidate_errors.append("Configured render plugin is unavailable: %s" % render_plugin_id)
 	if candidate_edit == null:
 		candidate_errors.append("Configured edit plugin is unavailable: %s" % edit_plugin_id)
 	if not candidate_errors.is_empty():
+		if candidate != null:
+			candidate.close()
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
 	var candidate_tool_descriptors := _read_tool_descriptors(candidate_edit, candidate_errors)
 	if candidate_errors.is_empty():
 		candidate_errors = _tool_panel.validate_tools(candidate_tool_descriptors)
-	if not candidate_errors.is_empty():
-		_show_errors("Cannot open source", candidate_errors)
-		return candidate_errors
-	var open_result: Variant = candidate.open(path)
-	if not open_result is PackedStringArray:
-		candidate_errors.append("Source plugin open must return PackedStringArray")
-		candidate.close()
-		_show_errors("Cannot open source", candidate_errors)
-		return candidate_errors
-	candidate_errors = open_result
 	if not candidate_errors.is_empty():
 		candidate.close()
 		_show_errors("Cannot open source", candidate_errors)

@@ -224,6 +224,18 @@ def test_test_tools_have_one_canonical_home() -> None:
     assert not list((ROOT / "tests/godot").glob("*_benchmark.gd"))
 
 
+def test_workspace_media_uses_the_registered_source_factory() -> None:
+    """Workspace media must not bypass the documented Source plugin registry."""
+
+    controller = (
+        ROOT / "client/workspace/workspace_media_controller.gd"
+    ).read_text(encoding="utf-8")
+
+    assert "client/plugins/source/" not in controller
+    assert "workspace_sequence_source.gd" not in controller
+    assert "_source_factory.open" in controller
+
+
 def test_runner_uses_repository_absolute_godot_script_paths() -> None:
     """Every Godot gate must work when the runner starts outside the repo."""
 
