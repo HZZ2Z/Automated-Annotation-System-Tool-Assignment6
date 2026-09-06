@@ -3,6 +3,8 @@ extends Control
 
 const PLUGIN_REGISTRY_SCRIPT := preload("res://client/pipeline/plugin_registry.gd")
 const SOURCE_FACTORY_SCRIPT := preload("res://client/pipeline/source_factory.gd")
+const SOURCE_SESSION_BUILDER_SCRIPT := preload(
+	"res://client/pipeline/source_session_builder.gd")
 const STORE_SCRIPT := preload("res://client/domain/annotation_store.gd")
 const HISTORY_SCRIPT := preload("res://client/domain/command_history.gd")
 const PLAYBACK_CONTROLLER_SCRIPT := preload("res://client/services/playback_controller.gd")
@@ -224,6 +226,7 @@ class StagedEditContextBridge:
 
 var _plugin_registry = PLUGIN_REGISTRY_SCRIPT.new()
 var _source_factory = SOURCE_FACTORY_SCRIPT.new(_plugin_registry)
+var _source_session_builder = SOURCE_SESSION_BUILDER_SCRIPT.new()
 var _source: Variant
 var _store = STORE_SCRIPT.new()
 var _history = HISTORY_SCRIPT.new(200)
@@ -404,72 +407,43 @@ func _activate_workspace_media(
 	candidate: Variant,
 	media_entry: Dictionary
 ) -> PackedStringArray:
-	var errors := PackedStringArray()
-	var frame_count_value: Variant = candidate.get_frame_count()
-	if not _logical_positive_integer(frame_count_value):
-		errors.append("Workspace source frame count must be a positive integer")
-	var frame_count := int(frame_count_value) if _logical_positive_integer(frame_count_value) else 0
-	var manifest_value: Variant = candidate.get_manifest()
-	if not manifest_value is Dictionary or manifest_value.is_empty():
-		errors.append("Workspace source manifest must be a non-empty Dictionary")
-	var candidate_manifest: Dictionary = (
-		manifest_value.duplicate(true) if manifest_value is Dictionary else {})
-	var nominal_fps: Variant = candidate_manifest.get("nominal_fps")
-	if not _finite_positive(nominal_fps):
-		errors.append("Workspace source nominal_fps must be finite and positive")
-	if (
-		_logical_positive_integer(candidate_manifest.get("frame_count"))
-		and int(candidate_manifest["frame_count"]) != frame_count
-	):
-		errors.append("Workspace source frame count does not match its manifest")
-
-	var frame_entries: Array = []
-	var playback_frames: Array = []
-	var seen_frame_ids := {}
-	for playback_index in range(frame_count):
-		var value: Variant = candidate.get_frame_entry(playback_index)
-		if not value is Dictionary:
-			errors.append("Workspace frame %d entry must be a Dictionary" % playback_index)
-			break
-		var entry := (value as Dictionary).duplicate(true)
-		var playback_frame: Variant = entry.get("frame")
-		var time_value: Variant = entry.get("time_s")
-		var frame_id_value: Variant = entry.get("frame_id", playback_frame)
-		if not _logical_integer(playback_frame) or int(playback_frame) != playback_index:
-			errors.append("Workspace playback entries must be contiguous at %d" % playback_index)
-			break
-		if not _finite_non_negative(time_value):
-			errors.append("Workspace frame %d has an invalid timestamp" % playback_index)
-			break
-		if (
-			not _logical_integer(frame_id_value)
-			or int(frame_id_value) < 0
-			or int(frame_id_value) > 999999
-		):
-			errors.append("Workspace frame %d has an invalid original frame ID" % playback_index)
-			break
-		var frame_id := int(frame_id_value)
-		if seen_frame_ids.has(frame_id):
-			errors.append("Workspace source repeats original frame ID %d" % frame_id)
-			break
-		seen_frame_ids[frame_id] = true
-		entry["frame_id"] = frame_id
-		frame_entries.append(entry)
-		playback_frames.append({
-			"frame": playback_index,
-			"time_s": float(time_value),
-		})
+	var snapshot: Dictionary = _source_session_builder.build(candidate, false)
+	var errors_value: Variant = snapshot.get("errors")
+	var errors: PackedStringArray = (
+		PackedStringArray(errors_value)
+		if errors_value is PackedStringArray
+		else PackedStringArray([
+			"Source session builder errors must be PackedStringArray"]))
 	if not errors.is_empty():
 		candidate.close()
 		return errors
-
-	var texture_value: Variant = candidate.load_texture(0)
-	var first_texture: Texture2D = texture_value if texture_value is Texture2D else null
-	if first_texture == null:
+	var candidate_manifest := (snapshot["manifest"] as Dictionary).duplicate(true)
+	var source_records := (snapshot["records"] as Array).duplicate(true)
+	var frame_entries := (snapshot["frame_entries"] as Array).duplicate(true)
+	var playback_frames := (snapshot["playback_frames"] as Array).duplicate(true)
+	var first_texture := snapshot["first_texture"] as Texture2D
+	var frame_count := frame_entries.size()
+	for playback_index in range(frame_count):
+		var frame_id := int((frame_entries[playback_index] as Dictionary)["frame_id"])
+		if frame_id > 999999:
+			errors.append(
+				"Workspace frame %d original frame ID exceeds six digits"
+				% playback_index)
+			break
+	if not errors.is_empty():
 		candidate.close()
-		return PackedStringArray(["Workspace source first frame is unreadable"])
+		return errors
+	var nominal_fps: Variant = candidate_manifest["nominal_fps"]
+	candidate_manifest["dataset_id"] = media_entry["media_id"]
+	candidate_manifest["source_name"] = media_entry["display_name"]
+	candidate_manifest["source_sha256"] = media_entry.get("source_sha256")
 	var seed_result := _workspace_seed_records(
-		candidate, media_entry, frame_entries, first_texture)
+		source_records,
+		candidate_manifest,
+		media_entry,
+		frame_entries,
+		first_texture,
+	)
 	var seed_errors: PackedStringArray = seed_result.get("errors", PackedStringArray())
 	if not seed_errors.is_empty():
 		candidate.close()
@@ -595,7 +569,8 @@ func _activate_workspace_media(
 
 
 func _workspace_seed_records(
-	candidate: Variant,
+	source_records: Array,
+	source_manifest: Dictionary,
 	media_entry: Dictionary,
 	frame_entries: Array,
 	first_texture: Texture2D
@@ -618,25 +593,23 @@ func _workspace_seed_records(
 			frame_ids,
 			Vector2(first_texture.get_width(), first_texture.get_height()),
 		)
-	var manifest: Dictionary = candidate.get_manifest()
-	if manifest.get("model_version", "none") == "none":
+	if source_manifest.get("model_version", "none") == "none":
 		return {"records": [], "errors": PackedStringArray()}
-	var values: Variant = candidate.get_model_records()
-	if not values is Array or values.size() != frame_entries.size():
+	if source_records.size() != frame_entries.size():
 		return {
 			"records": [],
 			"errors": PackedStringArray([
 				"Workspace model output does not match selected media frames"]),
 		}
 	var records: Array[Dictionary] = []
-	for index in range(values.size()):
-		if not values[index] is Dictionary:
+	for index in range(source_records.size()):
+		if not source_records[index] is Dictionary:
 			return {
 				"records": [],
 				"errors": PackedStringArray([
 					"Workspace model output record %d is invalid" % index]),
 			}
-		var record := (values[index] as Dictionary).duplicate(true)
+		var record := (source_records[index] as Dictionary).duplicate(true)
 		var frame_entry := frame_entries[index] as Dictionary
 		record["source"] = media_entry["media_id"]
 		record["frame"] = frame_entry["frame_id"]
@@ -713,29 +686,26 @@ func open_source(path: String) -> PackedStringArray:
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
 
-	var frame_count_value: Variant = candidate.get_frame_count()
-	if not _logical_positive_integer(frame_count_value):
-		candidate_errors.append("Source plugin frame count must be a positive integer")
-	var candidate_frame_count := int(frame_count_value) if _logical_positive_integer(frame_count_value) else 0
-	var manifest_value: Variant = candidate.get_manifest()
-	if not manifest_value is Dictionary or manifest_value.is_empty():
-		candidate_errors.append("Source plugin manifest must be a non-empty Dictionary")
-	var candidate_manifest: Dictionary = manifest_value.duplicate(true) if manifest_value is Dictionary else {}
-	var manifest_fps: Variant = candidate_manifest.get("nominal_fps")
-	if not _finite_positive(manifest_fps):
-		candidate_errors.append("Source manifest nominal_fps must be finite and positive")
-	var manifest_count: Variant = candidate_manifest.get("frame_count")
-	if not _logical_positive_integer(manifest_count):
-		candidate_errors.append("Source manifest frame_count must be a positive integer")
-	elif candidate_frame_count > 0 and int(manifest_count) != candidate_frame_count:
-		candidate_errors.append("Source manifest frame_count must match the source frame count")
-	var records_value: Variant = candidate.get_model_records()
-	if not records_value is Array:
-		candidate_errors.append("Source plugin model records must be an Array")
+	var snapshot: Dictionary = _source_session_builder.build(candidate, true)
+	var snapshot_errors: Variant = snapshot.get("errors")
+	if snapshot_errors is PackedStringArray:
+		candidate_errors = PackedStringArray(snapshot_errors)
+	else:
+		candidate_errors.append(
+			"Source session builder errors must be PackedStringArray")
 	if not candidate_errors.is_empty():
 		candidate.close()
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
+	var candidate_manifest := (snapshot["manifest"] as Dictionary).duplicate(true)
+	var records_value := (snapshot["records"] as Array).duplicate(true)
+	var frame_entries := (snapshot["frame_entries"] as Array).duplicate(true)
+	var candidate_playback_frames := (
+		(snapshot["playback_frames"] as Array).duplicate(true))
+	var first_texture := snapshot["first_texture"] as Texture2D
+	var candidate_explorer_view_model := (
+		(snapshot["presentation"] as Dictionary).duplicate(true))
+	var candidate_frame_count := frame_entries.size()
 
 	var candidate_store = STORE_SCRIPT.new()
 	var store_errors: PackedStringArray = candidate_store.load_model_records(records_value)
@@ -748,65 +718,22 @@ func open_source(path: String) -> PackedStringArray:
 		candidate.close()
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
-	for index in range(candidate_frame_count):
-		var indexed_record: Dictionary = candidate_store.get_corrected_record(index)
-		var record_frame: Variant = indexed_record.get("frame")
-		if indexed_record.is_empty() or not _logical_integer(record_frame) or int(record_frame) != index:
-			candidate_errors.append("Source model records must contain contiguous frame %d" % index)
-			break
+	var first_entry := (frame_entries[0] as Dictionary).duplicate(true)
+	var first_frame_id := int(first_entry["frame_id"])
+	var first_record: Dictionary = candidate_store.get_corrected_record(first_frame_id)
+	if first_record.is_empty():
+		candidate_errors.append("Source plugin first annotation record is invalid")
 	var candidate_catalog = PROJECT_CLASS_CATALOG_SCRIPT.new()
 	if candidate_errors.is_empty():
 		candidate_errors.append_array(candidate_catalog.rebuild(candidate_store.snapshot_corrected()))
+	if candidate_errors.is_empty():
+		candidate_errors.append_array(
+			_dataset_explorer.validate_view_model(candidate_explorer_view_model))
 	if not candidate_errors.is_empty():
 		candidate.close()
 		_show_errors("Cannot open source", candidate_errors)
 		return candidate_errors
 	var candidate_color_resolver = CLASS_COLOR_RESOLVER_SCRIPT.new(_taxonomy)
-	var candidate_playback_frames: Array = []
-	if candidate_errors.is_empty():
-		for index in range(candidate_frame_count):
-			var playback_entry_value: Variant = candidate.get_frame_entry(index)
-			if not playback_entry_value is Dictionary:
-				candidate_errors.append("Source frame %d entry must be a Dictionary" % index)
-				break
-			var playback_entry := playback_entry_value as Dictionary
-			var playback_frame: Variant = playback_entry.get("frame")
-			var playback_time: Variant = playback_entry.get("time_s")
-			if not _logical_integer(playback_frame) or int(playback_frame) != index:
-				candidate_errors.append("Source frame entries must contain contiguous frame %d" % index)
-				break
-			if not _finite_non_negative(playback_time):
-				candidate_errors.append("Source frame %d time_s must be finite and non-negative" % index)
-				break
-			candidate_playback_frames.append({"frame": index, "time_s": float(playback_time)})
-	if not candidate_errors.is_empty():
-		candidate.close()
-		_show_errors("Cannot open source", candidate_errors)
-		return candidate_errors
-	var texture_value: Variant = candidate.load_texture(0)
-	var first_texture: Texture2D = texture_value if texture_value is Texture2D else null
-	var first_record: Dictionary = candidate_store.get_corrected_record(0)
-	var entry_value: Variant = candidate.get_frame_entry(0)
-	var first_entry: Dictionary = entry_value.duplicate(true) if entry_value is Dictionary else {}
-	var presentation_value: Variant = candidate.get_presentation()
-	var candidate_explorer_view_model: Dictionary = presentation_value.duplicate(true) if presentation_value is Dictionary else {}
-	if first_texture == null:
-		candidate_errors.append("Source plugin first frame texture is invalid")
-	if first_record.is_empty():
-		candidate_errors.append("Source plugin first annotation record is invalid")
-	if first_entry.is_empty():
-		candidate_errors.append("Source plugin frame zero entry must be a non-empty Dictionary")
-	else:
-		var entry_frame: Variant = first_entry.get("frame")
-		var entry_time: Variant = first_entry.get("time_s")
-		if not _logical_integer(entry_frame) or int(entry_frame) != 0:
-			candidate_errors.append("Source plugin frame zero entry must identify frame 0")
-		if not _finite_non_negative(entry_time):
-			candidate_errors.append("Source plugin frame zero time_s must be finite and non-negative")
-	if not presentation_value is Dictionary:
-		candidate_errors.append("Source plugin presentation must be a Dictionary")
-	else:
-		candidate_errors.append_array(_dataset_explorer.validate_view_model(candidate_explorer_view_model))
 	var candidate_playback_controller = PLAYBACK_CONTROLLER_SCRIPT.new()
 	if candidate_errors.is_empty():
 		candidate_errors.append_array(candidate_playback_controller.configure(

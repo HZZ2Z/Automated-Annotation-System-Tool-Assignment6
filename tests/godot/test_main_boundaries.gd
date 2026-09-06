@@ -59,6 +59,7 @@ func run(support, tree: SceneTree) -> void:
 	await _test_tool_option_without_plugin_rolls_back(support, tree)
 	await _test_navigation_wrappers_have_one_cancel_owner(support, tree)
 	await _test_source_boundary_validation(support, tree)
+	await _test_numeric_sequence_uses_sparse_source_mapping(support, tree)
 	await _test_configured_plugin_ids(support, tree)
 	_cleanup(support)
 
@@ -772,6 +773,29 @@ func _test_configured_plugin_ids(support, tree: SceneTree) -> void:
 		await _free_main(main, tree)
 
 
+func _test_numeric_sequence_uses_sparse_source_mapping(
+	support,
+	tree: SceneTree
+) -> void:
+	var main: Variant = await _mounted_main(tree)
+	var root := _make_numeric_sequence(support, "VID68")
+	support.expect_equal(main.open_source(root), PackedStringArray(),
+		"direct Source opening should accept a registered numeric image sequence")
+	support.expect_equal(main.get_current_frame(), 0,
+		"numeric sequence should start at continuous playback index zero")
+	support.expect_equal(main.call("_current_record_frame"), 16,
+		"playback index zero should map to original frame 16")
+	support.expect(main.set_frame(1),
+		"numeric sequence should advance through the common frame boundary")
+	support.expect_equal(main.call("_current_record_frame"), 23,
+		"playback index one should map to original frame 23")
+	var viewport = main.get_node(
+		"MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport")
+	support.expect_equal(viewport.get("_record").get("frame"), 23,
+		"direct sparse playback should display the record for original frame 23")
+	await _free_main(main, tree)
+
+
 func _mounted_main(tree: SceneTree):
 	var main = MAIN_SCENE.instantiate()
 	tree.root.add_child(main)
@@ -910,6 +934,21 @@ func _make_catalog_source(support, label: String) -> String:
 	var records_file := FileAccess.open(root.path_join("model_output_v1.jsonl"), FileAccess.WRITE)
 	for record: Dictionary in records:
 		records_file.store_line(JSON.stringify(record))
+	return root
+
+
+func _make_numeric_sequence(support, label: String) -> String:
+	var fixture_root := "%snumeric-%d-%d" % [
+		TEMP_PREFIX, OS.get_process_id(), Time.get_ticks_usec()]
+	_temp_paths.append(fixture_root)
+	var root := fixture_root.path_join(label)
+	DirAccess.make_dir_recursive_absolute(root)
+	for frame_id: int in [16, 23]:
+		var image := Image.create(48, 36, false, Image.FORMAT_RGBA8)
+		image.fill(Color(0.08, 0.12 + float(frame_id) * 0.002, 0.18, 1.0))
+		support.expect_equal(
+			image.save_png(root.path_join("%06d.png" % frame_id)), OK,
+			"numeric Source fixture frame should save")
 	return root
 
 

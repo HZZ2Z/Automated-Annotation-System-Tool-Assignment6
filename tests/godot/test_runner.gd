@@ -8,6 +8,8 @@ const ANNOTATION_STORE_TEST = preload("res://tests/godot/test_annotation_store.g
 const MODEL_OUTPUT_IMMUTABILITY_TEST = preload("res://tests/godot/test_model_output_immutability.gd")
 const PLUGIN_REGISTRY_TEST = preload("res://tests/godot/test_plugin_registry.gd")
 const SOURCE_FACTORY_TEST = preload("res://tests/godot/test_source_factory.gd")
+const SOURCE_SESSION_BUILDER_TEST = preload(
+	"res://tests/godot/test_source_session_builder.gd")
 const SOURCE_PLUGIN_TEST = preload("res://tests/godot/test_source_plugin.gd")
 const SINGLE_IMAGE_SOURCE_TEST = preload("res://tests/godot/test_single_image_source.gd")
 const FEEDBACK_PLUGIN_TEST = preload("res://tests/godot/test_feedback_plugin.gd")
@@ -58,6 +60,7 @@ func _run_tests() -> void:
 	MODEL_OUTPUT_IMMUTABILITY_TEST.run(support)
 	PLUGIN_REGISTRY_TEST.run(support)
 	SOURCE_FACTORY_TEST.new().run(support)
+	SOURCE_SESSION_BUILDER_TEST.new().run(support)
 	SOURCE_PLUGIN_TEST.run(support)
 	SINGLE_IMAGE_SOURCE_TEST.new().run(support)
 	FEEDBACK_PLUGIN_TEST.new().run(support)
