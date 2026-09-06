@@ -125,11 +125,20 @@ func run(support, tree: SceneTree) -> void:
 	support.expect(export_button != null and export_button.visible and export_button.disabled, "Export should remain visible and disabled until feedback wiring is implemented")
 
 	var source_plugin = main.call("get_discovered_plugin", "source", "image_sequence_source")
+	var numeric_sequence_plugin = main.call(
+		"get_discovered_plugin", "source", "numeric_image_sequence_source")
 	var single_image_plugin = main.call("get_discovered_plugin", "source", "single_image_source")
 	var render_plugin = main.call("get_discovered_plugin", "render", "canvas_region_renderer")
 	var edit_plugin = main.call("get_discovered_plugin", "edit", "basic_edit_tools")
 	var feedback_plugin = main.call("get_discovered_plugin", "feedback", "file_training_handoff")
-	support.expect(source_plugin != null and single_image_plugin != null and render_plugin != null and edit_plugin != null and feedback_plugin != null, "main startup should discover every required plugin stage")
+	support.expect(
+		source_plugin != null
+		and numeric_sequence_plugin != null
+		and single_image_plugin != null
+		and render_plugin != null
+		and edit_plugin != null
+		and feedback_plugin != null,
+		"main startup should discover every required plugin stage")
 	if viewport != null and render_plugin != null:
 		support.expect(viewport.get("_renderer").get_script() == render_plugin.get_script(), "main should inject an instance created from the registry-discovered renderer")
 	support.expect(main.get("_feedback_plugin") != null, "main startup should instantiate the configured Feedback plugin")

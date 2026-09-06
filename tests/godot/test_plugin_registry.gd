@@ -34,7 +34,8 @@ static func run(support) -> void:
 		"registry should expose descriptor discovery and fresh-instance factory APIs")
 	if registry.has_method("list_plugins") and registry.has_method("get_descriptor") and registry.has_method("create_plugin"):
 		var source_descriptors: Array = registry.list_plugins("source")
-		support.expect_equal(source_descriptors.size(), 2, "registry should list both production source descriptors")
+		support.expect_equal(source_descriptors.size(), 3,
+			"registry should list all three production source descriptors")
 		var descriptor: Variant = registry.get_descriptor("edit", "basic_edit_tools")
 		support.expect(descriptor != null, "registry should expose the edit descriptor without instantiating plugin state")
 		if descriptor != null:
@@ -44,6 +45,8 @@ static func run(support) -> void:
 		var second: Variant = registry.create_plugin("source", "image_sequence_source")
 		support.expect(first != null and second != null and first != second, "registry factories should create isolated plugin instances")
 	support.expect(registry.get_plugin("source", "image_sequence_source") != null, "nested production source plugin should be discovered")
+	support.expect(registry.get_plugin("source", "numeric_image_sequence_source") != null,
+		"numeric image sequences should be installed as a production Source plugin")
 	support.expect(registry.get_plugin("edit", "basic_edit_tools") != null, "production edit plugin should be discovered")
 	support.expect(registry.get_plugin("source", "fixture_source") == null, "discover should replace prior registry state")
 	support.expect(registry.get_plugin("source", "image_sequence_source") != registry.get_plugin("source", "missing"), "plugin lookup should return only the requested instance")

@@ -9,7 +9,8 @@ signal import_progress(payload: Dictionary)
 signal import_cancelled
 
 const PATHS_SCRIPT := preload("res://client/workspace/workspace_paths.gd")
-const SEQUENCE_SOURCE_SCRIPT := preload("res://client/workspace/workspace_sequence_source.gd")
+const SEQUENCE_SOURCE_SCRIPT := preload(
+	"res://client/plugins/source/numeric_image_sequence_source/plugin.gd")
 const IMAGE_SOURCE_SCRIPT := preload("res://client/plugins/source/single_image_source/plugin.gd")
 const NORMALIZED_SOURCE_SCRIPT := preload("res://client/plugins/source/image_sequence_source/plugin.gd")
 
@@ -87,8 +88,7 @@ func _open_image(media_entry: Dictionary) -> PackedStringArray:
 
 func _open_sequence(media_entry: Dictionary) -> PackedStringArray:
 	var source = SEQUENCE_SOURCE_SCRIPT.new()
-	var errors: PackedStringArray = source.open_for_media(
-		media_entry["source_path"], media_entry["media_id"], 1.0)
+	var errors: PackedStringArray = source.open(media_entry["source_path"])
 	if not errors.is_empty():
 		source.close()
 		return _emit_failure(errors)

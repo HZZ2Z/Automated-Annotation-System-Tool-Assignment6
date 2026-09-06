@@ -2,14 +2,14 @@ extends "res://client/pipeline/stages/source_stage.gd"
 
 
 const CACHE_SCRIPT := preload("res://client/services/frame_cache.gd")
-const PATHS_SCRIPT := preload("res://client/workspace/workspace_paths.gd")
 const IMAGE_EXTENSIONS := {"jpeg": true, "jpg": true, "png": true}
+const MAX_FRAME_ID := 999999
+const MAX_DATASET_ID_LENGTH := 64
 
 
 var last_error := ""
 var _root := ""
-var _media_id := ""
-var _nominal_fps := 1.0
+var _dataset_id := ""
 var _manifest: Dictionary = {}
 var _records: Array[Dictionary] = []
 var _cache = CACHE_SCRIPT.new(12)
@@ -18,31 +18,39 @@ var _expected_size := Vector2i.ZERO
 
 func can_open(locator: String) -> bool:
 	var root := ProjectSettings.globalize_path(locator).simplify_path().trim_suffix("/")
-	return DirAccess.dir_exists_absolute(root)
+	if not DirAccess.dir_exists_absolute(root):
+		return false
+	var directory := DirAccess.open(root)
+	if directory == null:
+		return false
+	var numeric_images := 0
+	for file_name: String in directory.get_files():
+		if file_name.begins_with(".") or directory.is_link(file_name):
+			continue
+		if not _is_numeric_image_name(file_name):
+			continue
+		var frame_id := int(file_name.get_basename())
+		if frame_id < 0 or frame_id > MAX_FRAME_ID:
+			continue
+		numeric_images += 1
+		if numeric_images >= 2:
+			return true
+	return false
 
 
 func open(locator: String) -> PackedStringArray:
-	var root := ProjectSettings.globalize_path(locator).simplify_path().trim_suffix("/")
-	return open_for_media(root, PATHS_SCRIPT.portable_media_id(root.get_file()), 1.0)
-
-
-func open_for_media(
-	locator: String,
-	media_id_value: String,
-	nominal_fps: float = 1.0
-) -> PackedStringArray:
+	close()
 	var errors := PackedStringArray()
 	var root := ProjectSettings.globalize_path(locator).simplify_path().trim_suffix("/")
 	if not DirAccess.dir_exists_absolute(root):
-		return _fail(PackedStringArray(["Image-sequence directory does not exist: %s" % root]))
-	if not PATHS_SCRIPT.is_portable_media_id(media_id_value):
-		return _fail(PackedStringArray(["Image-sequence media ID is not portable: %s" % media_id_value]))
-	if not is_finite(nominal_fps) or nominal_fps <= 0.0:
-		return _fail(PackedStringArray(["Image-sequence FPS must be finite and positive"]))
+		return _fail(PackedStringArray([
+			"Image-sequence directory does not exist: %s" % root]))
+	var dataset_id := _portable_dataset_id(root.get_file())
 
 	var directory := DirAccess.open(root)
 	if directory == null:
-		return _fail(PackedStringArray(["Cannot read image-sequence directory: %s" % root]))
+		return _fail(PackedStringArray([
+			"Cannot read image-sequence directory: %s" % root]))
 	var entries: Array[Dictionary] = []
 	var frame_ids := {}
 	for file_name: String in directory.get_files():
@@ -54,8 +62,9 @@ func open_for_media(
 		if not _is_decimal(stem):
 			continue
 		var frame_id := int(stem)
-		if frame_id < 0 or frame_id > 999999:
-			errors.append("Sequence frame ID is outside 000000-999999: %s" % file_name)
+		if frame_id < 0 or frame_id > MAX_FRAME_ID:
+			errors.append(
+				"Sequence frame ID is outside 000000-999999: %s" % file_name)
 		elif frame_ids.has(frame_id):
 			errors.append(
 				"Sequence has duplicate numeric frame ID %d: %s and %s" % [
@@ -80,7 +89,7 @@ func open_for_media(
 	for playback_index in range(entries.size()):
 		var value: Dictionary = entries[playback_index]
 		var frame_id: int = value["frame_id"]
-		var time_s := float(frame_id) / nominal_fps
+		var time_s := float(frame_id)
 		manifest_frames.append({
 			"frame": playback_index,
 			"frame_id": frame_id,
@@ -89,26 +98,25 @@ func open_for_media(
 		})
 		records.append({
 			"schema_version": 1,
-			"source": media_id_value,
+			"source": dataset_id,
 			"frame": frame_id,
 			"time_s": time_s,
 			"regions": [],
 		})
 	var manifest := {
 		"schema_version": 1,
-		"dataset_id": media_id_value,
+		"dataset_id": dataset_id,
 		"source_name": root.get_file(),
 		"source_sha256": null,
 		"frame_count": manifest_frames.size(),
-		"nominal_fps": nominal_fps,
+		"nominal_fps": 1.0,
 		"frames": manifest_frames,
 		"model_version": "none",
 		"taxonomy_version": "v1",
 	}
 
 	_root = root
-	_media_id = media_id_value
-	_nominal_fps = nominal_fps
+	_dataset_id = dataset_id
 	_manifest = manifest
 	_records = records
 	_cache.clear()
@@ -148,7 +156,7 @@ func get_presentation() -> Dictionary:
 			"path": _root.path_join(entry["image_path"]),
 		})
 	return {
-		"display_name": _media_id,
+		"display_name": _dataset_id,
 		"source_path": _root,
 		"frames": frames,
 		"artifacts": [],
@@ -170,7 +178,7 @@ func load_texture(index: int) -> Texture2D:
 
 func close() -> void:
 	_root = ""
-	_media_id = ""
+	_dataset_id = ""
 	_manifest.clear()
 	_records.clear()
 	_cache.clear()
@@ -187,7 +195,8 @@ func _load_texture_uncached(index: int) -> Texture2D:
 		return null
 	var absolute := _root.path_join(image_path)
 	if not FileAccess.file_exists(absolute):
-		last_error = "sequence frame %d is missing: %s" % [entry["frame_id"], image_path]
+		last_error = "sequence frame %d is missing: %s" % [
+			entry["frame_id"], image_path]
 		return null
 	var image := Image.new()
 	if image.load(absolute) != OK or image.is_empty():
@@ -204,6 +213,13 @@ func _load_texture_uncached(index: int) -> Texture2D:
 	return ImageTexture.create_from_image(image)
 
 
+func _is_numeric_image_name(file_name: String) -> bool:
+	return (
+		IMAGE_EXTENSIONS.has(file_name.get_extension().to_lower())
+		and _is_decimal(file_name.get_basename())
+	)
+
+
 func _is_decimal(value: String) -> bool:
 	if value.is_empty():
 		return false
@@ -212,6 +228,27 @@ func _is_decimal(value: String) -> bool:
 		if code < 48 or code > 57:
 			return false
 	return true
+
+
+func _portable_dataset_id(stem: String) -> String:
+	var result := ""
+	var pending_separator := false
+	for index in range(stem.length()):
+		var code := stem.unicode_at(index)
+		var is_ascii_letter := (
+			(code >= 65 and code <= 90)
+			or (code >= 97 and code <= 122)
+		)
+		var is_digit := code >= 48 and code <= 57
+		if is_ascii_letter or is_digit:
+			if pending_separator and not result.is_empty():
+				result += "_"
+			result += String.chr(code)
+			pending_separator = false
+		else:
+			pending_separator = true
+	result = result.left(MAX_DATASET_ID_LENGTH).trim_suffix("_")
+	return result if not result.is_empty() else "media"
 
 
 func _fail(errors: PackedStringArray) -> PackedStringArray:
