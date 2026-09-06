@@ -16,6 +16,7 @@ func run(support) -> void:
 	if plugin == null:
 		return
 	_test_valid_atomic_export(plugin, support)
+	_test_sparse_frame_export(plugin, support)
 	_test_context_errors(plugin, support)
 	_cleanup(support)
 
@@ -83,6 +84,56 @@ func _test_context_errors(plugin, support) -> void:
 		support.expect(not errors.is_empty() and _contains(errors, case.fragment), "incomplete Feedback context should identify %s" % case.fragment)
 
 
+func _test_sparse_frame_export(plugin, support) -> void:
+	var root := _new_temp_root("sparse")
+	DirAccess.make_dir_recursive_absolute(root)
+	var output_path := root.path_join("training_update_v1")
+	var records := [_empty_record(16), _empty_record(23)]
+	var context := _context(records, output_path)
+	context.source_manifest.frame_count = 2
+	context.source_manifest.dataset_id = "VID68"
+	context.source_manifest.source_sha256 = null
+	context.dirty_frames = [23]
+	var errors: PackedStringArray = plugin.export(context)
+	support.expect_equal(errors, PackedStringArray(),
+		"Feedback should export sparse original frame ids without renumbering")
+	if errors.is_empty():
+		support.expect_equal(_read_frames(output_path), [16, 23],
+			"corrected JSONL should preserve original frame ids")
+		var manifest: Variant = JSON.parse_string(FileAccess.get_file_as_string(
+			output_path.path_join("manifest.json")))
+		support.expect(manifest is Dictionary
+			and manifest.get("source_dataset", {}).get("sha256", "missing") == null,
+			"handoff manifest should report an unavailable sequence hash honestly")
+
+	var descending := _context(
+		[_empty_record(23), _empty_record(16)],
+		root.path_join("descending"),
+	)
+	descending.source_manifest.frame_count = 2
+	descending.dirty_frames = [16]
+	support.expect(_contains(plugin.export(descending), "strictly increasing"),
+		"Feedback should reject descending original frame ids")
+
+	var duplicate := _context(
+		[_empty_record(16), _empty_record(16)],
+		root.path_join("duplicate"),
+	)
+	duplicate.source_manifest.frame_count = 2
+	duplicate.dirty_frames = [16]
+	support.expect(_contains(plugin.export(duplicate), "duplicate"),
+		"Feedback should reject duplicate original frame ids")
+
+	var missing_dirty := _context(
+		records,
+		root.path_join("missing-dirty"),
+	)
+	missing_dirty.source_manifest.frame_count = 2
+	missing_dirty.dirty_frames = [17]
+	support.expect(_contains(plugin.export(missing_dirty), "dirty_frames"),
+		"Feedback should reject a dirty frame absent from corrected records")
+
+
 func _context(records: Variant, output_path: String) -> Dictionary:
 	return {
 		"records": records,
@@ -110,6 +161,34 @@ func _model_record() -> Dictionary:
 			{"id": "box-1", "class": "grasper", "kind": "instrument", "box": [2, 3, 4, 5], "conf": 0.9, "track_id": "T01"},
 		],
 	}
+
+
+func _empty_record(frame_id: int) -> Dictionary:
+	return {
+		"schema_version": 1,
+		"source": "VID68",
+		"frame": frame_id,
+		"time_s": float(frame_id),
+		"regions": [],
+	}
+
+
+func _read_frames(output_path: String) -> Array:
+	var frames: Array = []
+	var file := FileAccess.open(
+		output_path.path_join("data/corrected_annotations.jsonl"),
+		FileAccess.READ,
+	)
+	if file == null:
+		return frames
+	while not file.eof_reached():
+		var line := file.get_line().strip_edges()
+		if line.is_empty():
+			continue
+		var value: Variant = JSON.parse_string(line)
+		if value is Dictionary:
+			frames.append(int(value.get("frame", -1)))
+	return frames
 
 
 func _contains(errors: PackedStringArray, fragment: String) -> bool:
