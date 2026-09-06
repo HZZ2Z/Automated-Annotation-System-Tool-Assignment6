@@ -1,4 +1,4 @@
-"""Canonical JSON Schema loading and domain-level contract validation."""
+"""规范化JSON Schema加载与合同校验"""
 
 from functools import lru_cache
 import json
@@ -58,7 +58,8 @@ def load_schema(name: str) -> dict[str, Any]:
 
 
 def validate_instance(data: object, schema_name: str) -> list[str]:
-    """Return deterministic, field-specific JSON Schema validation errors."""
+
+    """返回确定的、针对具体字段的 JSON Schema 验证错误。"""
     validator = StrictDraft202012Validator(load_schema(schema_name))
     errors = sorted(validator.iter_errors(data), key=lambda item: list(item.path))
     return [
@@ -69,7 +70,7 @@ def validate_instance(data: object, schema_name: str) -> list[str]:
 
 
 def _validation_error_path(error: Any) -> str:
-    """Point required/additional-property errors at the actual field."""
+    """将‘必填/附加属性’错误精准定位到具体字段。"""
     parts = [str(part) for part in error.absolute_path]
     if error.validator == "required":
         missing = error.message.split("'", 2)[1:2]
@@ -84,7 +85,7 @@ def _validation_error_path(error: Any) -> str:
 
 
 def validate_manifest_semantics(record: dict[str, Any]) -> list[str]:
-    """Validate cross-entry dataset-manifest invariants."""
+    """校验跨实体数据集清单的约束条件"""
     errors: list[str] = []
     frames = record.get("frames")
     if not isinstance(frames, list):

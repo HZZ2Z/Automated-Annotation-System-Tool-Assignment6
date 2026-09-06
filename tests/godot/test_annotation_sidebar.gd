@@ -22,20 +22,20 @@ func run(support, tree: SceneTree) -> void:
 	await tree.process_frame
 
 	support.expect(sidebar is VBoxContainer, "sidebar root should be a VBoxContainer")
-	support.expect_equal((sidebar.get_node("ProjectLabels/Title") as Label).text, "Project Labels",
+	support.expect_equal((sidebar.get_node("ProjectLabels/Content/Title") as Label).text, "Project Labels",
 		"upper panel must identify the project catalog")
-	support.expect_equal((sidebar.get_node("FrameAnnotations/Title") as Label).text,
-		"Current Frame Annotations", "lower panel must identify current objects")
-	support.expect((sidebar.get_node("ProjectLabels/Tree") as Tree).position.y >
-		(sidebar.get_node("ProjectLabels/Title") as Label).position.y,
+	support.expect_equal((sidebar.get_node("FrameAnnotations/Content/Title") as Label).text,
+		"Current Frame Annotations (0)", "lower panel must identify current objects and the initial count")
+	support.expect((sidebar.get_node("ProjectLabels/Content/Tree") as Tree).position.y >
+		(sidebar.get_node("ProjectLabels/Content/Title") as Label).position.y,
 		"project tree should be laid out below its title")
-	support.expect((sidebar.get_node("FrameAnnotations/Tree") as Tree).position.y >
-		(sidebar.get_node("FrameAnnotations/Title") as Label).position.y,
+	support.expect((sidebar.get_node("FrameAnnotations/Content/Tree") as Tree).position.y >
+		(sidebar.get_node("FrameAnnotations/Content/Title") as Label).position.y,
 		"frame tree should be laid out below its title")
 	for panel_path in ["ProjectLabels", "FrameAnnotations"]:
 		var panel := sidebar.get_node(panel_path) as Control
-		var title := sidebar.get_node(panel_path + "/Title") as Control
-		var tree_control := sidebar.get_node(panel_path + "/Tree") as Control
+		var title := sidebar.get_node(panel_path + "/Content/Title") as Control
+		var tree_control := sidebar.get_node(panel_path + "/Content/Tree") as Control
 		support.expect(panel.get_global_rect().has_point(title.get_global_rect().position + Vector2(1, 1)),
 			"%s title should remain inside the panel at a non-zero parent position" % panel_path)
 		support.expect(panel.get_global_rect().has_point(tree_control.get_global_rect().position + Vector2(1, 1)),
@@ -44,8 +44,8 @@ func run(support, tree: SceneTree) -> void:
 		support.expect(sidebar.find_child(old_name, true, false) == null,
 			"new sidebar must not expose old Inspector field %s" % old_name)
 
-	var project_tree := sidebar.get_node("ProjectLabels/Tree") as Tree
-	var frame_tree := sidebar.get_node("FrameAnnotations/Tree") as Tree
+	var project_tree := sidebar.get_node("ProjectLabels/Content/Tree") as Tree
+	var frame_tree := sidebar.get_node("FrameAnnotations/Content/Tree") as Tree
 	support.expect_equal(project_tree.mouse_filter, Control.MOUSE_FILTER_STOP,
 		"project tree should stop pointer events for stable scrolling")
 	support.expect_equal(frame_tree.select_mode, Tree.SELECT_ROW,
@@ -225,3 +225,47 @@ func run(support, tree: SceneTree) -> void:
 	sidebar.queue_free()
 	viewport.queue_free()
 	await tree.process_frame
+
+	await _test_count_changes_keep_title_above_list(packed, support, tree)
+
+
+func _test_count_changes_keep_title_above_list(packed: PackedScene, support, tree: SceneTree) -> void:
+	var sidebar := packed.instantiate() as Control
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(640, 720)
+	viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	tree.root.add_child(viewport)
+	viewport.add_child(sidebar)
+	sidebar.position = Vector2(30, 30)
+	sidebar.size = Vector2(360, 600)
+	for count in [0, 23, 24, 23, 0]:
+		var rows: Array = []
+		for index in range(count):
+			rows.append({"region_id": str(index), "class": "grasper", "kind": "instrument", "geometry": &"polygon"})
+		sidebar.populate([], rows, "")
+		for tick in range(4):
+			await tree.process_frame
+		var title := sidebar.get_node("FrameAnnotations/Content/Title") as Label
+		support.expect_equal(title.text, "Current Frame Annotations (%d)" % count, "count follows frame rows")
+		_assert_panel_rects(sidebar, support, "count %d" % count)
+	for dimensions: Vector2 in [Vector2(480, 640), Vector2(320, 500), Vector2(360, 600)]:
+		sidebar.size = dimensions
+		for tick in range(4):
+			await tree.process_frame
+		_assert_panel_rects(sidebar, support, "resize %s" % dimensions)
+	sidebar.queue_free()
+	viewport.queue_free()
+	await tree.process_frame
+
+
+func _assert_panel_rects(sidebar: Control, support, context: String) -> void:
+	for panel_name: String in ["ProjectLabels", "FrameAnnotations"]:
+		var title := sidebar.get_node(panel_name + "/Content/Title") as Control
+		var list := sidebar.get_node(panel_name + "/Content/Tree") as Control
+		var panel := sidebar.get_node(panel_name) as Control
+		var title_rect := title.get_global_rect()
+		var list_rect := list.get_global_rect()
+		support.expect(title_rect.end.y <= list_rect.position.y,
+			"%s %s: title and list must never overlap (%s, %s)" % [context, panel_name, title_rect, list_rect])
+		support.expect(panel.get_global_rect().encloses(title_rect) and panel.get_global_rect().encloses(list_rect),
+			"%s %s: content stays inside panel" % [context, panel_name])

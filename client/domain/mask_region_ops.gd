@@ -2,11 +2,13 @@ class_name MaskRegionOps
 extends RefCounted
 
 const IMAGE_ALGORITHMS := preload("res://client/domain/image_region_algorithms.gd")
+const POLYGON_OPS := preload("res://client/domain/polygon_ops.gd")
 
 const MAX_MASK_PIXELS := 1048576
 const VECTOR2I_MAX := 2147483647
 const RASTER_PADDING := 2
 const MAX_GAP_RADIUS := 8.0
+const MAX_SMOOTHING_VERTICES := 256
 const CARDINAL_OFFSETS := [
 	Vector2i(1, 0),
 	Vector2i(0, 1),
@@ -25,6 +27,13 @@ const STATUS_ROI_TOO_LARGE := &"roi_too_large"
 
 
 static func rasterize_polygon(points: Variant, image_size: Vector2i) -> Dictionary:
+	var raw := rasterize_polygon_mask(points, image_size)
+	if not bool(raw.get("ok", false)):
+		return raw
+	return to_v1_candidate(raw)
+
+
+static func rasterize_polygon_mask(points: Variant, image_size: Vector2i) -> Dictionary:
 	if not _valid_image_size(image_size):
 		return _result(false, STATUS_INVALID, Rect2i(), PackedByteArray(), PackedVector2Array(), "Image size must be positive.")
 	var polygon := _coerce_points(points)
@@ -44,7 +53,9 @@ static func rasterize_polygon(points: Variant, image_size: Vector2i) -> Dictiona
 			var pixel_center := Vector2(image_point) + Vector2(0.5, 0.5)
 			if Geometry2D.is_point_in_polygon(pixel_center, polygon):
 				mask[local_y * bounds.size.x + local_x] = 1
-	return to_v1_candidate({"roi": bounds, "mask": mask})
+	if mask.count(0) == mask.size():
+		return _result(false, STATUS_EMPTY, bounds, mask, PackedVector2Array(), "The region covers no image pixel centers; resize it before using a raster tool.")
+	return _result(true, STATUS_SINGLE, bounds, mask)
 
 
 static func rasterize_stroke(samples: Variant, radius: float, image_size: Vector2i) -> Dictionary:
@@ -106,18 +117,20 @@ static func combine_masks(left_state: Dictionary, right_state: Dictionary, opera
 	var allocation_error := _allocation_error(output_roi)
 	if not allocation_error.is_empty():
 		return allocation_error
-	var output := PackedByteArray()
-	output.resize(output_roi.size.x * output_roi.size.y)
-	for local_y in range(output_roi.size.y):
-		for local_x in range(output_roi.size.x):
-			var image_point := output_roi.position + Vector2i(local_x, local_y)
-			var left_byte := _byte_at(left_roi, left_mask, image_point)
-			var right_byte := _byte_at(right_roi, right_mask, image_point)
-			var index := local_y * output_roi.size.x + local_x
+	var output := _copy_mask_to_roi(left_roi, left_mask, output_roi)
+	# 左侧整行复制；只扫描右侧可能改变结果的局部范围。
+	var affected := right_roi if operation == &"union" else left_roi.intersection(right_roi)
+	if affected.has_area():
+		for image_y in range(affected.position.y, affected.end.y):
+			var output_index := (image_y - output_roi.position.y) * output_roi.size.x + affected.position.x - output_roi.position.x
+			var right_index := (image_y - right_roi.position.y) * right_roi.size.x + affected.position.x - right_roi.position.x
 			if operation == &"union":
-				output[index] = maxi(left_byte, right_byte)
-			elif right_byte == 0:
-				output[index] = left_byte
+				for offset in range(affected.size.x):
+					output[output_index + offset] = maxi(output[output_index + offset], right_mask[right_index + offset])
+			else:
+				for offset in range(affected.size.x):
+					if right_mask[right_index + offset] != 0:
+						output[output_index + offset] = 0
 	return _result(true, STATUS_SINGLE, output_roi, output)
 
 
@@ -129,16 +142,37 @@ static func masks_overlap(left_state: Dictionary, right_state: Dictionary) -> bo
 	var left_roi: Rect2i = left_validation["roi"]
 	var right_roi: Rect2i = right_validation["roi"]
 	var overlap_roi := left_roi.intersection(right_roi)
-	if overlap_roi == Rect2i():
+	if not overlap_roi.has_area():
 		return false
 	var left_mask: PackedByteArray = left_validation["mask"]
 	var right_mask: PackedByteArray = right_validation["mask"]
 	for image_y in range(overlap_roi.position.y, overlap_roi.end.y):
-		for image_x in range(overlap_roi.position.x, overlap_roi.end.x):
-			var image_point := Vector2i(image_x, image_y)
-			if _byte_at(left_roi, left_mask, image_point) != 0 and _byte_at(right_roi, right_mask, image_point) != 0:
+		var left_index := (image_y - left_roi.position.y) * left_roi.size.x + overlap_roi.position.x - left_roi.position.x
+		var right_index := (image_y - right_roi.position.y) * right_roi.size.x + overlap_roi.position.x - right_roi.position.x
+		for offset in range(overlap_roi.size.x):
+			if left_mask[left_index + offset] != 0 and right_mask[right_index + offset] != 0:
 				return true
 	return false
+
+
+static func _copy_mask_to_roi(source_roi: Rect2i, source: PackedByteArray, target_roi: Rect2i) -> PackedByteArray:
+	if source_roi == target_roi:
+		return source.duplicate()
+	var output := PackedByteArray()
+	if not source_roi.has_area():
+		output.resize(target_roi.size.x * target_roi.size.y)
+		return output
+	output.resize((source_roi.position.y - target_roi.position.y) * target_roi.size.x)
+	var left_padding := PackedByteArray()
+	left_padding.resize(source_roi.position.x - target_roi.position.x)
+	var right_padding := PackedByteArray()
+	right_padding.resize(target_roi.end.x - source_roi.end.x)
+	for y in range(source_roi.size.y):
+		output.append_array(left_padding)
+		output.append_array(source.slice(y * source_roi.size.x, (y + 1) * source_roi.size.x))
+		output.append_array(right_padding)
+	output.resize(target_roi.size.x * target_roi.size.y)
+	return output
 
 
 static func find_enclosed_blank(boundary_state: Dictionary, seed: Variant, image_size: Vector2i) -> Dictionary:
@@ -349,6 +383,11 @@ static func to_v1_candidate(state: Dictionary) -> Dictionary:
 		polygon.append(Vector2(float(value[0]), float(value[1])))
 	if polygon.size() < 3:
 		return _result(false, STATUS_INVALID, roi, mask, PackedVector2Array(), "Polygonizer did not return one simple ring.")
+	# 只在提交轮廓时简化；复杂轮廓保留原形，避免二次校验拖慢大笔迹。
+	if polygon.size() <= MAX_SMOOTHING_VERTICES:
+		var simplified := POLYGON_OPS.simplify_pixel_boundary(polygon, 0.5)
+		if not simplified.is_empty():
+			polygon = simplified
 	return _result(true, STATUS_SINGLE, roi, mask, polygon)
 
 

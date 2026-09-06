@@ -83,6 +83,14 @@ func replace_corrected_record(frame: int, record: Variant) -> PackedStringArray:
 
 
 func replace_corrected_records(replacements: Dictionary, operation: Dictionary = {}) -> PackedStringArray:
+	return _replace_corrected_records(replacements, operation, -1)
+
+
+func restore_corrected_records(replacements: Dictionary, operation_count: int) -> PackedStringArray:
+	return _replace_corrected_records(replacements, {}, clampi(operation_count, 0, _batch_operations.size()))
+
+
+func _replace_corrected_records(replacements: Dictionary, operation: Dictionary, restore_operation_count: int) -> PackedStringArray:
 	var errors := PackedStringArray()
 	if replacements.is_empty():
 		return PackedStringArray(["replacements: expected at least one frame"])
@@ -105,15 +113,11 @@ func replace_corrected_records(replacements: Dictionary, operation: Dictionary =
 		_dirty_frames[frame] = true
 	if not operation.is_empty():
 		_batch_operations.append(operation.duplicate(true))
+	if restore_operation_count >= 0:
+		_batch_operations.resize(restore_operation_count)
+	# 帧数据和传播日志都更新后再通知订阅者。
 	corrected_records_replaced.emit(PackedInt64Array(frames))
 	return errors
-
-
-func restore_corrected_records(replacements: Dictionary, operation_count: int) -> void:
-	var errors := replace_corrected_records(replacements)
-	if not errors.is_empty():
-		return
-	_batch_operations.resize(clampi(operation_count, 0, _batch_operations.size()))
 
 
 func snapshot_batch_operations() -> Array:

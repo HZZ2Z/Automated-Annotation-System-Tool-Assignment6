@@ -8,6 +8,7 @@ const WORKING_MASK := &"working_mask"
 const CANDIDATE := &"candidate"
 const AWAITING_CLASS := &"awaiting_class"
 const INVALID := &"invalid"
+const DRAFT_HISTORY := preload("res://client/domain/mask_draft_history.gd")
 
 const DRAWING_COLOR := Color("#22d3ee")
 const CANDIDATE_COLOR := Color("#22c55e")
@@ -29,6 +30,10 @@ var fill_color := Color.TRANSPARENT
 var _pending_geometry: Dictionary = {}
 var _pending_image_size := Vector2.ZERO
 var _pending_token := -1
+var _draft_history = DRAFT_HISTORY.new()
+var _fill_repair: Dictionary = {}
+var _repair_previous: Dictionary = {}
+var _brush_previews: Array[Dictionary] = []
 
 
 func begin(next_tool_id: StringName, next_frame: int, next_region_id: String, store_record: Dictionary) -> void:
@@ -89,6 +94,7 @@ func set_brush_preview(
 	next_message: String = "",
 	invalid := false,
 ) -> void:
+	_brush_previews.clear()
 	phase = INVALID if invalid else DRAWING
 	points = PackedVector2Array()
 	working_mask = _duplicate_mask_snapshot(mask_snapshot)
@@ -99,12 +105,21 @@ func set_brush_preview(
 	fill_color = INVALID_COLOR if invalid else next_fill_color
 
 
+func set_batch_brush_preview(regions: Array) -> void:
+	_brush_previews = []
+	for entry: Dictionary in regions:
+		_brush_previews.append({"id": str(entry.id), "mask": _duplicate_mask_snapshot(entry.mask)})
+	working_mask = _brush_previews[0].mask.duplicate(true) if not _brush_previews.is_empty() else {}
+
+
 func set_working_mask(mask_snapshot: Dictionary, next_message: String = "", next_fill_color: Color = WORKING_MASK_COLOR) -> void:
+	var next_mask := _duplicate_mask_snapshot(mask_snapshot)
+	if has_working_mask() and not next_mask.is_empty():
+		_draft_history.record(working_mask, next_mask)
 	phase = WORKING_MASK
 	points = PackedVector2Array()
-	working_mask = _duplicate_mask_snapshot(mask_snapshot)
+	working_mask = next_mask
 	candidate_polygon = PackedVector2Array()
-	cursor = Vector2.ZERO
 	brush_radius = 0.0
 	message = next_message
 	fill_color = next_fill_color
@@ -147,6 +162,7 @@ func set_invalid(
 
 
 func reset() -> void:
+	_brush_previews.clear()
 	phase = IDLE
 	tool_id = &""
 	frame = -1
@@ -162,6 +178,67 @@ func reset() -> void:
 	_pending_geometry = {}
 	_pending_image_size = Vector2.ZERO
 	_pending_token = -1
+	_draft_history.clear()
+	_fill_repair = {}
+	_repair_previous = {}
+
+
+func set_working_cursor(point: Vector2) -> void:
+	cursor = point
+	points = PackedVector2Array([point])
+
+
+func set_fill_repair(result: Dictionary, seed: Vector2) -> void:
+	_repair_previous = {"phase": phase, "mask": working_mask.duplicate(true),
+		"points": points.duplicate(), "cursor": cursor, "message": message, "color": fill_color}
+	_fill_repair = result.duplicate(true)
+	phase = CANDIDATE
+	working_mask = _duplicate_mask_snapshot(result)
+	candidate_polygon = PackedVector2Array()
+	set_working_cursor(seed)
+	fill_color = CANDIDATE_COLOR
+	message = str(result.message)
+
+
+func has_fill_repair() -> bool:
+	return not _fill_repair.is_empty()
+
+
+func cancel_fill_repair() -> void:
+	if not has_fill_repair():
+		return
+	phase = _repair_previous.phase
+	working_mask = _repair_previous.mask.duplicate(true)
+	points = _repair_previous.points.duplicate()
+	cursor = _repair_previous.cursor
+	message = _repair_previous.message
+	fill_color = _repair_previous.color
+	_fill_repair = {}
+	_repair_previous = {}
+
+
+func take_fill_repair() -> Dictionary:
+	var result := _fill_repair.duplicate(true)
+	cancel_fill_repair()
+	return result
+
+
+func draft_counts() -> Dictionary:
+	return _draft_history.counts()
+
+
+func change_draft_history(redo: bool) -> PackedStringArray:
+	if has_fill_repair():
+		cancel_fill_repair()
+		return PackedStringArray()
+	if not has_working_mask():
+		return PackedStringArray(["No Fill contour is active"])
+	var restored: Dictionary = _draft_history.redo(working_mask) if redo else _draft_history.undo(working_mask)
+	if restored.is_empty():
+		return PackedStringArray(["Contour: nothing to redo" if redo else "Contour: nothing to undo"])
+	working_mask = restored
+	message = "Contour fill redone" if redo else "Contour fill undone"
+	return PackedStringArray()
 
 
 func has_working_mask() -> bool:
@@ -207,6 +284,19 @@ func overlay_snapshot() -> Dictionary:
 	}
 	if tool_id in [&"paint", &"eraser"] and not region_id.is_empty() and not working_mask.is_empty():
 		snapshot["suppress_region_id"] = region_id
+	if not _brush_previews.is_empty():
+		var ids := PackedStringArray()
+		var masks: Array[Dictionary] = []
+		for entry: Dictionary in _brush_previews:
+			ids.append(entry.id)
+			masks.append(entry.mask.duplicate(true))
+		if ids.size() == 1:
+			snapshot["suppress_region_id"] = ids[0]
+		else:
+			snapshot["suppress_region_ids"] = ids
+		snapshot["mask_previews"] = masks
+	if has_fill_repair():
+		snapshot["repair_mask"] = _fill_repair.repair_mask.duplicate(true)
 	return snapshot
 
 

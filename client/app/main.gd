@@ -301,6 +301,9 @@ func _input(event: InputEvent) -> void:
 		# In particular, Ctrl+Z must never reach global Store history here.
 		return
 	var key: Key = event.keycode if event.keycode != KEY_NONE else event.physical_keycode
+	var focus := get_viewport().gui_get_focus_owner()
+	if focus is LineEdit or focus is TextEdit:
+		return
 	if event.ctrl_pressed and key == KEY_Z:
 		if event.shift_pressed:
 			_run_history_redo()
@@ -1347,13 +1350,20 @@ func _run_history_undo() -> void:
 		_modal_refusal("Undo")
 		return
 	pause()
+	if _try_draft_history(false):
+		return
 	if not _prepare_edit_navigation():
 		_refresh_toolbar()
 		return
-	if _history.undo(_store):
+	var errors: PackedStringArray = _history.try_undo(_store)
+	if errors.is_empty():
 		_refresh_after_edit()
-	else:
+	elif errors == PackedStringArray(["history: nothing to undo"]):
+		_refresh_current_annotations()
 		_refresh_toolbar()
+	else:
+		_refresh_current_annotations()
+		_show_errors("Undo failed", errors)
 
 
 func _on_redo_pressed() -> void:
@@ -1365,6 +1375,8 @@ func _run_history_redo() -> void:
 		_modal_refusal("Redo")
 		return
 	pause()
+	if _try_draft_history(true):
+		return
 	if not _prepare_edit_navigation():
 		_refresh_toolbar()
 		return
@@ -1372,9 +1384,31 @@ func _run_history_redo() -> void:
 	if errors.is_empty():
 		_refresh_after_edit()
 	elif errors == PackedStringArray(["history: nothing to redo"]):
+		_refresh_current_annotations()
 		_refresh_toolbar()
 	else:
+		_refresh_current_annotations()
 		_show_errors("Redo failed", errors)
+
+
+func _try_draft_history(redo: bool) -> bool:
+	if _edit_plugin == null or not bool(_edit_plugin.get_edit_state().get("draft_active", false)):
+		return false
+	var errors: PackedStringArray = _edit_plugin.invoke(&"redo_draft" if redo else &"undo_draft")
+	if not errors.is_empty():
+		_set_status(errors[0])
+	_refresh_toolbar()
+	return true
+
+
+func _on_fill_repair_action(action: StringName) -> void:
+	if _edit_plugin == null:
+		return
+	var errors: PackedStringArray = _edit_plugin.invoke(action)
+	if not errors.is_empty():
+		_show_errors("Fill refused", errors)
+	_sync_tool_panel()
+	_viewport.grab_focus()
 
 
 func _on_opacity_changed(value: float) -> void:
@@ -1400,6 +1434,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 func _route_edit_key(event: InputEvent) -> bool:
 	if _edit_plugin == null or not event is InputEventKey or _is_class_dialog_active():
 		return false
+	var key: Key = event.keycode if event.keycode != KEY_NONE else event.physical_keycode
+	if event.pressed and not event.echo and key == KEY_R and not event.ctrl_pressed and not event.alt_pressed and not event.meta_pressed:
+		var state: Dictionary = _edit_plugin.get_edit_state()
+		if not state.get("gesture_active", false) and state.get("phase", &"idle") in [&"idle", &"brush_cursor"]:
+			_open_reclassification_dialog(_selected_region_id)
+			return true
 	var before_record := _store.get_corrected_record(_current_record_frame()) if _current_frame >= 0 else {}
 	if _edit_plugin.handle_key(event):
 		# A keyboard edit owns one explicit frame just like pointer edits.
@@ -1436,6 +1476,8 @@ func _refresh_current_annotations() -> void:
 		_viewport.set_selected_region_id("")
 		_clear_annotation_hover()
 	_refresh_annotation_sidebar()
+	if _edit_plugin != null and _edit_plugin.has_method("refresh_edit_overlay"):
+		_edit_plugin.refresh_edit_overlay()
 
 
 func _set_selected_region(region_id: String) -> void:
@@ -1445,6 +1487,8 @@ func _set_selected_region(region_id: String) -> void:
 		_syncing_sidebar_selection = true
 		_annotation_sidebar.set_selected_region_id(region_id)
 		_syncing_sidebar_selection = false
+	if _edit_plugin != null and _edit_plugin.has_method("refresh_edit_overlay"):
+		_edit_plugin.refresh_edit_overlay()
 
 
 func _refresh_annotation_sidebar() -> void:
@@ -1629,7 +1673,7 @@ func _finish_class_dialog() -> void:
 	_class_dialog_mode = &""
 	_class_dialog_region_id = ""
 	_class_dialog_token = -1
-	if is_instance_valid(_viewport):
+	if is_instance_valid(_viewport) and _viewport.is_inside_tree():
 		_viewport.grab_focus()
 	_refresh_toolbar()
 
@@ -1652,11 +1696,17 @@ func _get_selected_region_id() -> String:
 func _on_edit_state_changed(state: Dictionary) -> void:
 	var phase_value: Variant = state.get("phase", &"idle")
 	var phase := StringName(phase_value) if typeof(phase_value) in [TYPE_STRING, TYPE_STRING_NAME] else &"idle"
-	_edit_state = {
+	var next_state := {
 		"phase": phase,
 		"navigation_blocked": bool(state.get("navigation_blocked", false)),
+		"draft_active": bool(state.get("draft_active", false)),
+		"draft_history": state.get("draft_history", {}).duplicate(true),
+		"fill_repair": bool(state.get("fill_repair", false)),
 		"message": str(state.get("message", "")),
 	}.duplicate(true)
+	if next_state == _edit_state:
+		return
+	_edit_state = next_state
 	if (_class_dialog_mode == &"new_region" and phase != &"awaiting_class"
 			and not _class_dialog_action_in_progress):
 		_finish_class_dialog()
@@ -1806,6 +1856,7 @@ func _connect_ui() -> void:
 	_tool_panel.tool_requested.connect(_on_tool_requested)
 	_tool_panel.unavailable_tool_requested.connect(_on_unavailable_tool_requested)
 	_tool_panel.tool_option_changed.connect(_on_tool_option_changed)
+	_tool_panel.fill_repair_action.connect(_on_fill_repair_action)
 	_source_dialog.file_selected.connect(_on_file_selected)
 	_source_dialog.dir_selected.connect(_on_directory_selected)
 	_export_dialog.dir_selected.connect(_on_export_parent_selected)
@@ -1890,6 +1941,8 @@ func _refresh_toolbar() -> void:
 	_playback_speed.set_enabled(
 		not import_running and not class_modal and has_source and frame_count >= 2)
 	_redo_button.disabled = import_running or class_modal or not _history.can_redo()
+	if bool(_edit_state.get("draft_active", false)):
+		_redo_button.disabled = import_running or class_modal or int(_edit_state.get("draft_history", {}).get("redo", 0)) == 0
 	_export_button.disabled = import_running or class_modal or not has_source or _feedback_plugin == null
 	_zoom_out_button.disabled = import_running
 	_zoom_in_button.disabled = import_running
@@ -1907,6 +1960,7 @@ func _sync_tool_panel() -> void:
 		if typeof(value) == TYPE_STRING or typeof(value) == TYPE_STRING_NAME:
 			active_tool = StringName(value)
 	_tool_panel.set_active_tool(active_tool)
+	_tool_panel.set_fill_repair_visible(bool(_edit_state.get("fill_repair", false)))
 
 
 func _tool_display_name(tool_id: StringName) -> String:

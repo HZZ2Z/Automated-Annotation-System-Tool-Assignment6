@@ -13,6 +13,7 @@ func run(support: TestSupport, tree: SceneTree) -> void:
 	await _test_present_validation_and_confirm(packed, support, tree)
 	await _test_filter_selection_and_deep_copy(packed, support, tree)
 	await _test_keyboard_and_double_click(packed, support, tree)
+	await _test_wheel_selection(packed, support, tree)
 	await _test_cancellation_is_debounced_and_silent_dismissal(packed, support, tree)
 
 
@@ -26,6 +27,9 @@ func _test_present_validation_and_confirm(packed: PackedScene, support: TestSupp
 	dialog.assignment_cancelled.connect(func(): cancellations[0] += 1)
 	var resolver := CLASS_COLOR_RESOLVER.new({"classes": [{"id": "grasper", "color": "#ef4444"}]})
 	dialog.present("  grasper  ", "  pathology_custom  ", _suggestions(), resolver)
+	var initial_tree := dialog.get_node("Margin/Content/Suggestions") as Tree
+	support.expect_equal(initial_tree.get_root().get_child_count(), _suggestions().size(),
+		"relabel dialog initially shows all classes without clearing the existing label")
 	support.expect_equal(dialog.get_node("Margin/Content/ClassLabel").text, "grasper",
 		"present must trim the initial class")
 	support.expect_equal(dialog.get_node("Margin/Content/Kind").text, "pathology_custom",
@@ -145,6 +149,63 @@ func _test_keyboard_and_double_click(packed: PackedScene, support: TestSupport, 
 	support.expect_equal(double_confirmations, [["scissors", "instrument"]],
 		"double-click should fill and confirm the selected suggestion")
 	double_dialog.queue_free()
+	await tree.process_frame
+
+
+func _test_wheel_selection(packed: PackedScene, support: TestSupport, tree: SceneTree) -> void:
+	var dialog := packed.instantiate()
+	tree.root.add_child(dialog)
+	await tree.process_frame
+	var confirmations: Array = []
+	dialog.assignment_confirmed.connect(func(label: String, kind: String): confirmations.append([label, kind]))
+	var resolver := CLASS_COLOR_RESOLVER.new()
+	dialog.present("scissors", "instrument", _suggestions(), resolver)
+	var suggestions := dialog.get_node("Margin/Content/Suggestions") as Tree
+	var class_edit := dialog.get_node("Margin/Content/ClassLabel") as LineEdit
+	await _push_wheel(dialog, suggestions, MOUSE_BUTTON_WHEEL_DOWN, tree)
+	support.expect_equal(class_edit.text, "lesion", "wheel advances from the existing class without a preliminary click")
+	support.expect_equal(dialog.get_node("Margin/Content/Kind").text, "pathology", "wheel updates kind")
+	support.expect_equal((dialog.get_node("Margin/Content/ColorPreview") as ColorRect).color, resolver.color_for("lesion"), "wheel updates color")
+	support.expect_equal(confirmations, [], "wheel only previews and must not confirm")
+	await _push_wheel(dialog, suggestions, MOUSE_BUTTON_WHEEL_DOWN, tree)
+	support.expect_equal(class_edit.text, "lesion", "wheel stops at the last class")
+	await _push_wheel(dialog, suggestions, MOUSE_BUTTON_WHEEL_UP, tree)
+	support.expect_equal(class_edit.text, "scissors", "wheel up selects the previous class")
+	await _push_wheel(dialog, class_edit, MOUSE_BUTTON_WHEEL_DOWN, tree)
+	support.expect_equal(class_edit.text, "scissors", "wheel outside the list cannot change labels")
+	class_edit.text = "no matching class"
+	class_edit.text_changed.emit(class_edit.text)
+	await _push_wheel(dialog, suggestions, MOUSE_BUTTON_WHEEL_DOWN, tree)
+	support.expect_equal(class_edit.text, "no matching class", "empty filtered list preserves free text")
+	var many: Array = []
+	for index in range(25):
+		many.append({"class": "class-%02d" % index, "kind": "instrument"})
+	dialog.present("class-00", "instrument", many, resolver)
+	for index in range(24):
+		await _push_wheel(dialog, suggestions, MOUSE_BUTTON_WHEEL_DOWN, tree)
+	support.expect_equal(class_edit.text, "class-24", "wheel reaches classes beyond the visible page")
+	support.expect(suggestions.get_scroll().y > 0, "list scrolls to follow the selected class")
+	(dialog.get_node("Margin/Content/Actions/Confirm") as Button).pressed.emit()
+	support.expect_equal(confirmations, [["class-24", "instrument"]], "Confirm saves exactly the final wheel choice")
+	dialog.queue_free()
+	await tree.process_frame
+
+
+func _push_wheel(viewport: Viewport, control: Control, button: MouseButton, tree: SceneTree) -> void:
+	await tree.process_frame
+	var position := control.get_global_rect().get_center()
+	var motion := InputEventMouseMotion.new()
+	motion.position = position
+	viewport.push_input(motion, true)
+	var event := InputEventMouseButton.new()
+	event.button_index = button
+	event.pressed = true
+	event.position = position
+	viewport.push_input(event, true)
+	await tree.process_frame
+	event = event.duplicate()
+	event.pressed = false
+	viewport.push_input(event, true)
 	await tree.process_frame
 
 

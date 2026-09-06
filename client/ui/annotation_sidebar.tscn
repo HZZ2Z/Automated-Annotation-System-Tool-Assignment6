@@ -11,11 +11,16 @@ script = ExtResource("1_sidebar")
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="Title" type="Label" parent="ProjectLabels"]
+[node name="Content" type="VBoxContainer" parent="ProjectLabels"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Title" type="Label" parent="ProjectLabels/Content"]
+custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 text = "Project Labels"
 
-[node name="Tree" type="Tree" parent="ProjectLabels"]
+[node name="Tree" type="Tree" parent="ProjectLabels/Content"]
 custom_minimum_size = Vector2(0, 150)
 layout_mode = 2
 size_flags_vertical = 3
@@ -29,11 +34,16 @@ allow_reselect = false
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="Title" type="Label" parent="FrameAnnotations"]
+[node name="Content" type="VBoxContainer" parent="FrameAnnotations"]
 layout_mode = 2
-text = "Current Frame Annotations"
+theme_override_constants/separation = 4
 
-[node name="Tree" type="Tree" parent="FrameAnnotations"]
+[node name="Title" type="Label" parent="FrameAnnotations/Content"]
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+text = "Current Frame Annotations (0)"
+
+[node name="Tree" type="Tree" parent="FrameAnnotations/Content"]
 custom_minimum_size = Vector2(0, 180)
 layout_mode = 2
 size_flags_vertical = 3

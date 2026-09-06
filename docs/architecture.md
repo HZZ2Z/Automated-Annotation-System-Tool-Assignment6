@@ -53,8 +53,9 @@ MainVBox
 │       │   └── AnnotationViewport
 │       └── RightSidebarContainer
 │           └── RightSidebar
-│               ├── InspectorScroll
-│               │   └── InspectorPanel
+│               ├── AnnotationSidebar
+│               │   ├── ProjectLabels
+│               │   └── FrameAnnotations
 │               ├── Separator
 │               └── ToolPanel
 ├── TimelinePanel
@@ -103,7 +104,7 @@ client/plugins/<stage>/<plugin>/
 └── plugin.gd                     # 对应抽象 Stage 的实现
 ```
 
-Registry 启动时从 Main 的 `plugin_roots` 发现 manifest，强制入口脚本继承声明的抽象 Stage，保存 descriptor 和 Script，不保存有状态插件单例。`SourceFactory` 使用 Registry 的 `resolve_source_plugin_id` 和 `create_plugin` 获得独立 Source 实例。Source 是否接受 locator 由 `can_open` 决定，默认按 priority 选择；格式无关的浏览元数据由 `get_presentation` 提供。Main 和 Workspace 在内置图片/视频回退之前先通过工厂询问插件，也不直接实例化插件；已命中的工作区条目保留 Source ID，使选择时与扫描时路由一致。Edit 的按钮由 `get_tool_descriptors` 决定，Inspector 行为经 `invoke` 进入插件。因此增加新来源或替换工具不需要修改 Registry、Main、Workspace 或 ToolPanel 的格式分支。
+Registry 启动时从 Main 的 `plugin_roots` 发现 manifest，强制入口脚本继承声明的抽象 Stage，保存 descriptor 和 Script，不保存有状态插件单例。`SourceFactory` 使用 Registry 的 `resolve_source_plugin_id` 和 `create_plugin` 获得独立 Source 实例。Source 是否接受 locator 由 `can_open` 决定，默认按 priority 选择；格式无关的浏览元数据由 `get_presentation` 提供。Main 和 Workspace 在内置图片/视频回退之前先通过工厂询问插件，也不直接实例化插件；已命中的工作区条目保留 Source ID，使选择时与扫描时路由一致。Edit 的按钮由 `get_tool_descriptors` 决定，类别对话框和保留的独立 Inspector 组件都通过 `invoke` 请求编辑。新增来源沿现有工厂路由扩展；新增工具沿 descriptor 和 action 边界扩展。
 
 范围传播把 keyframe 区域以 `overwrite` 或 `merge` 模式复制到闭区间目标帧。命令先构建并验证全部记录，然后由 Store 原子替换；目标记录的 `source`、`frame` 和 `time_s` 不变，整段只占一个 undo/redo 项。传播 marker 存入独立 batch operation 列表，Model Output V1 仍只包含其 Schema 允许的字段。
 
@@ -130,41 +131,63 @@ training_update_v1/
 
 ### 3.3 Part 2.2 编辑几何、命令与键盘边界
 
-> 状态（2026-09-05）：七工具运行时、真实视口、键盘和 undo/redo 自动化门禁已实现；可见编辑性能与人工 reviewer 尚未完成，因此 Part 2.2/2.3 仍保持待验证。
+> 状态（2026-09-06）：七工具、真实挂载 Main、近闭合 Fill、键盘、两层 undo/redo 和可见编辑性能均已通过自动化验证。Part 2.2/2.3 整体仍为 BLOCKED，剩余项是人工 reviewer 复跑。
 
 #### 3.3.1 参考与适配边界
 
-交互以官方 [MITK Segmentation View](https://docs.mitk.org/latest/org_mitk_views_segmentation.html) 为 Assignment 指定主参考，同时参考 [3D Slicer Segment Editor](https://slicer.readthedocs.io/en/5.8/user_guide/modules/segmenteditor.html)、[CVAT Brush/Mask](https://docs.cvat.ai/docs/annotation/manual-annotation/shapes/annotation-with-brush-tool/) 和 [QuPath annotation tools](https://qupath.readthedocs.io/en/stable/docs/starting/annotating.html)。这些成熟工具能持久化 raster mask、holes 和多连通分量；本客户端只借鉴手势、预览、笔刷和拒绝反馈，不扩展 Model Output V1。
+交互以官方 [MITK Segmentation View](https://docs.mitk.org/latest/org_mitk_views_segmentation.html) 为 Assignment 指定主参考，借鉴选区高亮、轮廓增减、笔刷、连通域填充和类别建议；具体采用、适配、省略及原因集中记录在根目录 `RESULTS.md`。近闭合 Fill 的方形核、半径、确认候选和 V1 原子拒绝是本项目的 2D 适配选择，不声称与 MITK 等价。早期辅助参考为 [3D Slicer Segment Editor](https://slicer.readthedocs.io/en/5.8/user_guide/modules/segmenteditor.html)、[CVAT Brush/Mask](https://docs.cvat.ai/docs/annotation/manual-annotation/shapes/annotation-with-brush-tool/) 和 [QuPath annotation tools](https://qupath.readthedocs.io/en/stable/docs/starting/annotating.html)；要求来源仍是 Assignment。
 
 #### 3.3.2 组件边界
 
-`AnnotationViewport` 新增独立 `EditOverlay`，它与正式 Renderer 共用唯一 image→viewport `Transform2D`，但不使用或修改 Store record。开放轮廓、笔刷圆、候选 mask 和告警几何全部由 overlay 绘制；删除向 record 塞入 `__contour_preview`/`__brush_preview` 假 region 的路径。
+`AnnotationViewport` 的独立 `EditOverlay` 与正式 Renderer 共用唯一 image→viewport `Transform2D`，不修改 Store record。开放轮廓、笔刷圆、候选 mask、修补像素和告警几何均在 overlay 绘制。Select 拖动也只更新目标的 overlay 几何，临时抑制正式 Renderer 中的原目标；不在 pointer-motion 中深拷贝或重提交整帧记录。
 
-`basic_edit_tools` 只编排活动工具、手势状态和 command 提交。纯逻辑 `MaskRegionOps` 在当前图像的局部 ROI 中处理 Paint/Eraser、标注边界 Fill 与 mask 拓扑，`PolygonOps` 处理 Lasso/Subtract/简化/拓扑分类，`ImageRegionAlgorithms.polygonize_mask` 只作为 mask 外边界的纯几何转换依赖。带状态插件不在每个 pointer-motion 深拷贝整帧 record。新逻辑只使用 Godot `Image`/`Geometry2D`，不增加 Python 或 native 运行时依赖。
+`basic_edit_tools` 编排工具、输入和 command 提交；`EditSession` 拥有冻结的 frame/before、目标 ID、WorkingMask、种子与候选。其余边界如下：
+
+| 组件 | 所有权与接口 |
+|---|---|
+| `BrushStrokeBuffer` | `begin` / `append_point` / `snapshot`；按像素中心到线段的距离增量光栅化新增圆头线段，存储按几何倍数增长；拒绝时保留已有端点、像素与容量 |
+| `MaskRegionOps` | raw mask 的光栅化、并集/差集、重合检测、四邻域填充与 V1 转换；入口校验，内层使用原始数组与局部索引，整行复制和相交 ROI 扫描避免重复全 mask 校验 |
+| `FillRegionSolver` | `solve(boundary, seed, image_size, gap_radius, cumulative)`；返回严格填充或待确认的修补结果，不持有 UI、Store 或历史 |
+| `MaskDraftHistory` | 保存 WorkingMask 的像素差异及前后 ROI；两侧历史合计受 200 项与 32 MiB 预算约束 |
+| `PolygonOps` / `ImageRegionAlgorithms` | 前者处理简单多边形、布尔操作和安全简化，后者提取 mask 轮廓并检查 holes/多连通分量 |
+
+Paint 在手势开始时缓存 region ID、polygon 和 ROI，仅对与笔迹相交的区域按需生成 raw mask；栅格化拒绝与原 ID 一起保留，不能按“无重合”创建新对象。Eraser 同样按需缓存所有相交目标，预览分别显示各对象的减法 mask；提交前验证全部候选，一笔通过单个 ReplaceFrameCommand 原子更新或删除多个对象。笔迹、目标 mask、合并和 Fill 扩展 ROI 都受 1,048,576 像素上限约束。新增算法使用 Godot 内置几何和数组，不增加 Python 或 native 运行时依赖。
 
 #### 3.3.3 统一状态机与提交
 
-所有工具使用 `Idle → Drawing/Candidate → AwaitingClass|Commit|Reject` 状态机。开放轮廓和可提交候选保存在独立 `EditOverlay`，红色表示当前候选违反 V1。Paint/Eraser 的 Drawing 状态不画输入轨迹，而是显示操作后的真实 mask；修补时正式 Renderer 暂时抑制目标 region，新建时不抑制任何已有 region。拒绝状态保持可见，用户可继续修正或用 Escape 取消，不会因为中间输入少于三点而静默消失。
+工具使用 `Idle → Drawing/WorkingMask/Candidate → AwaitingClass/Commit/Reject` 状态机。Paint/Eraser 显示操作后的真实 mask；橙色表示待填充 WorkingMask，绿色表示 Fill 候选，粉色单独标出修补新增像素，红色表示拒绝。预览不创建假 region，也不改动正式标注；目标修补期间暂时抑制原目标绘制。
 
-Paint/Eraser 在 pointer-motion 中只更新局部 raw mask；pointer-up/Enter 才执行外轮廓提取和 V1 检查。Paint 无重合且为单环时进入待分类状态；空心结果保留为橙色 `WorkingMask`。Fill 对该 mask 逐次做四邻域填充并写回 session；仍有孔洞时继续等待 Fill，只有得到单个实心 V1 polygon 时才进入待分类状态。Lasso/Subtract 优先使用精确简单多边形；自交或重复交点时，`MaskRegionOps.fill_all_enclosed()` 在局部 ROI 内提取所有不连通外边界的空白分量，与轨迹合并成实心 mask 后再转回 V1 polygon。无选区 Subtract 对每个 region 计算差集：单环替换、空结果删除、其他拓扑整批拒绝；全部通过后才用一条 `ReplaceFrameCommand` 提交。
+Paint/Eraser 在 motion 中更新 raw mask，pointer-up/Enter 才提取轮廓和检查 V1。独立 Paint 的单环进入待分类状态，空心结果留在同一 WorkingMask。Fill 每次合并包含种子的一个四邻域封闭空白，仍有孔洞就记录局部差异并继续，得到实心单环后才请求类别。
+
+`FillRegionSolver` 先严格填充；只有开放轮廓才尝试半径 0/1/2/3 image px（默认 1）的修补，0 禁用修补。修补为方形核的膨胀后腐蚀，采用可分离滑动计数；只保留与种子所在填充区域相邻的新增修补连通块，再重新求解。求解前外扩 ROI 保留外侧空白，触及人工 ROI 边界或真实图像边缘的开放区域不能被当成封闭区。成功修补先存为候选：Enter/Apply fill 接受，Escape/Cancel 恢复候选前的 mask、轮廓和种子，不提交 Store。
+
+Lasso 的逐点绘制保留用户点击的原始坐标、顺序和共线控制点；草稿与保存后的对象都可拖动同一组轮廓点。逐点路径拒绝非法闭合，不做像素重建；自由手绘 Lasso/Subtract 优先使用精确简单多边形；自交或重复交点时，`MaskRegionOps.fill_all_enclosed()` 提取全部封闭内部并形成实心 mask。无选区 Subtract 对每个 region 计算差集：单环替换、空结果删除、其他拓扑整批拒绝；全部通过才以一条 `ReplaceFrameCommand` 提交。像素轮廓在不超过 256 顶点时尝试最大 0.5 image-px 偏差简化并重新验证拓扑，超出该规模或简化不安全就保留精确轮廓。
+
+`CommandHistory.execute/redo/try_undo` 只在 apply/revert 返回空 `PackedStringArray` 后移动命令；错误原样上报 Main，bool `undo` 作为兼容包装保留。`AnnotationStore.restore_corrected_records` 先验证整批，成功时一起提交记录、dirty frames 和传播日志，再通知订阅者。失败不改变 Store 或两侧历史栈；全局保留最多 200 条已提交命令。
 
 zoom/Fit/pan 不清除 overlay。开始编辑会暂停播放；切帧、seek 或切换工具会先取消未提交预览，类别对话框打开时则阻止导航，从而避免候选被下一帧静默替换。
 
 #### 3.3.4 工具清单与键盘语义
 
-工具栏为 7 个可用工具：Add Box、Subtract、Lasso、Fill、Paint、Eraser 和 Select。Close Gaps 与点击即整区删除的旧 Erase descriptor 均已移除；Eraser 只承担减法笔刷修正。Select 统一选中、拖动移动、box/polygon 八柄缩放与 1/5/10 image-px keyboard nudge，不恢复独立 Move/Resize 工具。
+工具栏为 7 个工具：Add Box、Subtract、Lasso、Fill、Paint、Eraser 和 Select。Select 统一选中、拖动移动、box/polygon 八柄缩放与 1/5/10 image-px keyboard nudge。命中先取最上层内部区域；无内部命中才按 6 viewport-px 容差查边缘。缩放柄在 8 viewport px 内取最近者，所有保存几何仍为 image-space。
 
-Paint/Eraser 共用 1–40 image-px 圆形笔刷，默认半径 8 px；选中工具即显示跟随鼠标的细半径环，不画轨迹或中心点。Paint 重合唯一/选中 region 时做 union；无重合的单环创建新对象，闭合空心轮廓留给 Fill。Eraser 必须先选中 region。Subtract 有选区时做单对象减法，无选区时作为多对象大范围删减。右键只发出选择取消意图，Main 原子清除临时编辑、选区和 hover，再同步切回 Select，不创建 history。
+Paint/Eraser 共用 1–40 image-px 圆形笔刷，默认半径 8 px；选中工具即显示跟随鼠标的细半径环，不画轨迹或中心点。Paint 重合唯一/选中 region 时做 union；无重合的单环创建新对象，闭合空心轮廓留给 Fill。Eraser 无需选区，擦除全部相交对象，完全擦除可删除；任一候选不符合 V1 时整笔拒绝。Subtract 有选区时做单对象减法，无选区时作为多对象大范围删减。右键只发出选择取消意图，Main 原子清除临时编辑、选区和 hover，再同步切回 Select，不创建 history。
 
 Region Growing 未被 Assignment 要求，且对本医疗场景的单点颜色容差结果不够稳定，因此已删除。Live Wire 在确定为直线 anchor 连接后与 Lasso 的逐点轮廓语义重复，也已从用户可见和可调用合同中删除。
 
-键盘直达为 `V/A/S/L/F/P/Shift+P`；`C` / `E` / `G` / `I` 不绑定工具。空闲 Select 中的 Delete/Backspace 删除整个选中 region，工具栏和 Inspector 都不提供整区删除按钮。Lasso/Subtract 鼠标松手时按 12 viewport px 的缩放无关阈值自动吸附首尾；距离过大时保留轨迹，`Space` 可强制闭合，Enter 不会重复提交。键盘空间模式用 arrows 以 1/5/10 image px 移动图像光标/轮廓；视口平移只由鼠标中键拖动触发。整个客户端不提供 Undo 按钮，撤销只由 `Ctrl+Z` 触发；Redo 保留 `Ctrl+Shift+Z`/`Ctrl+Y` 和现有按钮。Tab/Shift+Tab 继续提供标准 focus traversal。Inspector 同时提供可选 taxonomy class list 和非空自由文本输入，两者经同一 relabel command 路径修改 class；原 `Fill` 显示开关改名 `Show overlay fill`，不再冒充 Assignment Fill 编辑。
+键盘直达为 `V/A/S/L/F/P/Shift+P`；`C/E/G/I` 不绑定工具。Arrow 为 1 image px，Shift+Arrow 为 5，Ctrl+Shift+Arrow 为 10；Select/Add Box 的 Alt+Arrow 调整大小。Lasso/Subtract 松手按 12 viewport px 自动闭合，Space 强制闭合，Backspace 删除末点，Enter 不重复提交。WorkingMask 中按 F 从 ROI 中心初始化 Fill 种子，Arrow 移动、Enter 填孔；第一次填孔后仍可继续同一草稿。Tab/Shift+Tab 保留焦点遍历，尤其允许从 Fill 候选进入 Apply fill/Cancel。
+
+Main 按文本框 → 活动草稿 → 全局命令的顺序分配 Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y。WorkingMask 使用 `MaskDraftHistory`，尚未确认的修补先退回前一草稿；类别窗口内只执行文本编辑。空闲 Select 的 Delete/Backspace 删除整个对象，Escape 清选区；`V → Escape → S` 可纯键盘进入无选区批量 Subtract。草稿中的 Escape 只取消草稿，修补中的 Escape 只取消候选。
+
+当前 Main 挂载 `AnnotationSidebar` 和类别窗口。画布两次 Tab 到 Current Frame Annotations，上下键选行、Enter 打开 `ClassAssignmentDialog`；窗口自动聚焦 Class label，Tab 顺序为 Class label → Kind → 建议列表 → Cancel → Confirm。自由文本可直接填写；清空 Class label 筛选后 Tab 到列表，方向键选择并 Enter 确认。窗口结束返回画布。旧 `InspectorPanel` 的 taxonomy 下拉框、自由文本和 Show overlay fill 仍是独立组件/API 测试面，当前 Main 不挂载它；详细键盘步骤以 README 表为准。
 
 #### 3.3.5 验收边界
 
-自动测试经过真实 `ToolPanel → AnnotationViewport → Edit plugin → CommandHistory → Store` 路径，而不是只调用插件私有方法。七个工具、zoom/pan 预览保留、整区删除键、V1 拒绝路径、单手势单 command 和 200 条 history 上限均有自动化覆盖。Add Box、Subtract、Lasso、Fill、Paint、Eraser，以及 Select 的 move、resize、nudge、整区删除和 Inspector 的 taxonomy list/free-text relabel，都验证 `Ctrl+Z` 撤销和 redo 恢复。
+自动测试覆盖真实 `ToolPanel → AnnotationViewport → Edit plugin → CommandHistory → Store` 和挂载 Main 的焦点路由。`test_brush_stroke_buffer.gd` 对照参考光栅化，`test_fill_region_solver.gd` 检查严格/近闭合与边缘拒绝，`test_editing_assignment.gd` 检查 WorkingMask 连续键盘 Fill、修补确认/取消与 UI 交接，`test_checked_history.gd` 检查真实 Store 拒绝后的栈保留。既有 advanced、keyboard、region edit 和 integration suites 继续覆盖七工具与逐项撤销/重做。
 
-可见基准在 1280×800、约 20 regions 下分别连续 10 s 执行 Select 拖动、Paint、Eraser 和 zoom/pan；门槛为平均 `≥30 fps`、p95 帧间隔 `≤40 ms`，无轨迹闪烁/漂移/中途消失。README Reviewer Script 必须在正式样本和暂停的手术视频帧上真实复跑，并列出所有编辑动作（含 Inspector 重标注）的纯键盘可达路径、工具快捷键和人工检查结果；缺少任一路径即不能发布。根目录 `RESULTS.md` 必须逐项说明哪些 MITK 交互被直接采用、哪些为适配 V1 而模拟、哪些被舍弃及原因。只有 Python/Godot 全套、schema `0 errors`、原始 model digest 不变、全部 undo/redo 与键盘测试、基准和人工步骤通过后，Part 2.2/2.3 才能标记 PASS。不实施 Assignment 明确列为 optional 的持久化 polygon vertex editing，也不引入 holes、multipolygon、mask 导出或 Part 3.2 功能。
+`tests/benchmarks/godot/editing_benchmark.gd` 在 1280×800 窗口、640×360 图像、20 regions 和一个 320×150 image-px 目标下运行四场景，各预热 2 s、测量 10 s。`tests/benchmarks/results/part2_2_editing.json` 记录的 Select/Paint/Eraser/zoom-pan 均达到平均 ≥30 fps、p95 ≤40 ms；释放鼠标到命令完成的提交耗时单独记录，不能混入实时预览统计。设备和具体数值见 `RESULTS.md`，不向未测设备外推。
+
+README 的逐项键盘/鼠标 reviewer script 尚待人在正式样本和暂停手术视频帧上复跑，所以 Part 2.2/2.3 整体验收仍为 BLOCKED；可见自动执行不代替人工评审。持久化 polygon vertex editing 已由 Lasso 的 `polygon_vertex_editor.gd` 实现：控制点/边命中、冻结拖动预览和键盘操作由该模块负责，提交复用 `ReplaceRegionGeometryCommand`；Model Output V1 的 holes、multipolygon、mask 导出和 Part 3.2 工作流也不属于本轮实现。
 
 ### 3.4 Part 3.1 视频导入与播放所有权
 
@@ -267,9 +290,12 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 | 视口与坐标 | `client/services/viewport_transform.gd`、`client/ui/annotation_viewport.gd` | 唯一 `Transform2D` 正逆变换、缩放、平移、Fit 和输入边界 |
 | Region 几何与显示 | `client/domain/region_geometry.gd`、`canvas_region_renderer/plugin.gd` | polygon-first 几何、hit-test、overlay 缓存、opacity 和裁剪 |
 | 编辑工具 | `client/plugins/edit/basic_edit_tools/plugin.gd` | 7 个工具、指针/键盘手势、实时 mask 与 viewport-only preview；自动化通过，人工门禁待完成 |
+| 笔刷缓冲 | `client/domain/brush_stroke_buffer.gd` | 增量圆头线段、可增长 ROI、像素上限与失败保留 |
+| Mask 运算与 Fill | `client/domain/mask_region_ops.gd`、`fill_region_solver.gd` | raw mask、严格填充、方形核近闭合、修补候选与 V1 轮廓 |
+| 草稿会话与局部历史 | `client/domain/edit_session.gd`、`mask_draft_history.gd` | 冻结 frame/before、WorkingMask、种子、修补回退及 200 项/32 MiB 差异历史 |
 | Polygon 几何 | `client/domain/polygon_ops.gd` | single-ring 验证、boolean、brush、close、V1 拓扑分类 |
 | Mask 边界转换 | `client/domain/image_region_algorithms.gd` | 为 `MaskRegionOps` 提供 `polygonize_mask`；不暴露编辑工具 |
-| 编辑命令 | `client/domain/commands/`、`command_history.gd` | 已验证的可撤销修改，最多 200 条 |
+| 编辑命令 | `client/domain/commands/`、`command_history.gd` | apply/revert 成功后才移动栈，最多 200 条已提交修改 |
 | 样本生成 | `python/annotation_data/sample.py`、`python/make_sample_input.py` | 生成 `sample_v1` 和 `model_output_v1.jsonl` |
 | 帧源归一化 | `python/annotation_data/frame_source.py`、`python/frame_source.py` | 将视频解码为索引帧和内部数据清单 |
 | 视频导入任务 | `client/services/video_import_controller.gd` | 非阻塞启动固定 Python、轮询进度、取消和成功后交给现有 Source |
@@ -291,8 +317,10 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 | 类别或颜色显示 | `client/domain/taxonomy.gd` | 渲染器、属性面板 | 渲染与界面测试 |
 | Part 2.1 坐标或几何 | `viewport_transform.gd`、`region_geometry.gd` | Viewport、Renderer、Edit 和样本 | `test_viewport_transform.gd`、`test_region_geometry.gd`、`test_renderer.gd` |
 | Part 2.1 性能 | `canvas_region_renderer/plugin.gd`、`tests/benchmarks/godot/display_benchmark.gd` | `RESULTS.md`、原始 benchmark JSON | 可见窗口 1280×800 基准 |
-| Part 2.2 基础编辑/键盘 | `basic_edit_tools/plugin.gd`、`client/domain/commands/` | Inspector、Store、History、Renderer handles | `test_edit_integration.gd`、`test_keyboard_reachability.gd` |
-| Part 2.2 boolean/图像工具 | `polygon_ops.gd`、`image_region_algorithms.gd` | V1 refusal、preview、导出投影 | `test_polygon_ops.gd`、`test_image_region_algorithms.gd`、`test_advanced_edit_tools.gd` |
+| Part 2.2 基础编辑/键盘 | `basic_edit_tools/plugin.gd`、`client/domain/commands/` | Main、AnnotationSidebar、ClassAssignmentDialog、Store、History、Renderer handles | `test_edit_integration.gd`、`test_keyboard_reachability.gd`、`test_editing_assignment.gd` |
+| Part 2.2 笔刷与 Fill | `brush_stroke_buffer.gd`、`mask_region_ops.gd`、`fill_region_solver.gd` | WorkingMask、repair preview、ROI 上限、V1 refusal | `test_brush_stroke_buffer.gd`、`test_fill_region_solver.gd`、`test_advanced_edit_tools.gd` |
+| Part 2.2 撤销边界 | `command_history.gd`、`mask_draft_history.gd`、`edit_session.gd` | Main 焦点路由、Store 原子恢复、两侧历史 | `test_checked_history.gd`、`test_annotation_store.gd`、`test_editing_assignment.gd` |
+| Part 2.2 boolean/轮廓 | `polygon_ops.gd`、`image_region_algorithms.gd` | V1 refusal、0.5 px 简化、精确轮廓回退、导出投影 | `test_polygon_ops.gd`、`test_image_region_algorithms.gd`、`test_mask_region_ops.gd` |
 | Part 2.3 交互忠实度 | `RESULTS.md` | README reviewer script、Assignment 2.2 | `test_documentation.py` |
 | Part 3.1 播放或时间契约 | `playback_controller.gd`、`main.gd` | Source frame entries、Timeline、Explorer | `test_playback_controller.gd`、`test_playback.gd`、可见播放基准 |
 | Part 3.1 导入或取消 | `video_import_controller.gd`、`python/frame_source.py` | `.venv`、FFmpeg/FFprobe、归一化目录 | Python 视频测试、Godot 子进程测试、真实导入基准 |
@@ -310,6 +338,8 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 tests/run_tests.sh
 "$GODOT_BIN" --path . --script tests/benchmarks/godot/display_benchmark.gd -- \
   --output /tmp/part2_1_display.json --warmup 2 --duration 10
+"$GODOT_BIN" --path . --script tests/benchmarks/godot/editing_benchmark.gd -- \
+  --output /tmp/part2_2_editing.json --warmup 2 --duration 10
 .venv/bin/python tests/benchmarks/make_part3_sources.py \
   --playback-output /tmp/annotool-part3-playback \
   --stress-output /tmp/annotool-part3-stress
@@ -319,4 +349,4 @@ tests/run_tests.sh
   --source /tmp/annotool-part3-stress --output /tmp/part3_1_long_source.json
 ```
 
-成功标准是独立验证器输出 `Validation errors: 0`、Python 测试无失败、Godot 完整套件最终输出 `PASS: complete Godot test suite`，且四个 Part 2.2 focused scripts 各自状态 0。Part 2.1 额外要求可见窗口基准平均 `≥30 fps`、p95 帧间隔 `≤40 ms`、图像坐标误差 `≤1e-5`。Part 2.2 还要求拒绝不修改 Store/history、每次成功手势只一条 command，并完整保留 Model Output V1 投影。Part 3.1 额外要求实际交付的帧索引连续、零跳帧，10,000 帧源的纹理缓存 `≤12`，Explorer/Timeline 不逐帧创建 UI 节点。性能数字只能对实测设备声明。验证前后原始模型输出文件的 SHA-256 必须一致。
+成功标准是独立验证器输出 `Validation errors: 0`、Python 测试无失败、Godot 完整套件最终输出 `PASS: complete Godot test suite`，以及 `tests/run_tests.sh` 中每个 focused script 状态为 0。Part 2.1 额外要求可见窗口基准平均 `≥30 fps`、p95 帧间隔 `≤40 ms`、图像坐标误差 `≤1e-5`。Part 2.2 还要求拒绝不修改 Store/history、每次成功手势只一条 command，并完整保留 Model Output V1 投影。Part 3.1 额外要求实际交付的帧索引连续、零跳帧，10,000 帧源的纹理缓存 `≤12`，Explorer/Timeline 不逐帧创建 UI 节点。性能数字只能对实测设备声明。验证前后原始模型输出文件的 SHA-256 必须一致。

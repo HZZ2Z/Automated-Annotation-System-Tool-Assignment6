@@ -29,9 +29,10 @@ func is_noop() -> bool:
 	return _construction_errors.is_empty() and before == after
 
 
-func revert(store: Variant) -> void:
-	if store is Object and store.has_method("replace_corrected_record"):
-		store.replace_corrected_record(frame, before.duplicate(true))
+func revert(store: Variant) -> PackedStringArray:
+	if not store is Object or not store.has_method("replace_corrected_record"):
+		return PackedStringArray(["command: store must provide replace_corrected_record(frame, record)"])
+	return store.replace_corrected_record(frame, before.duplicate(true))
 
 
 func _reject(message: String) -> void:

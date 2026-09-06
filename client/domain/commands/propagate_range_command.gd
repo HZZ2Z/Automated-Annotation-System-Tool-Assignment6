@@ -31,9 +31,12 @@ func apply(store: Variant) -> PackedStringArray:
 	return store.replace_corrected_records(_after.duplicate(true), _operation.duplicate(true))
 
 
-func revert(store: Variant) -> void:
-	if _prepared and store is Object and store.has_method("restore_corrected_records"):
-		store.restore_corrected_records(_before.duplicate(true), _operation_count_before)
+func revert(store: Variant) -> PackedStringArray:
+	if not _prepared:
+		return PackedStringArray(["command: range propagation is not prepared"])
+	if not store is Object or not store.has_method("restore_corrected_records"):
+		return PackedStringArray(["command: store must provide atomic range restore_corrected_records"])
+	return store.restore_corrected_records(_before.duplicate(true), _operation_count_before)
 
 
 func _prepare(store: Variant) -> PackedStringArray:

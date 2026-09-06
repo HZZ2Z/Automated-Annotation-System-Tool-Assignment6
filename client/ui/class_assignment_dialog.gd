@@ -27,6 +27,7 @@ func _ready() -> void:
 	_suggestions_tree.column_titles_visible = true
 	_suggestions_tree.hide_root = true
 	_suggestions_tree.select_mode = Tree.SELECT_ROW
+	_suggestions_tree.tooltip_text = "Scroll to select the previous/next class; Confirm to apply."
 	_class_label.text_changed.connect(_on_field_changed)
 	_kind.text_changed.connect(_on_field_changed)
 	_class_label.text_submitted.connect(_on_field_submitted)
@@ -52,7 +53,7 @@ func present(initial_class: String, initial_kind: String, suggestions: Array, re
 	_class_label.text = initial_class.strip_edges()
 	_kind.text = initial_kind.strip_edges()
 	_syncing_fields = false
-	_rebuild_suggestions()
+	_rebuild_suggestions(false)
 	_refresh_validation()
 	show()
 	_class_label.grab_focus()
@@ -117,12 +118,12 @@ func _copy_suggestions(values: Array) -> Array[Dictionary]:
 	return result
 
 
-func _rebuild_suggestions() -> void:
+func _rebuild_suggestions(filter_by_text := true) -> void:
 	if not is_node_ready():
 		return
 	_suggestions_tree.clear()
 	var root := _suggestions_tree.create_item()
-	var filter := _class_label.text.strip_edges().to_lower()
+	var filter := _class_label.text.strip_edges().to_lower() if filter_by_text else ""
 	for suggestion: Dictionary in _suggestions:
 		var class_label := String(suggestion.get("class", ""))
 		if not filter.is_empty() and not class_label.to_lower().contains(filter):
@@ -178,6 +179,11 @@ func _on_suggestions_gui_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton:
 		var mouse_event := event as InputEventMouseButton
+		if mouse_event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			if mouse_event.pressed:
+				_move_selection(1 if mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN else -1, true)
+			_suggestions_tree.accept_event()
+			return
 		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_LEFT and mouse_event.double_click:
 			var item := _suggestions_tree.get_item_at_position(mouse_event.position)
 			if item != null:
@@ -200,7 +206,7 @@ func _on_focused_control_gui_input(event: InputEvent) -> void:
 	get_viewport().set_input_as_handled()
 
 
-func _move_selection(delta: int) -> void:
+func _move_selection(delta: int, anchor_to_fields := false) -> void:
 	var root := _suggestions_tree.get_root()
 	if root == null:
 		return
@@ -213,11 +219,19 @@ func _move_selection(delta: int) -> void:
 		return
 	var current := _suggestions_tree.get_selected()
 	var index := items.find(current)
+	# 初次滚动从当前标签起步，避免先点击一行。
+	if index < 0 and anchor_to_fields:
+		var values := _normalized_fields()
+		for candidate in range(items.size()):
+			if items[candidate].get_text(0) == values["class"] and items[candidate].get_text(1) == values["kind"]:
+				index = candidate
+				break
 	if index < 0:
 		index = 0 if delta > 0 else items.size() - 1
 	else:
 		index = clampi(index + delta, 0, items.size() - 1)
 	items[index].select(0)
+	_suggestions_tree.ensure_cursor_is_visible()
 	_apply_selected_suggestion()
 
 

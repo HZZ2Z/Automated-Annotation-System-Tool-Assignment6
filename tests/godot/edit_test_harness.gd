@@ -44,16 +44,15 @@ func mount(support: TestSupport, scene_tree: SceneTree, source_override := "") -
 	source_root = _write_source(support) if source_override.is_empty() else source_override
 	main = MAIN_SCENE.instantiate() as Control
 	main.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	# Start with enough room for every mounted control.  The pass below measures
-	# the live chrome and calibrates the 160 x 120 fixture to an exact 4x canvas.
+	# Start with enough room for every mounted control. The pass below calibrates
+	# the 160 x 120 fixture to 4x without shrinking below the sidebar minimum.
 	main.size = Vector2(1204, 670)
 	tree.root.add_child(main)
 	await tree.process_frame
 	await tree.process_frame
 	# Calibrate against the mounted chrome instead of assuming its current
-	# minimum sizes.  This keeps the image viewport at an exact 640 x 480 after
-	# legitimate sidebar/toolbar layout changes and preserves exact image-space
-	# geometry oracles.
+	# minimum sizes. A 640-wide viewport at least 480 high preserves 4x image
+	# scaling; additional height is letterboxed rather than clipping controls.
 	var mounted_viewport := main.get_node(
 		"MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport"
 	) as Control
@@ -61,7 +60,8 @@ func mount(support: TestSupport, scene_tree: SceneTree, source_override := "") -
 		var correction := Vector2(640, 480) - mounted_viewport.size
 		if correction.is_zero_approx():
 			break
-		main.size += correction
+		main.size = (main.size + correction).max(
+			(main.get_node("MainVBox") as Control).get_combined_minimum_size())
 		await tree.process_frame
 	var errors: PackedStringArray = main.open_source(source_root)
 	support.expect_equal(errors, PackedStringArray(), "real editing harness should open its image-sequence source")
@@ -254,7 +254,7 @@ func class_dialog_control(relative_path: String) -> Control:
 
 
 func hover_annotation(region_id: String) -> void:
-	var frame_tree := sidebar.get_node("FrameAnnotations/Tree") as Tree
+	var frame_tree := sidebar.get_node("FrameAnnotations/Content/Tree") as Tree
 	var item := _sidebar_item(region_id)
 	if item == null:
 		return
@@ -312,7 +312,7 @@ func sidebar_snapshot() -> Dictionary:
 
 
 func _click_sidebar_annotation(region_id: String, double_click: bool) -> void:
-	var frame_tree := sidebar.get_node("FrameAnnotations/Tree") as Tree
+	var frame_tree := sidebar.get_node("FrameAnnotations/Content/Tree") as Tree
 	var item := _sidebar_item(region_id)
 	if item == null:
 		return
@@ -327,7 +327,7 @@ func _click_sidebar_annotation(region_id: String, double_click: bool) -> void:
 
 
 func _sidebar_item(region_id: String) -> TreeItem:
-	var frame_tree := sidebar.get_node("FrameAnnotations/Tree") as Tree
+	var frame_tree := sidebar.get_node("FrameAnnotations/Content/Tree") as Tree
 	var root := frame_tree.get_root()
 	if root == null:
 		return null

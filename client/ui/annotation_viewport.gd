@@ -333,7 +333,15 @@ func _sync_hover_to_renderer() -> void:
 
 
 func _sync_suppressed_region_to_renderer() -> void:
-	if _renderer != null and _renderer.has_method("set_suppressed_region_id"):
+	if _renderer != null and _renderer.has_method("set_vertex_edit_region_id"):
+		_renderer.set_vertex_edit_region_id(str(_edit_overlay_state.get("vertex_edit_region_id", "")))
+	if _renderer != null and _renderer.has_method("set_suppressed_region_ids"):
+		var ids := PackedStringArray(_edit_overlay_state.get("suppress_region_ids", []))
+		var single_id := str(_edit_overlay_state.get("suppress_region_id", ""))
+		if not single_id.is_empty():
+			ids.append(single_id)
+		_renderer.set_suppressed_region_ids(ids)
+	elif _renderer != null and _renderer.has_method("set_suppressed_region_id"):
 		_renderer.set_suppressed_region_id(str(_edit_overlay_state.get("suppress_region_id", "")))
 
 

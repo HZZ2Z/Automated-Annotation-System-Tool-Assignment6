@@ -5,14 +5,13 @@ signal region_hovered(region_id: String)
 signal region_selected(region_id: String)
 signal region_reclassify_requested(region_id: String)
 
-@onready var _project_tree: Tree = $ProjectLabels/Tree
-@onready var _frame_tree: Tree = $FrameAnnotations/Tree
+@onready var _project_tree: Tree = $ProjectLabels/Content/Tree
+@onready var _frame_tree: Tree = $FrameAnnotations/Content/Tree
 
 var _project_rows: Array[Dictionary] = []
 var _frame_rows: Array[Dictionary] = []
 var _hovered_region_id := ""
 var _syncing := false
-var _panel_layout_pending := true
 
 
 func _ready() -> void:
@@ -28,39 +27,6 @@ func _ready() -> void:
 	_frame_tree.gui_input.connect(_on_frame_gui_input)
 	_frame_tree.mouse_exited.connect(clear_hover)
 	_frame_tree.item_selected.connect(_on_frame_item_selected)
-	resized.connect(_queue_panel_layout)
-	($ProjectLabels as PanelContainer).resized.connect(_queue_panel_layout)
-	($FrameAnnotations as PanelContainer).resized.connect(_queue_panel_layout)
-	_queue_panel_layout()
-
-
-func _queue_panel_layout() -> void:
-	_panel_layout_pending = true
-	call_deferred("_layout_panels")
-
-
-func _process(_delta: float) -> void:
-	if _panel_layout_pending:
-		_layout_panels()
-		call_deferred("_layout_panels")
-
-
-func _layout_panels() -> void:
-	_layout_panel($ProjectLabels as PanelContainer, $ProjectLabels/Title as Label, $ProjectLabels/Tree as Tree)
-	_layout_panel($FrameAnnotations as PanelContainer, $FrameAnnotations/Title as Label, $FrameAnnotations/Tree as Tree)
-
-
-func _layout_panel(panel: PanelContainer, title: Label, tree: Tree) -> void:
-	if panel == null or title == null or tree == null:
-		return
-	var width := maxf(0.0, panel.size.x)
-	var title_height := maxf(24.0, title.get_combined_minimum_size().y)
-	title.set_deferred("position", Vector2(0.0, 0.0))
-	title.set_deferred("size", Vector2(width, title_height))
-	tree.set_deferred("position", Vector2(0.0, title_height))
-	tree.set_deferred("size", Vector2(width, maxf(0.0, panel.size.y - title_height)))
-	if panel.size.x > 0.0 and panel.size.y > title_height:
-		_panel_layout_pending = false
 
 
 func populate(project_rows: Array, frame_rows: Array, selected_region_id: String) -> void:
@@ -108,6 +74,7 @@ func get_frame_rows_snapshot() -> Array[Dictionary]:
 
 
 func _rebuild_trees() -> void:
+	($FrameAnnotations/Content/Title as Label).text = "Current Frame Annotations (%d)" % _frame_rows.size()
 	_project_tree.clear()
 	_frame_tree.clear()
 	var project_root := _project_tree.create_item()

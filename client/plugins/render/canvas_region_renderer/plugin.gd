@@ -16,7 +16,8 @@ var _color_resolver
 var _transform
 var _selected_id := ""
 var _hovered_id := ""
-var _suppressed_region_id := ""
+var _vertex_edit_region_id := ""
+var _suppressed_region_ids := PackedStringArray()
 var _opacity := 0.35
 var _record_snapshot: Dictionary = {}
 var _record_hash := 0
@@ -53,9 +54,19 @@ func set_hovered_region_id(region_id: String) -> void:
 
 
 func set_suppressed_region_id(region_id: String) -> void:
-	if _suppressed_region_id == region_id:
+	set_suppressed_region_ids(PackedStringArray([region_id]) if not region_id.is_empty() else PackedStringArray())
+
+
+func set_vertex_edit_region_id(region_id: String) -> void:
+	if _vertex_edit_region_id != region_id:
+		_vertex_edit_region_id = region_id
+		_rebuild_screen_commands()
+
+
+func set_suppressed_region_ids(region_ids: PackedStringArray) -> void:
+	if _suppressed_region_ids == region_ids:
 		return
-	_suppressed_region_id = region_id
+	_suppressed_region_ids = region_ids.duplicate()
 	_rebuild_screen_commands()
 
 
@@ -125,7 +136,7 @@ func _rebuild_screen_commands() -> void:
 	if _transform == null or not _transform.is_configured():
 		return
 	for primitive: Dictionary in _primitives:
-		if str(primitive["region"].get("id", "")) == _suppressed_region_id:
+		if str(primitive["region"].get("id", "")) in _suppressed_region_ids:
 			continue
 		if not _primitive_is_visible(primitive):
 			continue
@@ -183,7 +194,7 @@ func _screen_command(primitive: Dictionary) -> Dictionary:
 		outline.append(viewport_points[0])
 		command["points"] = viewport_points
 		command["outline"] = outline
-		command["handles"] = _box_handles(_points_bounds(viewport_points)) if selected else PackedVector2Array()
+		command["handles"] = _box_handles(_points_bounds(viewport_points)) if selected and str(region.get("id", "")) != _vertex_edit_region_id else PackedVector2Array()
 		label_anchor = _polygon_label_anchor(viewport_points)
 	_add_label_layout(command, label_anchor)
 	return command

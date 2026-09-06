@@ -34,12 +34,21 @@ func execute(command: Variant, store: Variant) -> PackedStringArray:
 
 
 func undo(store: Variant) -> bool:
+	return try_undo(store).is_empty()
+
+
+func try_undo(store: Variant) -> PackedStringArray:
 	if _undo_stack.is_empty():
-		return false
-	var command: Variant = _undo_stack.pop_back()
-	command.revert(store)
+		return PackedStringArray(["history: nothing to undo"])
+	var command: Variant = _undo_stack.back()
+	var result: Variant = command.revert(store)
+	if not result is PackedStringArray:
+		return PackedStringArray(["command: revert must return PackedStringArray"])
+	if not result.is_empty():
+		return result
+	_undo_stack.pop_back()
 	_redo_stack.append(command)
-	return true
+	return result
 
 
 func redo(store: Variant) -> PackedStringArray:

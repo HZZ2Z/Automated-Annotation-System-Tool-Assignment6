@@ -14,6 +14,9 @@ var _transform: Variant
 var _mask_snapshot: Dictionary = {}
 var _mask_texture: ImageTexture
 var _mask_texture_builds := 0
+var _repair_snapshot: Dictionary = {}
+var _repair_texture: ImageTexture
+var _batch_layers: Array[Dictionary] = []
 
 
 func _init() -> void:
@@ -28,6 +31,20 @@ func set_state(state: Dictionary, image_transform: Variant) -> void:
 	_state = state.duplicate(true)
 	_transform = image_transform
 	_update_mask_texture(_state.get("mask_preview", {}))
+	var masks: Array = _state.get("mask_previews", [])
+	var layers: Array[Dictionary] = []
+	for index in range(1, masks.size()):
+		var snapshot := _valid_mask_snapshot(masks[index])
+		var previous: Dictionary = _batch_layers[index - 1] if index - 1 < _batch_layers.size() else {}
+		var texture: ImageTexture = previous.get("texture")
+		if snapshot != previous.get("snapshot", {}):
+			texture = _make_mask_texture(snapshot, texture)
+		layers.append({"snapshot": snapshot, "texture": texture})
+	_batch_layers = layers
+	var repair := _valid_mask_snapshot(_state.get("repair_mask", {}))
+	if repair != _repair_snapshot:
+		_repair_snapshot = repair
+		_repair_texture = _make_mask_texture(repair)
 	queue_redraw()
 
 
@@ -49,20 +66,42 @@ func _draw() -> void:
 		return
 	var color := _phase_color()
 	_draw_mask_preview(color)
+	for layer: Dictionary in _batch_layers:
+		if layer.texture != null:
+			_draw_mask_texture(layer.texture, layer.snapshot, color, MASK_ALPHA)
+	if _repair_texture != null:
+		_draw_mask_texture(_repair_texture, _repair_snapshot, Color("#f43f5e"), 0.95)
 	_draw_candidate(color)
 	_draw_path(color)
+	_draw_vertices(color)
 	_draw_brush_cursor(color)
+
+
+func _draw_vertices(color: Color) -> void:
+	var points: Variant = _state.get("vertex_points", PackedVector2Array())
+	if not points is PackedVector2Array:
+		return
+	var active := int(_state.get("active_vertex", -1))
+	for index in range(points.size()):
+		var position: Vector2 = _transform.image_to_viewport(points[index])
+		var radius := 6.0 if index == active else 4.0
+		draw_circle(position, radius + 1.5, Color("#111827"))
+		draw_circle(position, radius, Color("#fbbf24") if index == active else color)
 
 
 func _draw_mask_preview(color: Color) -> void:
 	if _mask_texture == null or _mask_snapshot.is_empty():
 		return
-	var roi: Rect2i = _mask_snapshot["roi"]
+	_draw_mask_texture(_mask_texture, _mask_snapshot, color, MASK_ALPHA)
+
+
+func _draw_mask_texture(texture: ImageTexture, snapshot: Dictionary, color: Color, alpha: float) -> void:
+	var roi: Rect2i = snapshot["roi"]
 	var top_left: Vector2 = _transform.image_to_viewport(Vector2(roi.position))
 	var bottom_right: Vector2 = _transform.image_to_viewport(Vector2(roi.end))
 	var tint := color
-	tint.a = MASK_ALPHA
-	draw_texture_rect(_mask_texture, Rect2(top_left, bottom_right - top_left).abs(), false, tint)
+	tint.a = alpha
+	draw_texture_rect(texture, Rect2(top_left, bottom_right - top_left).abs(), false, tint)
 
 
 func _draw_candidate(color: Color) -> void:
@@ -125,21 +164,28 @@ func _update_mask_texture(value: Variant) -> void:
 	if next_snapshot == _mask_snapshot:
 		return
 	_mask_snapshot = next_snapshot
-	_mask_texture = null
 	if _mask_snapshot.is_empty():
+		_mask_texture = null
 		return
-	var roi: Rect2i = _mask_snapshot["roi"]
-	var mask: PackedByteArray = _mask_snapshot["mask"]
-	var pixels := PackedByteArray()
-	pixels.resize(mask.size() * 4)
-	for index in range(mask.size()):
-		pixels[index * 4] = 255
-		pixels[index * 4 + 1] = 255
-		pixels[index * 4 + 2] = 255
-		pixels[index * 4 + 3] = 0 if mask[index] == 0 else 255
-	var image := Image.create_from_data(roi.size.x, roi.size.y, false, Image.FORMAT_RGBA8, pixels)
-	_mask_texture = ImageTexture.create_from_image(image)
+	_mask_texture = _make_mask_texture(_mask_snapshot, _mask_texture)
 	_mask_texture_builds += 1
+
+
+func _make_mask_texture(snapshot: Dictionary, previous: ImageTexture = null) -> ImageTexture:
+	if snapshot.is_empty():
+		return null
+	var roi: Rect2i = snapshot["roi"]
+	var mask: PackedByteArray = snapshot["mask"]
+	var pixels := PackedByteArray()
+	pixels.resize(mask.size() * 2)
+	pixels.fill(255)
+	for index in range(mask.size()):
+		pixels[index * 2 + 1] = 0 if mask[index] == 0 else 255
+	var image := Image.create_from_data(roi.size.x, roi.size.y, false, Image.FORMAT_LA8, pixels)
+	if previous != null and Vector2i(previous.get_size()) == roi.size:
+		previous.update(image)
+		return previous
+	return ImageTexture.create_from_image(image)
 
 
 func _valid_mask_snapshot(value: Variant) -> Dictionary:

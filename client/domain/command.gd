@@ -6,5 +6,5 @@ func apply(_store: Variant) -> PackedStringArray:
 	return PackedStringArray(["command apply not implemented"])
 
 
-func revert(_store: Variant) -> void:
-	pass
+func revert(_store: Variant) -> PackedStringArray:
+	return PackedStringArray(["command revert not implemented"])

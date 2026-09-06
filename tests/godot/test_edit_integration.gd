@@ -10,6 +10,7 @@ const ADD_BOX_COMMAND := preload("res://client/domain/commands/add_box_command.g
 const ADD_POLYGON_COMMAND := preload("res://client/domain/commands/add_polygon_command.gd")
 const EXPECTED_BOX_ID := "frame-0-added-11001"
 const EXPECTED_POLYGON_ID := "frame-0-polygon-11001"
+const POLYGON_GEOMETRY := preload("res://client/domain/polygon_ops.gd")
 
 const EXPECTED_POINTER_POLYGONS := {
 	"Subtract": [[36.0, 44.0], [20.0, 44.0], [20.0, 20.0], [36.0, 20.0]],
@@ -282,7 +283,7 @@ func _test_real_sidebar_pointer_keyboard_and_render_sync(support: TestSupport, t
 		await harness.finish()
 		return
 	await harness.select_region("box-1")
-	var frame_tree := harness.sidebar.get_node("FrameAnnotations/Tree") as Tree
+	var frame_tree := harness.sidebar.get_node("FrameAnnotations/Content/Tree") as Tree
 	support.expect_equal(str(frame_tree.get_selected().get_metadata(0)), "box-1",
 		"a real canvas click must synchronize the matching sidebar row")
 
@@ -373,7 +374,7 @@ func _test_real_sidebar_pointer_keyboard_and_render_sync(support: TestSupport, t
 	await enter_harness.click_annotation("box-1")
 	support.expect_equal(enter_harness.selected_region_id(), "box-1",
 		"real row click must select the Enter target")
-	frame_tree = enter_harness.sidebar.get_node("FrameAnnotations/Tree") as Tree
+	frame_tree = enter_harness.sidebar.get_node("FrameAnnotations/Content/Tree") as Tree
 	frame_tree.grab_focus()
 	await tree.process_frame
 	support.expect(frame_tree.has_focus(),
@@ -505,7 +506,7 @@ func _test_real_pointer_command_matrix(support: TestSupport, tree: SceneTree) ->
 		{"name": "Lasso anchored", "tool": &"lasso", "command": "add_polygon_command.gd"},
 		{"name": "Fill", "tool": &"fill", "command": "add_polygon_command.gd"},
 		{"name": "Paint selected", "tool": &"paint", "command": "replace_region_geometry_command.gd"},
-		{"name": "Eraser", "tool": &"eraser", "command": "replace_region_geometry_command.gd"},
+		{"name": "Eraser", "tool": &"eraser", "command": "replace_frame_command.gd"},
 		{"name": "Select move", "tool": &"select", "command": "move_region_command.gd"},
 		{"name": "Select box resize", "tool": &"select", "command": "resize_box_command.gd"},
 		{"name": "Select polygon resize", "tool": &"select", "command": "replace_region_geometry_command.gd"},
@@ -614,8 +615,12 @@ func _test_real_pointer_command_matrix(support: TestSupport, tree: SceneTree) ->
 			await harness.confirm_class("grasper", "instrument")
 			support.expect(not harness.class_dialog.is_assignment_open(),
 				"%s real Enter confirmation must close the dialog" % case.name)
-			support.expect_equal(harness.overlay(), {},
-				"%s successful confirmation must clear the retained candidate" % case.name)
+			if case.name in ["Lasso", "Lasso anchored"]:
+				support.expect_equal(harness.overlay().get("phase"), &"vertex_edit",
+					"%s confirmation must keep the actual contour vertices editable" % case.name)
+			else:
+				support.expect_equal(harness.overlay(), {},
+					"%s successful confirmation must clear the retained candidate" % case.name)
 		var generated_id := ""
 		if case.name in ["Add Box", "Lasso", "Lasso anchored", "Fill"]:
 			generated_id = EXPECTED_BOX_ID if case.name == "Add Box" else EXPECTED_POLYGON_ID
@@ -682,15 +687,52 @@ func _expect_record_with_geometry_tolerance(
 		for geometry_key in ["box", "polygon"]:
 			if not expected_region.has(geometry_key):
 				continue
-			support.expect(actual_region.has(geometry_key) and _geometry_values_close(
-				actual_region.get(geometry_key), expected_region.get(geometry_key), EPSILON,
-			), "%s %s geometry must match the independent image-space oracle within 1e-5" % [
-				label, geometry_key,
-			])
+			if geometry_key == "polygon" and label in ["Paint selected", "Eraser"]:
+				# 已批准的半像素简化保留独立阶梯轮廓作为误差基准。
+				support.expect(_simplified_boundary_matches(actual_region.get(geometry_key), expected_region[geometry_key]),
+					"%s must remain simple and within 0.5 image px of the independent pixel boundary in both directions" % label)
+			else:
+				support.expect(actual_region.has(geometry_key) and _geometry_values_close(
+					actual_region.get(geometry_key), expected_region.get(geometry_key), EPSILON,
+				), "%s %s geometry must match the independent image-space oracle within 1e-5" % [
+					label, geometry_key,
+				])
 			if actual_region.has(geometry_key):
 				actual_region[geometry_key] = expected_region[geometry_key]
 	support.expect_equal(normalized, expected,
 		"%s should commit every non-geometry field exactly" % label)
+
+
+func _simplified_boundary_matches(actual: Variant, expected: Array) -> bool:
+	if not actual is Array or actual.size() > expected.size():
+		return false
+	var candidate := PackedVector2Array()
+	var reference := PackedVector2Array()
+	for point: Variant in actual:
+		if not point is Array or point.size() != 2:
+			return false
+		candidate.append(Vector2(float(point[0]), float(point[1])))
+	for point: Array in expected:
+		reference.append(Vector2(float(point[0]), float(point[1])))
+	if not POLYGON_GEOMETRY.validate_simple_polygon(candidate):
+		return false
+	return _boundary_samples_within(candidate, reference) and _boundary_samples_within(reference, candidate)
+
+
+func _boundary_samples_within(source: PackedVector2Array, target: PackedVector2Array) -> bool:
+	for edge in range(source.size()):
+		var start := source[edge]
+		var finish := source[(edge + 1) % source.size()]
+		var samples := maxi(1, ceili(start.distance_to(finish) * 8))
+		for step in range(samples + 1):
+			var point := start.lerp(finish, float(step) / samples)
+			var distance := INF
+			for other in range(target.size()):
+				var closest := Geometry2D.get_closest_point_to_segment(point, target[other], target[(other + 1) % target.size()])
+				distance = minf(distance, point.distance_to(closest))
+			if distance > 0.50001:
+				return false
+	return true
 
 
 func _geometry_values_close(actual: Variant, expected: Variant, epsilon: float) -> bool:
@@ -1073,7 +1115,7 @@ func _test_real_sidebar_reclassification_matrix(support: TestSupport, tree: Scen
 		expected_region["kind"] = case.kind
 		if case.enter:
 			await harness.click_annotation(case.region_id)
-			var frame_tree := harness.sidebar.get_node("FrameAnnotations/Tree") as Tree
+			var frame_tree := harness.sidebar.get_node("FrameAnnotations/Content/Tree") as Tree
 			frame_tree.grab_focus()
 			await tree.process_frame
 			await harness.press_key(KEY_ENTER)

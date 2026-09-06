@@ -16,7 +16,11 @@ const REGION_GEOMETRY := preload("res://client/domain/region_geometry.gd")
 const POLYGON_OPS := preload("res://client/domain/polygon_ops.gd")
 const MASK_REGION_OPS := preload("res://client/domain/mask_region_ops.gd")
 const EDIT_SESSION := preload("res://client/domain/edit_session.gd")
+const FILL_SOLVER := preload("res://client/domain/fill_region_solver.gd")
+const BRUSH_BUFFER := preload("res://client/domain/brush_stroke_buffer.gd")
+const VERTEX_EDITOR := preload("res://client/plugins/edit/basic_edit_tools/polygon_vertex_editor.gd")
 const HANDLE_TOLERANCE_VIEWPORT_PX := 8.0
+const EDGE_TOLERANCE_VIEWPORT_PX := 6.0
 const FREEHAND_SAMPLE_DISTANCE := 0.75
 const FREEHAND_SIMPLIFY_TOLERANCE := 0.5
 const FREEHAND_CLOSE_DISTANCE := 3.0
@@ -36,16 +40,22 @@ const BRUSH_OPTION := {
 	"min": 1.0, "max": 40.0, "step": 1.0, "default": 8.0,
 	"shared_key": &"brush_radius",
 }
+const FILL_OPTION := {
+	"id": &"fill_gap_radius", "label": "Gap radius (px)", "kind": &"float_range",
+	"min": 0.0, "max": 3.0, "step": 1.0, "default": 1.0,
+}
 const TOOL_DESCRIPTORS: Array[Dictionary] = [
 	{"id": &"box", "node_name": "Box", "label": "Add Box", "presentation_text": "Add\nBox", "implemented": true, "tooltip": "Drag to add a box", "icon_path": "res://client/ui/icons/tools/add_box.svg"},
 	{"id": &"subtract", "node_name": "Subtract", "label": "Subtract", "implemented": true, "tooltip": "Subtract from the selected region, or delete across all regions when none is selected", "icon_path": "res://client/ui/icons/tools/subtract.svg"},
-	{"id": &"lasso", "node_name": "Lasso", "label": "Lasso", "implemented": true, "tooltip": "Draw an approximately closed freehand polygon", "icon_path": "res://client/ui/icons/tools/lasso.svg"},
-	{"id": &"fill", "node_name": "Fill", "label": "Fill", "implemented": true, "tooltip": "Click a blank area enclosed by annotation boundaries", "icon_path": "res://client/ui/icons/tools/fill.svg"},
+	{"id": &"lasso", "node_name": "Lasso", "label": "Lasso", "implemented": true, "tooltip": "Draw a polygon, or edit selected polygon vertices: drag points, double-click edges to insert, Delete to remove", "icon_path": "res://client/ui/icons/tools/lasso.svg"},
+	{"id": &"fill", "node_name": "Fill", "label": "Fill", "implemented": true, "tooltip": "Fill an enclosed area; preview small gap repairs before applying", "icon_path": "res://client/ui/icons/tools/fill.svg", "options": [FILL_OPTION]},
 	{"id": &"paint", "node_name": "Paint", "label": "Paint", "implemented": true, "tooltip": "Repair one overlapped region, or paint a new object", "icon_path": "res://client/ui/icons/tools/paint.svg", "options": [BRUSH_OPTION]},
-	{"id": &"eraser", "node_name": "Eraser", "label": "Eraser", "implemented": true, "tooltip": "Brush-subtract a stroke from the selected region", "icon_path": "res://client/ui/icons/tools/erase.svg", "options": [BRUSH_OPTION]},
+	{"id": &"eraser", "node_name": "Eraser", "label": "Eraser", "implemented": true, "tooltip": "Erase every region touched by the stroke; no selection needed", "icon_path": "res://client/ui/icons/tools/erase.svg", "options": [BRUSH_OPTION]},
 	{"id": &"select", "node_name": "Select", "label": "Selection", "implemented": true, "default": true, "tooltip": "Select, move, or resize a region", "icon_path": "res://client/ui/icons/tools/selection.svg"},
 ]
 
+var _vertex_editor = VERTEX_EDITOR.new()
+var _vertex_mode_requested := false
 var _store: Variant
 var _history: Variant
 var _viewport: Variant
@@ -60,6 +70,10 @@ var _taxonomy: Dictionary = {}
 var _active := false
 var _active_tool: StringName = &"select"
 var _brush_radius_image_px := 8.0
+var _fill_gap_radius := 1
+var _brush_buffer = BRUSH_BUFFER.new()
+var _buffered_points := 0
+var _brush_error := ""
 var _last_pointer_image_position := Vector2.ZERO
 var _has_last_pointer_image_position := false
 var _session = EDIT_SESSION.new()
@@ -75,13 +89,14 @@ var _drag_image_size := Vector2.ZERO
 var _resize_handle := -1
 var _keyboard_box: Array = []
 var _stroke_points := PackedVector2Array()
-var _brush_subject_mask: Dictionary = {}
 var _brush_region_masks: Array[Dictionary] = []
 var _lasso_mode: StringName = &""
 var _lasso_anchors := PackedVector2Array()
 var _lasso_press_position := Vector2.ZERO
 var _lasso_release_suppressed := false
 var _lasso_invalid_message := ""
+var _lasso_active_anchor := -1
+var _lasso_vertex_moved := false
 var _keyboard_tool: StringName = &""
 var _keyboard_cursor := Vector2.ZERO
 var _keyboard_points := PackedVector2Array()
@@ -97,12 +112,35 @@ func get_tool_descriptors() -> Array[Dictionary]:
 func get_edit_state() -> Dictionary:
 	return {
 		"phase": _session.phase,
-		"navigation_blocked": _session.has_working_mask() or _session.has_pending_class_assignment(),
+		"gesture_active": _has_transient_edit() or _add_pointer_mode,
+		"navigation_blocked": _session.has_working_mask() or _session.has_pending_class_assignment() or _session.has_fill_repair(),
+		"draft_active": _session.has_working_mask() or _session.has_fill_repair(),
+		"draft_history": _session.draft_counts(),
+		"fill_repair": _session.has_fill_repair(),
 		"message": String(_session.message),
 	}.duplicate(true)
 
 
 func invoke(action_id: StringName, payload: Dictionary = {}) -> PackedStringArray:
+	if action_id == &"confirm_fill_repair":
+		return _confirm_fill_repair()
+	if action_id == &"cancel_fill_repair":
+		_session.cancel_fill_repair()
+		_push_session_overlay()
+		return PackedStringArray()
+	if action_id in [&"undo_draft", &"redo_draft"]:
+		var errors: PackedStringArray = _session.change_draft_history(action_id == &"redo_draft")
+		_push_session_overlay()
+		_report_errors(errors)
+		return errors
+	if action_id == &"set_tool_option" and StringName(payload.get("option_id", &"")) == &"fill_gap_radius":
+		var value: Variant = payload.get("value")
+		if typeof(value) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(value)) or float(value) != floorf(float(value)) or float(value) < 0 or float(value) > 3:
+			return PackedStringArray(["Fill gap radius must be 0, 1, 2 or 3 image pixels"])
+		if _session.has_pending_class_assignment() or _session.has_fill_repair():
+			return PackedStringArray(["Confirm or cancel the current candidate before changing gap radius"])
+		_fill_gap_radius = int(value)
+		return PackedStringArray()
 	if action_id == &"confirm_pending_region":
 		return _confirm_pending_region(payload)
 	if action_id == &"cancel_pending_region":
@@ -111,6 +149,8 @@ func invoke(action_id: StringName, payload: Dictionary = {}) -> PackedStringArra
 		var pending_errors := PackedStringArray(["Choose a class and kind, or press Escape to discard the pending region"])
 		_report_errors(pending_errors)
 		return pending_errors
+	if _active and _session.has_fill_repair():
+		return PackedStringArray(["Confirm or cancel the Fill repair before another edit"])
 	# Inspector/API edits are complete commands. Never let one commit behind a
 	# frozen pointer or keyboard preview.
 	if _active and _session.has_working_mask():
@@ -250,6 +290,8 @@ func deactivate() -> void:
 func set_active_tool(tool_id: StringName) -> PackedStringArray:
 	if not _active:
 		return PackedStringArray(["edit plugin is not active"])
+	if _session.has_fill_repair():
+		return PackedStringArray(["Confirm or cancel the Fill repair before changing tools"])
 	if _session.has_pending_class_assignment():
 		var pending_errors := PackedStringArray(["Choose a class and kind, or press Escape to discard the pending region"])
 		_report_errors(pending_errors)
@@ -268,11 +310,15 @@ func set_active_tool(tool_id: StringName) -> PackedStringArray:
 		return PackedStringArray()
 	if tool_id == _active_tool:
 		_show_idle_brush_cursor()
+		_vertex_mode_requested = tool_id == &"lasso"
+		refresh_edit_overlay()
 		return PackedStringArray()
 	_clear_transient()
 	_active_tool = tool_id
+	_vertex_mode_requested = tool_id == &"lasso"
 	_add_pointer_mode = tool_id == &"box"
 	_show_idle_brush_cursor()
+	refresh_edit_overlay()
 	return PackedStringArray()
 
 
@@ -280,16 +326,25 @@ func get_active_tool() -> StringName:
 	return _active_tool
 
 
+func refresh_edit_overlay() -> void:
+	if _active and _active_tool == &"lasso" and _vertex_mode_requested and not _has_transient_edit():
+		_vertex_editor.refresh(self)
+
+
 func handle_pointer(event: InputEvent, image_position: Vector2) -> void:
 	if not _active:
 		return
 	if _session.has_pending_class_assignment():
+		return
+	if _session.has_fill_repair():
 		return
 	if not image_position.is_finite():
 		return
 	_last_pointer_image_position = image_position
 	_has_last_pointer_image_position = true
 	if _active_tool == &"lasso":
+		if _vertex_editor.pointer(self, event, image_position):
+			return
 		_handle_lasso_pointer(event, image_position)
 		return
 	if event is InputEventMouseMotion and _active_tool in [&"paint", &"eraser"] and not _is_pointer_drag():
@@ -314,19 +369,44 @@ func handle_key(event: InputEvent) -> bool:
 		return false
 	var key: Key = event.keycode if event.keycode != KEY_NONE else event.physical_keycode
 	if key == KEY_ESCAPE:
-		cancel()
+		if not _vertex_editor.region_id.is_empty():
+			_vertex_editor.clear()
+			_set_selected_region("")
+		if _active_tool == &"select" and not _has_transient_edit():
+			_set_selected_region("")
+		if _session.has_fill_repair():
+			_session.cancel_fill_repair()
+			_push_session_overlay()
+		else:
+			cancel()
 		return true
 	if _session.has_pending_class_assignment():
 		_report("Choose a class and kind, or press Escape to discard the pending region")
 		return true
-	if _session.has_working_mask():
-		_report("Finish the Fill contour or press Escape")
+	if _session.has_working_mask() or _session.has_fill_repair():
+		if event.ctrl_pressed and key in [KEY_Z, KEY_Y]:
+			invoke(&"redo_draft" if key == KEY_Y or event.shift_pressed else &"undo_draft")
+			return true
+		if _session.has_fill_repair():
+			if key in [KEY_ENTER, KEY_KP_ENTER]:
+				_confirm_fill_repair()
+			return key != KEY_TAB
+		if key == KEY_F and not event.ctrl_pressed and not event.alt_pressed:
+			return _begin_keyboard_spatial(&"fill")
+		if _keyboard_tool != &"fill":
+			_report("Press F to move a Fill seed with arrows, or Escape to discard the contour")
+			return key != KEY_TAB
+	if _active_tool == &"lasso" and _vertex_editor.key(self, event, key):
 		return true
 	if not _keyboard_tool.is_empty():
 		return _handle_keyboard_spatial_key(event, key)
 	if not _lasso_mode.is_empty():
+		if _lasso_mode == &"vertex_drag":
+			return key != KEY_TAB
 		if key == KEY_BACKSPACE:
 			_remove_lasso_anchor()
+			return true
+		if _edit_lasso_anchor_key(event, key):
 			return true
 		if key == KEY_SPACE:
 			_finish_lasso_candidate(_lasso_anchors, false)
@@ -353,6 +433,11 @@ func handle_key(event: InputEvent) -> bool:
 			KEY_S:
 				return _begin_keyboard_spatial(&"subtract")
 			KEY_L:
+				var region := _find_region(_record_for_frame(_current_frame()), _selected_region_id())
+				if REGION_GEOMETRY.canonical_shape(region) == REGION_GEOMETRY.SHAPE_POLYGON:
+					set_active_tool(&"lasso")
+					_report("Lasso vertices: drag points; double-click an edge to insert; [ / ] select; arrows move; Insert adds; Delete removes; Escape exits")
+					return true
 				return _begin_keyboard_spatial(&"lasso")
 			KEY_F:
 				return _begin_keyboard_spatial(&"fill")
@@ -428,7 +513,9 @@ func cancel() -> void:
 	if not _active:
 		_clear_transient()
 		return
+	var keep_vertex_mode := _vertex_mode_requested
 	_clear_transient()
+	_vertex_mode_requested = keep_vertex_mode
 	_show_idle_brush_cursor()
 
 
@@ -539,9 +626,12 @@ func _confirm_pending_region(payload: Dictionary) -> PackedStringArray:
 	if not errors.is_empty():
 		_report_errors(errors)
 		return errors
+	var continue_lasso_vertices: bool = _session.tool_id == &"lasso"
 	_clear_transient()
+	_vertex_mode_requested = continue_lasso_vertices
 	_refresh_visible_frame(frame)
 	_select_added_if_still_current(frame, command.get_region_id())
+	refresh_edit_overlay()
 	_show_idle_brush_cursor()
 	return PackedStringArray()
 
@@ -653,6 +743,14 @@ func _lasso_pointer_pressed(event: InputEventMouseButton, image_position: Vector
 		if not succeeded:
 			_lasso_release_suppressed = true
 		return
+	var hit_anchor := _lasso_anchor_at(image_position)
+	if hit_anchor >= 0:
+		_lasso_active_anchor = hit_anchor
+		_lasso_press_position = image_position
+		_lasso_vertex_moved = false
+		_lasso_mode = &"vertex_drag"
+		_show_lasso_anchor_preview(image_position, false)
+		return
 	_lasso_press_position = image_position
 	_lasso_mode = &"anchor_press"
 	_show_lasso_anchor_preview(image_position)
@@ -660,6 +758,13 @@ func _lasso_pointer_pressed(event: InputEventMouseButton, image_position: Vector
 
 func _lasso_pointer_moved(event: InputEventMouseMotion, image_position: Vector2) -> void:
 	match _lasso_mode:
+		&"vertex_drag":
+			if event.button_mask & MOUSE_BUTTON_MASK_LEFT:
+				if not image_position.is_equal_approx(_lasso_press_position):
+					_lasso_vertex_moved = true
+				if _lasso_vertex_moved:
+					_lasso_anchors[_lasso_active_anchor] = image_position
+					_show_lasso_anchor_preview(image_position, false)
 		&"press":
 			if event.button_mask & MOUSE_BUTTON_MASK_LEFT == 0:
 				return
@@ -682,6 +787,11 @@ func _lasso_pointer_released(image_position: Vector2) -> void:
 		_lasso_release_suppressed = false
 		return
 	match _lasso_mode:
+		&"vertex_drag":
+			if _lasso_vertex_moved or not image_position.is_equal_approx(_lasso_press_position):
+				_lasso_anchors[_lasso_active_anchor] = image_position
+			_lasso_mode = &"anchors"
+			_show_lasso_anchor_preview(image_position, false)
 		&"press":
 			if _lasso_press_position.distance_to(image_position) > LASSO_DRAG_THRESHOLD_IMAGE_PX:
 				_lasso_mode = &"freehand"
@@ -689,10 +799,11 @@ func _lasso_pointer_released(image_position: Vector2) -> void:
 				_finish_lasso_candidate(_stroke_points, true)
 				return
 			_lasso_anchors = PackedVector2Array([_lasso_press_position])
+			_lasso_active_anchor = 0
 			_lasso_mode = &"anchors"
 			_drag_kind = ""
 			_show_lasso_anchor_preview(_lasso_press_position)
-			_report("Lasso: click more anchors; Enter or double-click closes the contour")
+			_report("Lasso: click contour points; drag a point to adjust; Space or double-click closes")
 		&"freehand":
 			_append_stroke_point(image_position)
 			_finish_lasso_candidate(_stroke_points, true)
@@ -708,11 +819,46 @@ func _append_lasso_anchor(point: Vector2) -> void:
 		return
 	if _lasso_anchors.is_empty() or not _lasso_anchors[-1].is_equal_approx(point):
 		_lasso_anchors.append(point)
+		_lasso_active_anchor = _lasso_anchors.size() - 1
 
 
-func _show_lasso_anchor_preview(cursor: Vector2) -> void:
+func _lasso_anchor_at(point: Vector2) -> int:
+	var transform: Variant = _viewport.get_image_transform()
+	var cursor: Vector2 = transform.image_to_viewport(point)
+	var best := -1
+	var distance := HANDLE_TOLERANCE_VIEWPORT_PX
+	for index in range(_lasso_anchors.size()):
+		var candidate: float = cursor.distance_to(transform.image_to_viewport(_lasso_anchors[index]))
+		if candidate <= distance:
+			best = index
+			distance = candidate
+	return best
+
+
+func _edit_lasso_anchor_key(event: InputEventKey, key: Key) -> bool:
+	if _lasso_anchors.is_empty():
+		return false
+	_lasso_active_anchor = clampi(_lasso_active_anchor, 0, _lasso_anchors.size() - 1)
+	if key in [KEY_BRACKETLEFT, KEY_BRACKETRIGHT]:
+		_lasso_active_anchor = posmod(_lasso_active_anchor + (-1 if key == KEY_BRACKETLEFT else 1), _lasso_anchors.size())
+	elif key == KEY_DELETE:
+		_lasso_anchors.remove_at(_lasso_active_anchor)
+		_lasso_active_anchor = mini(_lasso_active_anchor, _lasso_anchors.size() - 1)
+	elif _arrow_direction(key) != Vector2.ZERO and not event.alt_pressed:
+		var moved := _lasso_anchors[_lasso_active_anchor] + _arrow_direction(key) * _key_step(event)
+		if not POLYGON_OPS.points_fit_image(PackedVector2Array([moved]), _drag_image_size):
+			_report("Lasso vertex refused: point must stay inside the current image")
+			return true
+		_lasso_anchors[_lasso_active_anchor] = moved
+	else:
+		return false
+	_show_lasso_anchor_preview(_lasso_anchors[_lasso_active_anchor] if _lasso_active_anchor >= 0 else Vector2.ZERO, false)
+	return true
+
+
+func _show_lasso_anchor_preview(cursor: Vector2, append_cursor := true) -> void:
 	var path := _lasso_anchors.duplicate()
-	if not path.is_empty() and not path[-1].is_equal_approx(cursor) and path.size() < MAX_GESTURE_POINTS:
+	if append_cursor and not path.is_empty() and not path[-1].is_equal_approx(cursor) and path.size() < MAX_GESTURE_POINTS:
 		path.append(cursor)
 	var ring := POLYGON_OPS.sanitize_freehand(path, 0.0, 0.0)
 	if not ring.is_empty() and POLYGON_OPS.points_fit_image(path, _drag_image_size):
@@ -756,6 +902,7 @@ func _show_lasso_freehand_preview(cursor: Vector2) -> void:
 func _remove_lasso_anchor() -> void:
 	if not _lasso_anchors.is_empty():
 		_lasso_anchors.remove_at(_lasso_anchors.size() - 1)
+	_lasso_active_anchor = mini(_lasso_active_anchor, _lasso_anchors.size() - 1)
 	_lasso_mode = &"anchors"
 	_drag_kind = ""
 	var cursor := _lasso_anchors[-1] if not _lasso_anchors.is_empty() else Vector2.ZERO
@@ -793,9 +940,6 @@ func _begin_pointer_drag(event: InputEventMouseButton, image_position: Vector2) 
 		var brush_region_id := _selected_region_id()
 		if not brush_region_id.is_empty() and _find_region(record, brush_region_id).is_empty():
 			brush_region_id = ""
-		if _active_tool == &"eraser" and brush_region_id.is_empty():
-			_report("Select a region before using %s" % _brush_label(_active_tool))
-			return
 		_drag_kind = String(_active_tool)
 		_drag_frame = frame
 		_drag_region_id = brush_region_id
@@ -871,22 +1015,13 @@ func _begin_brush(
 	point: Vector2,
 ) -> bool:
 	var raster_size := Vector2i(roundi(_drag_image_size.x), roundi(_drag_image_size.y))
-	if tool_id == &"paint":
-		_cache_brush_regions(record, raster_size)
-		_brush_subject_mask = {}
-		_session.begin(tool_id, frame, region_id, record)
-		_update_brush_preview(tool_id, PackedVector2Array([point]), point)
-		return true
-	var region := _find_region(record, region_id)
-	var subject := _region_polygon(region)
-	if subject.is_empty():
-		_report("%s refused: selected region has no V1-safe geometry" % _brush_label(tool_id))
+	var buffer_errors: PackedStringArray = _brush_buffer.begin(_brush_radius_image_px, raster_size)
+	_buffered_points = 0
+	_brush_error = ""
+	if not buffer_errors.is_empty():
+		_report_errors(buffer_errors)
 		return false
-	_brush_subject_mask = MASK_REGION_OPS.rasterize_polygon(subject, raster_size)
-	if not bool(_brush_subject_mask.get("ok", false)):
-		_report("%s refused: selected region could not be rasterized safely" % _brush_label(tool_id))
-		_brush_subject_mask = {}
-		return false
+	_cache_brush_regions(record, raster_size)
 	_session.begin(tool_id, frame, region_id, record)
 	_update_brush_preview(tool_id, PackedVector2Array([point]), point)
 	return true
@@ -897,14 +1032,9 @@ func _update_brush_preview(
 	stroke: PackedVector2Array,
 	cursor: Vector2,
 ) -> void:
-	if _drag_image_size == Vector2.ZERO or (tool_id == &"eraser" and _brush_subject_mask.is_empty()):
+	if _drag_image_size == Vector2.ZERO:
 		return
-	var raster_size := Vector2i(roundi(_drag_image_size.x), roundi(_drag_image_size.y))
-	var stroke_mask := MASK_REGION_OPS.rasterize_stroke_mask(
-		stroke,
-		_brush_radius_image_px,
-		raster_size,
-	)
+	var stroke_mask := _buffered_stroke(stroke)
 	var result := {}
 	var target_id := _drag_region_id if _keyboard_tool.is_empty() else _keyboard_region_id
 	if tool_id == &"paint":
@@ -917,7 +1047,17 @@ func _update_brush_preview(
 			result["ok"] = false
 			result["message"] = str(operation.get("message", "Paint overlaps multiple regions."))
 	else:
-		result = MASK_REGION_OPS.combine_masks(_brush_subject_mask, stroke_mask, &"subtract")
+		var operation := _eraser_operation(stroke_mask)
+		if bool(operation.get("ok", false)):
+			_session.region_id = ""
+			_session.set_brush_preview({}, cursor, _brush_radius_image_px, _brush_overlay_color(tool_id))
+			_session.set_batch_brush_preview(operation.regions)
+			_push_session_overlay()
+			return
+		result = stroke_mask.duplicate(true)
+		result["ok"] = false
+		result["message"] = operation.message
+		target_id = ""
 	_session.region_id = target_id
 	var valid := bool(result.get("ok", false))
 	var message := "" if valid else "%s preview refused: %s" % [
@@ -937,6 +1077,20 @@ func _update_brush_preview(
 		_report(message)
 
 
+func _buffered_stroke(stroke: PackedVector2Array) -> Dictionary:
+	if _brush_error.is_empty():
+		for index in range(_buffered_points, stroke.size()):
+			var errors: PackedStringArray = _brush_buffer.append_point(stroke[index])
+			if not errors.is_empty():
+				_brush_error = errors[0]
+				break
+			_buffered_points += 1
+	var snapshot: Dictionary = _brush_buffer.snapshot()
+	snapshot["ok"] = _brush_error.is_empty() and not snapshot.mask.is_empty()
+	snapshot["message"] = _brush_error if not _brush_error.is_empty() else "The clipped stroke has no selected pixels"
+	return snapshot
+
+
 func _cache_brush_regions(record: Dictionary, raster_size: Vector2i) -> void:
 	_brush_region_masks.clear()
 	var regions: Variant = record.get("regions", [])
@@ -945,14 +1099,36 @@ func _cache_brush_regions(record: Dictionary, raster_size: Vector2i) -> void:
 	for value: Variant in regions:
 		if not value is Dictionary:
 			continue
-		var region: Dictionary = value
-		var region_id := str(region.get("id", ""))
-		var polygon := _region_polygon(region)
+		var polygon := _region_polygon(value)
+		var region_id := str(value.get("id", ""))
 		if region_id.is_empty() or polygon.is_empty():
 			continue
-		var mask := MASK_REGION_OPS.rasterize_polygon(polygon, raster_size)
-		if bool(mask.get("ok", false)):
-			_brush_region_masks.append({"id": region_id, "mask": mask, "polygon": polygon})
+		var roi := MASK_REGION_OPS._point_bounds(polygon, 0.0, raster_size)
+		var allocation := MASK_REGION_OPS._allocation_error(roi)
+		_brush_region_masks.append({"id": region_id, "mask": {}, "polygon": polygon,
+			"roi": roi, "image_size": raster_size, "error": str(allocation.get("message", ""))})
+
+
+func _eraser_operation(stroke_mask: Dictionary) -> Dictionary:
+	if not bool(stroke_mask.get("ok", false)):
+		return {"ok": false, "message": stroke_mask.get("message", "Invalid Eraser stroke")}
+	var affected: Array[Dictionary] = []
+	for entry: Dictionary in _brush_region_masks:
+		if not entry.roi.intersects(stroke_mask.roi):
+			continue
+		if not str(entry.error).is_empty():
+			return {"ok": false, "message": "Region %s: %s" % [entry.id, entry.error]}
+		if entry.mask.is_empty():
+			entry.mask = MASK_REGION_OPS.rasterize_polygon_mask(entry.polygon, entry.image_size)
+		if not bool(entry.mask.get("ok", false)):
+			return {"ok": false, "message": "Region %s: %s" % [entry.id, entry.mask.get("message", "Invalid geometry")]}
+		if not MASK_REGION_OPS.masks_overlap(entry.mask, stroke_mask):
+			continue
+		var result := MASK_REGION_OPS.combine_masks(entry.mask, stroke_mask, &"subtract")
+		if not bool(result.get("ok", false)):
+			return {"ok": false, "message": "Region %s: %s" % [entry.id, result.get("message", "Invalid mask")]}
+		affected.append({"id": entry.id, "mask": result})
+	return {"ok": true, "regions": affected}
 
 
 func _paint_operation(stroke_mask: Dictionary, preferred_region_id: String) -> Dictionary:
@@ -960,7 +1136,17 @@ func _paint_operation(stroke_mask: Dictionary, preferred_region_id: String) -> D
 		return {"ok": false, "message": stroke_mask.get("message", "Paint stroke is invalid")}
 	var overlaps: Array[Dictionary] = []
 	for entry: Dictionary in _brush_region_masks:
-		if MASK_REGION_OPS.masks_overlap(entry.get("mask", {}), stroke_mask):
+		var relevant: bool = entry.roi.intersects(stroke_mask.roi)
+		if not str(entry.error).is_empty() and (relevant or entry.id == preferred_region_id):
+			return {"ok": false, "message": "Region %s: %s" % [entry.id, entry.error]}
+		if not relevant:
+			continue
+		if entry.mask.is_empty():
+			entry.mask = MASK_REGION_OPS.rasterize_polygon_mask(entry.polygon, entry.image_size)
+			if not bool(entry.mask.get("ok", false)):
+				entry.error = str(entry.mask.get("message", "Region cannot be rasterized safely"))
+				return {"ok": false, "message": "Region %s: %s" % [entry.id, entry.error]}
+		if MASK_REGION_OPS.masks_overlap(entry.mask, stroke_mask):
 			overlaps.append(entry)
 	if overlaps.is_empty():
 		return {"ok": true, "mode": &"new", "target_id": "", "result": stroke_mask.duplicate(true)}
@@ -1000,29 +1186,51 @@ func _fill_at_point(
 		_push_session_overlay()
 		_report(stale_message)
 		return
-	var result := (
-		MASK_REGION_OPS.fill_enclosed(boundary, seed, 0.0)
-		if uses_working_mask
-		else MASK_REGION_OPS.find_enclosed_blank(boundary, seed, raster_size)
-	)
+	var result := FILL_SOLVER.solve(boundary, seed, raster_size, _fill_gap_radius, uses_working_mask)
+	if bool(result.get("requires_confirmation", false)):
+		if not uses_working_mask:
+			_session.begin(&"fill", frame, "", before)
+		_session.set_fill_repair(result, seed)
+		_push_session_overlay()
+		_report(str(result.message))
+		return
+	_accept_fill_result(result, frame, before, seed, image_size, uses_working_mask, boundary)
+
+
+func _confirm_fill_repair() -> PackedStringArray:
+	if not _session.has_fill_repair():
+		return PackedStringArray(["No Fill repair is awaiting confirmation"])
+	if _current_frame() != _session.frame or _record_for_frame(_session.frame) != _session.before:
+		var errors := PackedStringArray(["Fill refused: the frame changed during repair preview; cancel and retry"])
+		_report_errors(errors)
+		return errors
+	var seed: Vector2 = _session.cursor
+	var result: Dictionary = _session.take_fill_repair()
+	_accept_fill_result(result, _session.frame, _session.before, seed, _current_image_size(),
+		_session.has_working_mask(), _session.working_mask)
+	return PackedStringArray()
+
+
+func _accept_fill_result(result: Dictionary, frame: int, before: Dictionary, seed: Vector2,
+	image_size: Vector2, uses_working_mask: bool, boundary: Dictionary) -> void:
 	if StringName(result.get("status", &"")) == MASK_REGION_OPS.STATUS_SINGLE:
 		var polygon: PackedVector2Array = result.get("polygon", PackedVector2Array())
 		_await_class_for_polygon(frame, before, polygon, image_size, &"fill")
 		return
 	if uses_working_mask and StringName(result.get("status", &"")) == MASK_REGION_OPS.STATUS_HOLE:
-		var continue_message := "Filled one enclosed area; click the next blank area to complete this object"
+		var continue_message := "Filled one enclosed area; fill the next blank area (F, arrows, Enter). Ctrl+Z undoes this fill."
 		_session.set_working_mask(result, continue_message)
+		_session.set_working_cursor(seed)
 		_push_session_overlay()
 		_report(continue_message)
 		return
 	var message := "Fill refused: %s" % result.get("message", "No closed region was found around the selected blank area.")
 	if uses_working_mask:
-		_session.set_working_mask(boundary, "%s The Paint outline is still available; click another enclosed area or press Escape." % message)
-		_push_session_overlay()
-		_report(message)
-		return
-	_session.begin(&"fill", frame, "", before)
-	_session.set_invalid(PackedVector2Array([seed]), message)
+		_session.set_working_mask(boundary, "%s The Paint outline is still available; choose another seed or press Escape." % message)
+		_session.set_working_cursor(seed)
+	else:
+		_session.begin(&"fill", frame, "", before)
+		_session.set_invalid(PackedVector2Array([seed]), message)
 	_push_session_overlay()
 	_report(message)
 
@@ -1038,9 +1246,9 @@ func _record_boundary_mask(record: Dictionary, raster_size: Vector2i) -> Diction
 		var polygon := _region_polygon(value)
 		if polygon.is_empty():
 			continue
-		var mask := MASK_REGION_OPS.rasterize_polygon(polygon, raster_size)
+		var mask := MASK_REGION_OPS.rasterize_polygon_mask(polygon, raster_size)
 		if not bool(mask.get("ok", false)):
-			continue
+			return mask
 		combined = MASK_REGION_OPS.combine_masks(combined, mask, &"union")
 		if not bool(combined.get("ok", false)):
 			return combined
@@ -1129,7 +1337,16 @@ func _finish_pointer_drag(image_position: Vector2) -> void:
 
 func _begin_keyboard_spatial(tool_id: StringName) -> bool:
 	if _session.has_working_mask():
-		set_active_tool(tool_id)
+		if not set_active_tool(tool_id).is_empty():
+			return true
+		_keyboard_tool = &"fill"
+		_keyboard_frame = _session.frame
+		_keyboard_before = _session.before.duplicate(true)
+		_keyboard_region_id = ""
+		_drag_image_size = _current_image_size()
+		_keyboard_cursor = Vector2(_session.working_mask.roi.position) + Vector2(_session.working_mask.roi.size) * 0.5
+		_keyboard_points = PackedVector2Array([_keyboard_cursor])
+		_show_keyboard_fill_preview()
 		return true
 	cancel()
 	var frame := _current_frame()
@@ -1144,10 +1361,6 @@ func _begin_keyboard_spatial(tool_id: StringName) -> bool:
 	var region_id := _selected_region_id()
 	if not region_id.is_empty() and _find_region(record, region_id).is_empty():
 		region_id = ""
-	if tool_id == &"eraser":
-		if region_id.is_empty() or _find_region(record, region_id).is_empty():
-			_report("Select a region before using Eraser")
-			return true
 	var errors := set_active_tool(tool_id)
 	if not errors.is_empty():
 		return true
@@ -1173,6 +1386,8 @@ func _begin_keyboard_spatial(tool_id: StringName) -> bool:
 
 
 func _handle_keyboard_spatial_key(event: InputEventKey, key: Key) -> bool:
+	if key == KEY_TAB:
+		return false
 	if key == KEY_BACKSPACE and _keyboard_tool in [&"lasso", &"subtract"]:
 		if not _keyboard_points.is_empty():
 			_keyboard_points.remove_at(_keyboard_points.size() - 1)
@@ -1253,6 +1468,10 @@ func _show_keyboard_spatial_preview() -> void:
 
 
 func _show_keyboard_fill_preview() -> void:
+	if _session.has_working_mask():
+		_session.set_working_cursor(_keyboard_cursor)
+		_push_session_overlay()
+		return
 	_set_drawing_overlay(PackedVector2Array([_keyboard_cursor]), _keyboard_cursor, 0.0, EDIT_SESSION.WORKING_MASK_COLOR)
 
 
@@ -1475,6 +1694,22 @@ func _hit_test(record: Dictionary, point: Vector2) -> Dictionary:
 		var region: Dictionary = value
 		if REGION_GEOMETRY.contains(region, point):
 			return region.duplicate(true)
+	if not _is_live_object(_viewport) or not _viewport.has_method("get_image_transform"):
+		return {}
+	var transform: Variant = _viewport.get_image_transform()
+	if not transform is Object or not transform.has_method("image_to_viewport"):
+		return {}
+	var viewport_point: Vector2 = transform.image_to_viewport(point)
+	for index in range(regions.size() - 1, -1, -1):
+		if not regions[index] is Dictionary:
+			continue
+		var polygon := _region_polygon(regions[index])
+		for edge in range(polygon.size()):
+			var start: Vector2 = transform.image_to_viewport(polygon[edge])
+			var end: Vector2 = transform.image_to_viewport(polygon[(edge + 1) % polygon.size()])
+			var nearest := Geometry2D.get_closest_point_to_segment(viewport_point, start, end)
+			if nearest.distance_to(viewport_point) <= EDGE_TOLERANCE_VIEWPORT_PX:
+				return regions[index].duplicate(true)
 	return {}
 
 
@@ -1496,10 +1731,14 @@ func _region_handle_at(region: Dictionary, viewport_point: Vector2) -> int:
 		return -1
 	var center := rect.get_center()
 	var handles := [rect.position, Vector2(center.x, rect.position.y), Vector2(rect.end.x, rect.position.y), Vector2(rect.end.x, center.y), rect.end, Vector2(center.x, rect.end.y), Vector2(rect.position.x, rect.end.y), Vector2(rect.position.x, center.y)]
+	var nearest := -1
+	var distance := HANDLE_TOLERANCE_VIEWPORT_PX
 	for index in range(handles.size()):
-		if transform.image_to_viewport(handles[index]).distance_to(viewport_point) <= HANDLE_TOLERANCE_VIEWPORT_PX:
-			return index
-	return -1
+		var candidate_distance: float = transform.image_to_viewport(handles[index]).distance_to(viewport_point)
+		if candidate_distance <= distance:
+			distance = candidate_distance
+			nearest = index
+	return nearest
 
 
 func _selection_preview_path(point: Vector2) -> PackedVector2Array:
@@ -1675,6 +1914,7 @@ func _finish_lasso_candidate(points: PackedVector2Array, require_proximity: bool
 		points,
 		_drag_image_size,
 		require_proximity,
+		_lasso_mode in [&"anchors", &"anchor_press", &"invalid"],
 	)
 
 
@@ -1701,6 +1941,7 @@ func _finalize_lasso(
 	stroke: PackedVector2Array,
 	image_size: Vector2,
 	require_proximity: bool,
+	preserve_vertices := false,
 ) -> bool:
 	var retained_candidate := _editable_lasso_candidate(stroke)
 	if not POLYGON_OPS.points_fit_image(stroke, image_size):
@@ -1714,13 +1955,20 @@ func _finalize_lasso(
 		return false
 	var close_distance := _stroke_close_distance(stroke, require_proximity)
 	var ring := PackedVector2Array()
-	if close_distance >= 0.0:
+	if preserve_vertices:
+		# 点击轮廓使用原始控制点，不做简化或像素轮廓重建。
+		var exact := stroke.duplicate()
+		if exact.size() > 1 and exact[0].is_equal_approx(exact[-1]):
+			exact.remove_at(exact.size() - 1)
+		if POLYGON_OPS.validate_simple_polygon(exact):
+			ring = exact
+	elif close_distance >= 0.0:
 		ring = POLYGON_OPS.sanitize_freehand(
 			stroke,
 			FREEHAND_SIMPLIFY_TOLERANCE,
 			close_distance,
 		)
-	if ring.is_empty() and close_distance >= 0.0:
+	if ring.is_empty() and close_distance >= 0.0 and not preserve_vertices:
 		var solid := _solid_gesture_candidate(stroke, image_size)
 		if StringName(solid.get("status", &"")) == MASK_REGION_OPS.STATUS_SINGLE:
 			_await_class_for_polygon(frame, before, solid.get("polygon", PackedVector2Array()), image_size, &"lasso")
@@ -1925,11 +2173,7 @@ func _commit_brush_stroke(
 	image_size: Vector2,
 ) -> void:
 	var raster_size := Vector2i(roundi(image_size.x), roundi(image_size.y))
-	var stroke_result: Dictionary = MASK_REGION_OPS.rasterize_stroke_mask(
-		stroke,
-		_brush_radius_image_px,
-		raster_size,
-	)
+	var stroke_result := _buffered_stroke(stroke)
 	if not bool(stroke_result.get("ok", false)):
 		_show_brush_refusal(tool_id, frame, before, region_id, stroke, stroke_result, "%s refused: %s" % [_brush_label(tool_id), stroke_result.get("message", "invalid stroke")])
 		return
@@ -1970,20 +2214,39 @@ func _commit_brush_stroke(
 			image_size,
 		)
 		return
-	if region_id.is_empty():
-		_show_brush_refusal(tool_id, frame, before, region_id, stroke, stroke_result, "Select a region before using %s" % _brush_label(tool_id))
+	# 先验证整批候选，再提交一个命令，避免只擦除部分对象。
+	var operation := _eraser_operation(stroke_result)
+	if not bool(operation.get("ok", false)):
+		_show_brush_refusal(tool_id, frame, before, "", stroke, stroke_result, "Eraser refused: %s" % operation.message)
 		return
-	var region := _find_region(before, region_id)
-	var subject := _region_polygon(region)
-	if subject.is_empty():
-		_show_brush_refusal(tool_id, frame, before, region_id, stroke, stroke_result, "%s refused: selected region has no V1-safe geometry" % _brush_label(tool_id))
+	var after := before.duplicate(true)
+	for entry: Dictionary in operation.regions:
+		var candidate := MASK_REGION_OPS.to_v1_candidate(entry.mask)
+		var status := StringName(candidate.get("status", &""))
+		if status == MASK_REGION_OPS.STATUS_EMPTY:
+			for index in range(after.regions.size() - 1, -1, -1):
+				if after.regions[index].id == entry.id:
+					after.regions.remove_at(index)
+		elif status == MASK_REGION_OPS.STATUS_SINGLE:
+			var replacement = REPLACE_GEOMETRY_COMMAND.new(frame, after, entry.id, candidate.polygon, image_size)
+			if not replacement._construction_errors.is_empty():
+				_show_brush_refusal(tool_id, frame, before, "", stroke, stroke_result, "Eraser refused: %s" % replacement._construction_errors[0])
+				return
+			after = replacement.after
+		else:
+			_show_brush_refusal(tool_id, frame, before, "", stroke, stroke_result, "Eraser refused for region %s: %s" % [entry.id, candidate.get("message", "Invalid geometry")])
+			return
+	if _store.get_corrected_record(frame) != before:
+		_show_brush_refusal(tool_id, frame, before, "", stroke, stroke_result, "Eraser refused: frame changed during the stroke; start a new stroke")
 		return
-	var subject_result: Dictionary = MASK_REGION_OPS.rasterize_polygon(subject, raster_size)
-	if not subject_result.get("ok", false):
-		_show_brush_refusal(tool_id, frame, before, region_id, stroke, subject_result, "%s refused: selected region could not be rasterized safely" % _brush_label(tool_id))
+	_clear_transient()
+	if after == before:
+		_report("Eraser did not touch any region")
+		_refresh_visible_frame(frame)
 		return
-	var result: Dictionary = MASK_REGION_OPS.combine(subject_result, stroke_result, &"subtract")
-	_commit_selected_brush_result(tool_id, frame, before, region_id, subject, stroke, result, image_size)
+	if _execute(REPLACE_FRAME_COMMAND.new(frame, before, after), frame).is_empty():
+		_validate_current_selection()
+
 
 func _commit_selected_brush_result(
 	tool_id: StringName,
@@ -2241,12 +2504,18 @@ func _set_geometry_preview_overlay(
 
 func _push_session_overlay() -> void:
 	if _is_live_object(_viewport) and _viewport.has_method("set_edit_overlay"):
-		_viewport.set_edit_overlay(_session.overlay_snapshot())
+		var overlay: Dictionary = _session.overlay_snapshot()
+		if _active_tool == &"lasso" and not _session.has_pending_class_assignment() and _lasso_mode in [&"anchors", &"anchor_press", &"vertex_drag", &"invalid"]:
+			overlay["vertex_points"] = _lasso_anchors.duplicate()
+			overlay["active_vertex"] = _lasso_active_anchor
+		_viewport.set_edit_overlay(overlay)
 	_emit_edit_state()
 
 
 func _clear_transient() -> void:
-	var state_changed: bool = _session.phase != EDIT_SESSION.IDLE
+	var state_changed: bool = _session.phase != EDIT_SESSION.IDLE or _vertex_editor.dragging
+	_vertex_editor.clear()
+	_vertex_mode_requested = false
 	_add_pointer_mode = false
 	_clear_pointer_drag_state()
 	_keyboard_box = []
@@ -2255,6 +2524,8 @@ func _clear_transient() -> void:
 	_lasso_press_position = Vector2.ZERO
 	_lasso_release_suppressed = false
 	_lasso_invalid_message = ""
+	_lasso_active_anchor = -1
+	_lasso_vertex_moved = false
 	_keyboard_tool = &""
 	_keyboard_cursor = Vector2.ZERO
 	_keyboard_points = PackedVector2Array()
@@ -2278,8 +2549,10 @@ func _clear_pointer_drag_state() -> void:
 	_resize_handle = -1
 	_keyboard_box = []
 	_stroke_points = PackedVector2Array()
-	_brush_subject_mask = {}
 	_brush_region_masks.clear()
+	_brush_buffer.reset()
+	_buffered_points = 0
+	_brush_error = ""
 
 
 func _is_pointer_drag() -> bool:
@@ -2288,7 +2561,8 @@ func _is_pointer_drag() -> bool:
 
 func _has_transient_edit() -> bool:
 	return (
-		_session.phase not in [EDIT_SESSION.IDLE, EDIT_SESSION.BRUSH_CURSOR]
+		_vertex_editor.dragging
+		or _session.phase not in [EDIT_SESSION.IDLE, EDIT_SESSION.BRUSH_CURSOR]
 		or not _drag_kind.is_empty()
 		or not _lasso_mode.is_empty()
 		or not _keyboard_tool.is_empty()

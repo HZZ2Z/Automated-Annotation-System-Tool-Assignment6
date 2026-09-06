@@ -82,20 +82,35 @@ Renderer 只持有短期绘制快照，不拥有标注真值。`AnnotationViewpo
 
 `activate` 的 context 包含 `store`、`history`、`viewport`、`get_current_frame`、`get_selected_region`、`set_selected_region`、`status` 和 `taxonomy`。候选插件必须先验证完整依赖，失败时不接管当前会话；`deactivate` 必须幂等并断开自己建立的信号。
 
-工具描述字段为 `id`、`node_name`、`label`、`implemented`、`tooltip`、`icon_path`，可选 `presentation_text`、唯一的 `default: true` 与 `options`。每个 `options` 条目当前使用 `float_range`：`id`、`label`、`kind`、有限的 `min`/`max`/`step`/`default`，以及可选的 `shared_key`。ToolPanel 只校验并呈现描述，不硬编码具体工具 ID；它发出 `tool_option_changed(tool_id, option_id, value)`，Main 仍通过既有 `invoke` 边界转交。Paint 与 Eraser 以 `brush_radius` / `shared_key: brush_radius` 共用 1–40 image-px 半径，默认 8 px。现有插件通过 `invoke` 支持以下动作：
+工具描述字段为 `id`、`node_name`、`label`、`implemented`、`tooltip`、`icon_path`，可选 `presentation_text`、唯一的 `default: true` 与 `options`。每个 `options` 条目当前使用 `float_range`：`id`、`label`、`kind`、有限的 `min`/`max`/`step`/`default`，以及可选的 `shared_key`。ToolPanel 按描述创建工具按钮和选项，发出 `tool_option_changed(tool_id, option_id, value)`，Main 经既有 `invoke` 边界转交。Paint/Eraser 以 `brush_radius` / `shared_key: brush_radius` 共用 1–40 image-px 半径，默认 8 px；Fill 的 `fill_gap_radius` 仅接受整数 0/1/2/3 image px，默认 1。现有插件通过 `invoke` 支持以下动作：
 
 | action ID | payload | 行为 |
 |---|---|---|
 | `begin_add_box` | `{}` | 开始加框 |
-| `relabel_selected` | `{"class": String}` | 重分类 |
+| `relabel_selected` | `{"class": String, "kind": String}`，kind 可省略 | 重分类；省略 kind 时保留原值 |
 | `set_selected_track_id` | `{"track_id": String/null}` | 修改 track ID |
 | `set_selected_fill` | `{"filled": bool}` | 修改显示填充 |
 | `set_selected_geometry` | `{"box": Array}` | 修改 box |
 | `delete_selected` | `{}` | 删除选中区域 |
 | `set_tool_option` | `{"tool_id": StringName, "option_id": StringName, "value": Variant}` | 设置已声明的工具选项；不支持、非有限或越界值拒绝且保留原值 |
 | `range_propagate` | `{"keyframe": int, "start_frame": int, "end_frame": int, "mode": "overwrite"/"merge"}` | 将关键帧区域传播到连续范围 |
+| `confirm_pending_region` | `{"candidate_token": int, "class": String, "kind": String}` | 校验冻结的帧与候选身份，完成新对象类别后提交一条命令 |
+| `cancel_pending_region` | `{"candidate_token": int}` | 放弃对应的待分类新对象 |
+| `confirm_fill_repair` | `{}` | 接受当前修补候选；仍有孔洞时继续 WorkingMask，实心单环进入待分类 |
+| `cancel_fill_repair` | `{}` | 恢复修补预览前的草稿 |
+| `undo_draft` / `redo_draft` | `{}` | WorkingMask 局部历史；没有可用项时返回说明，不落到全局历史 |
 
-`basic_edit_tools` 的公共描述子顺序为 Add Box、Subtract、Lasso、Fill、Paint、Eraser 和 Select。Close Gaps、Region Growing 和 Live Wire 不再是 descriptor、capability 或快捷键；`C` / `G` / `I` 保持未绑定。`delete` 仍是 Select 的 Delete/Backspace whole-region path 能力，而不是工具按钮。Paint 的普通单环结果可新建对象；闭合空心结果则保留为临时 Working Mask，Fill 逐个合并点击的封闭孔洞，全部填完后才产生一个待分类实心 polygon。Eraser 必须先选中 region。Subtract 有选区时修改单区，无选区时对所有相交 regions 做一次原子整帧替换，允许整区删除；任一剩余几何违反 V1 则全部拒绝。选中任一笔刷就会发布跟随鼠标的空心半径圆；两者在 motion 中发布结果 raw-mask preview，不包含轨迹或中心点。Lasso/Subtract 近距离松手会自动闭合，Space 用于强制闭合；多闭区轨迹经局部 mask 提取后仍只提交 V1 可表达的实心单环。viewport pan 只使用鼠标中键，右键由 Main 清除选区并切回 Select。
+`basic_edit_tools` 的公共描述子顺序为 Add Box、Subtract、Lasso、Fill、Paint、Eraser 和 Select。Close Gaps、Region Growing 和 Live Wire 不再是 descriptor、capability 或快捷键；`C/E/G/I` 保持未绑定。Select 用最上层内部命中和 6 viewport-px 边缘回退选择 region，八个 resize handles 在 8 viewport px 内取最近者；空闲时 Delete/Backspace 整区删除、Escape 清选区。Lasso/Subtract 按 12 viewport-px 首尾距离自动闭合，Space 强制闭合；无选区 Subtract 原子修改所有相交 regions，允许空结果整区删除。
+
+Lasso 逐点绘制时就显示可拖动的原始点击点；确认新对象后直接继续顶点编辑，选中已有 polygon 时也显示其真实轮廓点，支持拖动、双击边插点、Delete/Backspace 删点、方括号切点、1/5/10 px 方向键微调及 Insert 插入边中点。`polygon_vertex_editor.gd` 管理局部交互；overlay 的 `vertex_points: PackedVector2Array` 与 `active_vertex: int` 描述控制点。`vertex_edit_region_id: String` 经 viewport 转交给 renderer 的可选 `set_vertex_edit_region_id()`，仅隐藏该对象的包围框缩放柄；对象填色和标签仍显示。`basic_edit_tools.refresh_edit_overlay()` 是可选的显示刷新钩子，Main 在选择及历史更新后通过 `has_method` 探测调用；未修改 EditStage 的必需接口或 Plugin API 版本。
+
+Paint/Eraser 的 motion 预览消费 `BrushStrokeBuffer` 的增量圆头线段 mask；已有目标只按 ROI 重合需求光栅化，拒绝保留目标 ID，不能降级为新建。`MaskRegionOps` 的 raw-mask 合并和重合检测不执行轮廓提取；提交时才验证单环、holes、多连通分量和边界。像素轮廓最多尝试 0.5 image-px 的安全简化，超过 256 顶点或验证失败保留原轮廓。Eraser 不受选区限制，整笔原子修改或删除全部相交 region。批量预览附带 `mask_previews: Array[Dictionary]` 和 `suppress_region_ids: PackedStringArray`；单个目标继续提供 `suppress_region_id`，`mask_preview` 为首个目标。renderer 可实现 `set_suppressed_region_ids`，结束或取消时传空列表恢复显示。
+
+Fill 由纯函数 `FillRegionSolver.solve` 先严格求包含种子的封闭空白；开放时按选项执行方形核闭运算，且只保留与该填充区域相邻的修补连通块。图像/ROI 边界不补作轮廓，所有局部 mask 受 1,048,576 像素上限约束。`EditSession` 保存 frame/before、WorkingMask、种子及候选前快照；绿色填充和粉色修补像素只发布给 EditOverlay。Main/ToolPanel 的 Apply fill/Cancel 与键盘 Enter/Escape 调用相同 confirm/cancel actions，失败保留草稿与 Store。
+
+`basic_edit_tools.get_edit_state()` 返回 `phase`、`gesture_active`、`navigation_blocked`、`draft_active`、`draft_history`、`fill_repair` 和 `message`，供 Main 路由局部历史和修补按钮。WorkingMask 中 F 将种子初始化到 ROI 中心，方向键为 1、Shift 为 5、Ctrl+Shift 为 10 image px，Enter 可逐孔继续。草稿差异历史最多 200 项、32 MiB；最终类别确认产生一条全局命令。Main 按文本焦点、活动草稿、全局历史分配 Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y。Main 的 `R` 仅在 `gesture_active=false` 且空闲时打开选中对象的类别窗口；list/free-text 重标注由 AnnotationSidebar 或画布 `R` 打开 ClassAssignmentDialog 并发出 `relabel_selected`；独立 Inspector 组件仍可消费该 action，但不在当前 Main 焦点树中。
+
+编辑命令的内部契约为 `apply(store) -> PackedStringArray` 与 `revert(store) -> PackedStringArray`，均须在验证通过后原子修改 Store。`CommandHistory.try_undo(store)` 检查 revert 结果，失败保持两侧栈并把错误交给 Main；`undo(store) -> bool` 保留为包装。execute/redo 同样在成功后才移动栈，全局容量 200。范围恢复使用 `AnnotationStore.restore_corrected_records`，整批记录与传播日志同时提交后才发出变更信号。这些命令/参考插件能力没有改变 Stage V1 的必需方法签名或 Model Output V1。
 
 ### FeedbackStage
 

@@ -111,7 +111,7 @@ func _run_tests() -> void:
 	_test_subtract_command_failure_retains_retryable_transaction()
 	_test_brush_radius_contract_and_distinct_overlay_colors()
 	_test_paint_unions_one_brush_stroke()
-	_test_eraser_requires_an_explicit_selection()
+	_test_eraser_without_selection()
 	_test_eraser_subtracts_and_refuses_v1_inexpressible_results()
 	if _failures.is_empty():
 		print("PASS: advanced edit tools")
@@ -1227,17 +1227,62 @@ func _test_close_gaps_replaces_one_selected_region_with_round_trip_history() -> 
 	_expect_equal(fixture.store.get_corrected_record(0), expected, "selected Close Gaps redo should restore the independent replacement record")
 
 
-func _test_eraser_requires_an_explicit_selection() -> void:
-	var fixture := _base_fixture()
-	if not _activate_tool(fixture, &"eraser", "unselected Eraser"):
-		return
-	var before: Dictionary = fixture.store.get_corrected_record(0)
-	_pointer(fixture.plugin, true, Vector2(15, 15), fixture.viewport)
-	_expect(fixture.statuses.has("Select a region before using Eraser"), "Eraser without selection should explain the selection requirement")
-	_expect_equal(_overlay(fixture).get("phase"), &"brush_cursor", "Eraser without selection should retain its idle brush cursor")
-	_expect_equal(fixture.selected[0], "", "Eraser must not infer selection from its press location")
-	_expect_equal(fixture.store.get_corrected_record(0), before, "unselected Eraser must preserve Store")
-	_expect_equal(fixture.history.get_undo_count(), 0, "unselected Eraser must preserve history")
+func _test_eraser_without_selection() -> void:
+	for selection: String in ["", "unrelated"]:
+		var record := _record()
+		record.regions.append({"id": "box-2", "class": "clip", "kind": "instrument", "box": [40, 10, 20, 15]})
+		record.regions.append({"id": "unrelated", "class": "clip", "kind": "instrument", "box": [75, 50, 10, 10]})
+		var fixture := _fixture(record, _flat_image())
+		fixture.selected[0] = selection
+		if not _activate_tool(fixture, &"eraser", "unrestricted Eraser"):
+			continue
+		fixture.plugin.invoke(&"set_tool_option", {"option_id": &"brush_radius", "value": 3.0})
+		var before: Dictionary = fixture.store.get_corrected_record(0)
+		_gesture(fixture.plugin, fixture.viewport, [Vector2(8, 10), Vector2(62, 10)])
+		var after: Dictionary = fixture.store.get_corrected_record(0)
+		for id: String in ["box-1", "box-2"]:
+			_expect(_absolute_area(_region_polygon(after, id)) < _absolute_area(_region_polygon(before, id)), "Eraser touches every intersected region regardless of selection")
+		_expect_equal(_find_region(after, "unrelated"), _find_region(before, "unrelated"), "untouched selection stays unchanged")
+		_expect_equal(fixture.history.get_undo_count(), 1, "batch Eraser is one command")
+		_expect(fixture.history.undo(fixture.store), "batch undo succeeds")
+		_expect_equal(fixture.store.get_corrected_record(0), before, "batch undo restores all regions")
+		_expect(fixture.history.redo(fixture.store).is_empty(), "batch redo succeeds")
+		_expect_equal(fixture.store.get_corrected_record(0), after, "batch redo restores all edits")
+	var batch_record := _record()
+	batch_record.regions.append({"id": "hole-target", "class": "clip", "kind": "instrument", "box": [5, 5, 30, 30]})
+	var rejected := _fixture(batch_record, _flat_image())
+	if _activate_tool(rejected, &"eraser", "atomic invalid batch"):
+		rejected.plugin.invoke(&"set_tool_option", {"option_id": &"brush_radius", "value": 2.0})
+		var original: Dictionary = rejected.store.get_corrected_record(0)
+		_pointer(rejected.plugin, true, Vector2(10, 17), rejected.viewport)
+		var preview := _overlay(rejected)
+		_expect_equal(preview.get("suppress_region_ids"), PackedStringArray(["box-1", "hole-target"]), "batch preview hides every original target")
+		_expect_equal(preview.get("mask_previews", []).size(), 2, "batch preview carries independent masks")
+		_pointer(rejected.plugin, false, Vector2(10, 17), rejected.viewport)
+		_expect_equal(rejected.store.get_corrected_record(0), original, "one invalid target refuses the whole batch")
+		_expect_equal(rejected.history.get_undo_count(), 0, "invalid batch has no history")
+		_expect(str(_overlay(rejected).get("message", "")).contains("hole-target"), "batch refusal identifies the invalid region")
+	var untouched := _base_fixture()
+	if _activate_tool(untouched, &"eraser", "no hit"):
+		_gesture(untouched.plugin, untouched.viewport, [Vector2(90, 70)])
+		_expect_equal(untouched.history.get_undo_count(), 0, "empty-space erasure has no history")
+	var keyboard := _base_fixture()
+	if _activate_tool(keyboard, &"select", "unselected keyboard Eraser"):
+		keyboard.plugin.handle_key(_key(KEY_P, true))
+		_expect_equal(keyboard.plugin.get("_keyboard_tool"), &"eraser", "Shift+P starts without selection")
+		keyboard.plugin.handle_key(_key(KEY_LEFT, true, true))
+		keyboard.plugin.handle_key(_key(KEY_LEFT, true, true))
+		keyboard.plugin.handle_key(_key(KEY_UP, true, true))
+		keyboard.plugin.handle_key(_key(KEY_UP, true, true))
+		keyboard.plugin.handle_key(_key(KEY_ENTER))
+		_expect_equal(keyboard.history.get_undo_count(), 1, "unselected keyboard stroke commits an edit")
+
+	var erased := _base_fixture()
+	if _activate_tool(erased, &"eraser", "full erasure"):
+		erased.plugin.invoke(&"set_tool_option", {"option_id": &"brush_radius", "value": 40.0})
+		_gesture(erased.plugin, erased.viewport, [Vector2(20, 17)])
+		_expect(_find_region(erased.store.get_corrected_record(0), "box-1").is_empty(), "full Eraser removes the region")
+		_expect_equal(erased.history.get_undo_count(), 1, "full Eraser is undoable")
 
 
 func _test_eraser_subtracts_and_refuses_v1_inexpressible_results() -> void:
@@ -1257,7 +1302,6 @@ func _test_eraser_subtracts_and_refuses_v1_inexpressible_results() -> void:
 		_expect_equal(idle_cursor.get("cursor"), Vector2(29, 28), "restored Eraser cursor should stay at the release point")
 
 	var refusal_cases := [
-		{"name": "full erasure", "radius": 40.0, "points": [Vector2(20, 17)]},
 		{"name": "hole", "radius": 3.0, "points": [Vector2(20, 17)]},
 		{"name": "multiple components", "radius": 1.0, "points": [Vector2(20, 5), Vector2(20, 35)]},
 	]

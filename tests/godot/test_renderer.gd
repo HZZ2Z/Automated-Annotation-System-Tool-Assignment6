@@ -178,6 +178,10 @@ static func _test_brush_preview_suppresses_only_committed_drawing(support) -> vo
 	var suppressed_stats: Dictionary = renderer.get_cache_stats()
 	support.expect_equal(suppressed_stats.get("geometry_rebuilds"), before.get("geometry_rebuilds"),
 		"transient brush suppression must reuse parsed geometry")
+	renderer.set_suppressed_region_ids(PackedStringArray(["box", "concave"]))
+	support.expect_equal(renderer.get_overlay_descriptions().size(), 0, "batch preview hides every affected region")
+	renderer.set_suppressed_region_ids(PackedStringArray())
+	support.expect_equal(renderer.get_overlay_descriptions().size(), 2, "cancelling batch preview restores all regions")
 	renderer.set_suppressed_region_id("")
 	support.expect(not _command_for_id(renderer.get_overlay_descriptions(), "box").is_empty(),
 		"clearing a brush preview should restore the committed region")

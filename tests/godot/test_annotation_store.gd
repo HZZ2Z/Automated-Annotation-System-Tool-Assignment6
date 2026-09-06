@@ -32,9 +32,10 @@ class ChangeClassCommand extends RefCounted:
 			apply_count += 1
 		return errors
 
-	func revert(store) -> void:
-		if not previous.is_empty():
-			store.replace_corrected_record(frame, previous)
+	func revert(store) -> PackedStringArray:
+		if previous.is_empty():
+			return PackedStringArray(["test command has no previous record"])
+		return store.replace_corrected_record(frame, previous)
 
 
 class ApplyOnlyCommand extends RefCounted:
@@ -57,6 +58,7 @@ static func run(support: TestSupport) -> void:
 	_test_load_and_public_read_immutability(store_script, support)
 	_test_transactional_load(store_script, support)
 	_test_transactional_replace_and_dirty_frames(store_script, support)
+	_test_transactional_restore_and_provenance(store_script, support)
 	_test_snapshot_and_digest(store_script, support)
 	_test_command_base(command_script, store_script, support)
 	_test_history_requires_reversible_commands(history_script, store_script, support)
@@ -172,6 +174,47 @@ static func _test_transactional_replace_and_dirty_frames(store_script, support: 
 	support.expect(store.get_dirty_frames().is_empty(), "clear_dirty should remove all dirty frames")
 
 
+static func _test_transactional_restore_and_provenance(store_script, support: TestSupport) -> void:
+	var store = store_script.new()
+	store.load_model_records(_two_records())
+	var original: Array = store.snapshot_corrected()
+	var digest: String = store.model_digest()
+	var zero: Dictionary = store.get_corrected_record(0)
+	var two: Dictionary = store.get_corrected_record(2)
+	zero.regions[0]["class"] = "batch-zero"
+	two.regions[0]["class"] = "batch-two"
+	store.replace_corrected_records({0: zero, 2: two}, {"type": "range_propagate"})
+	var before: Array = store.snapshot_corrected()
+	var operations: Array = store.snapshot_batch_operations()
+	store.clear_dirty()
+	var notifications: Array = []
+	var on_replaced := func(frames): notifications.append({
+		"frames": frames,
+		"records": store.snapshot_corrected(),
+		"operations": store.snapshot_batch_operations(),
+	})
+	store.corrected_records_replaced.connect(on_replaced)
+	var invalid: Dictionary = original[1].duplicate(true)
+	invalid.regions[0].erase("class")
+	var errors: Variant = store.call("restore_corrected_records", {0: original[0], 2: invalid}, 0)
+	support.expect(errors is PackedStringArray, "batch restoration must return checked errors")
+	if errors is PackedStringArray:
+		support.expect(_contains_path_prefix(errors, "replacements.2.regions.0.class"), "failed restore should name its failing frame and schema field")
+	support.expect_equal(store.snapshot_corrected(), before, "invalid later restoration must not partly restore earlier frames")
+	support.expect_equal(store.snapshot_batch_operations(), operations, "failed restoration must retain batch provenance")
+	support.expect(store.get_dirty_frames().is_empty(), "failed restoration must not mark any frame dirty")
+	support.expect(notifications.is_empty(), "failed restoration must not notify observers")
+
+	var result: Variant = store.call("restore_corrected_records", {2: original[1], 0: original[0]}, 0)
+	support.expect_equal(result, PackedStringArray(), "valid restoration should return checked success")
+	support.expect_equal(store.snapshot_corrected(), original, "successful restoration should restore every record")
+	support.expect_equal(store.snapshot_batch_operations(), [], "successful restoration should restore batch provenance")
+	support.expect_equal(notifications, [{"frames": PackedInt64Array([0, 2]), "records": original, "operations": []}], "restore observers should see records and provenance committed together")
+	support.expect_equal(store.get_dirty_frames(), PackedInt64Array([0, 2]), "successful restoration should mark every restored frame dirty")
+	support.expect_equal(store.model_digest(), digest, "restoration must preserve immutable model records")
+	store.corrected_records_replaced.disconnect(on_replaced)
+
+
 static func _test_snapshot_and_digest(store_script, support: TestSupport) -> void:
 	var records := _two_records()
 	var store = store_script.new()
@@ -210,7 +253,10 @@ static func _test_command_base(command_script, store_script, support: TestSuppor
 	store.load_model_records(_two_records())
 	var command = command_script.new()
 	support.expect(not command.apply(store).is_empty(), "base edit command should report unimplemented apply")
-	command.revert(store)
+	var result: Variant = command.call("revert", store)
+	support.expect(result is PackedStringArray, "base edit command should return checked revert errors")
+	if result is PackedStringArray:
+		support.expect(not result.is_empty(), "base edit command should report unimplemented revert")
 
 
 static func _test_history_requires_reversible_commands(history_script, store_script, support: TestSupport) -> void:

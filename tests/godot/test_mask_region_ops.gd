@@ -1,6 +1,8 @@
 extends RefCounted
 
 const MASK_OPS := preload("res://client/domain/mask_region_ops.gd")
+const POLYGON_OPS := preload("res://client/domain/polygon_ops.gd")
+const IMAGE_ALGORITHMS := preload("res://client/domain/image_region_algorithms.gd")
 const RESULT_KEYS := ["mask", "message", "ok", "polygon", "roi", "status"]
 
 
@@ -13,6 +15,93 @@ static func run(support) -> void:
 	_test_close_gaps_is_local_bounded_and_reports_no_op(support)
 	_test_clipping_validation_and_allocation_limit(support)
 	_test_v1_conversion_uses_a_typed_single_ring(support)
+	_test_raw_polygon_mask_skips_polygonization(support)
+	_test_raw_boolean_bytes_and_offsets(support)
+	_test_pixel_contour_simplification_keeps_topology(support)
+
+
+static func _test_pixel_contour_simplification_keeps_topology(support) -> void:
+	var raw := MASK_OPS.rasterize_stroke_mask(PackedVector2Array([Vector2(20, 20), Vector2(30, 25)]), 8.0, Vector2i(80, 80))
+	var mask: PackedByteArray = raw["mask"]
+	var roi: Rect2i = raw["roi"]
+	var original: Dictionary = IMAGE_ALGORITHMS.polygonize_mask(mask, roi.size, roi.position)
+	var original_ring := PackedVector2Array()
+	for point: Array in original["polygon"]:
+		original_ring.append(Vector2(point[0], point[1]))
+	var candidate: Dictionary = MASK_OPS.to_v1_candidate(raw)
+	var simplified: PackedVector2Array = candidate["polygon"]
+	support.expect(simplified.size() < original_ring.size(), "rounded pixel contour removes safe redundant corners")
+	support.expect(POLYGON_OPS.validate_simple_polygon(simplified), "simplified contour remains one nondegenerate simple ring")
+	support.expect_equal(candidate["mask"], mask, "simplification leaves raw source mask unchanged")
+	for point in original_ring:
+		var distance := INF
+		for index in range(simplified.size()):
+			distance = minf(distance, point.distance_to(Geometry2D.get_closest_point_to_segment(point, simplified[index], simplified[(index + 1) % simplified.size()])))
+		support.expect(distance <= 0.50001, "every original boundary vertex stays within half an image pixel")
+	var thin := PackedByteArray([
+		1, 1, 0, 0, 0, 1, 1,
+		1, 1, 1, 1, 1, 1, 1,
+		1, 1, 0, 0, 0, 1, 1,
+	])
+	var thin_candidate: Dictionary = MASK_OPS.to_v1_candidate({"roi": Rect2i(0, 0, 7, 3), "mask": thin})
+	support.expect(thin_candidate["ok"], "one-pixel connector remains one valid component")
+	var thin_raster: Dictionary = MASK_OPS.new().call("rasterize_polygon_mask", thin_candidate["polygon"], Vector2i(7, 3))
+	support.expect_equal(thin_raster["mask"], thin, "narrow connected fixture retains every literal pixel")
+	var unit: Dictionary = MASK_OPS.to_v1_candidate({"roi": Rect2i(3, 4, 1, 1), "mask": PackedByteArray([1])})
+	support.expect_equal(unit["polygon"], _box_ring(3, 4, 1, 1), "unit square falls back to exact four-corner geometry")
+
+
+static func _test_raw_polygon_mask_skips_polygonization(support) -> void:
+	var ops = MASK_OPS.new()
+	support.expect(ops.has_method("rasterize_polygon_mask"), "raw polygon mask API exists for previews without polygonization")
+	if not ops.has_method("rasterize_polygon_mask"):
+		return
+	var points := _box_ring(10, 10, 4, 3)
+	var raw: Dictionary = ops.call("rasterize_polygon_mask", points, Vector2i(40, 30))
+	_expect_contract(raw, support, "raw polygon raster")
+	support.expect(raw["ok"], "valid polygon produces raw mask")
+	support.expect_equal(raw["roi"], Rect2i(8, 8, 8, 7), "raw polygon retains padded bounds")
+	support.expect_equal(_selected_count(raw), 12, "raw rectangle contains twelve hand-counted pixels")
+	support.expect_equal(raw["polygon"], PackedVector2Array(), "raw result has no eager polygon contour")
+	var candidate: Dictionary = MASK_OPS.rasterize_polygon(points, Vector2i(40, 30))
+	support.expect_equal(raw["mask"], candidate["mask"], "existing polygon API retains identical raw bytes")
+	support.expect_equal(candidate["polygon"], points, "existing polygon API still converts to V1 geometry")
+	var invalid: Dictionary = ops.call("rasterize_polygon_mask", points, Vector2i.ZERO)
+	support.expect_equal(invalid["status"], &"invalid", "raw API validates image dimensions")
+	var too_large: Dictionary = ops.call("rasterize_polygon_mask", _box_ring(0, 0, 1200, 1000), Vector2i(2048, 2048))
+	support.expect_equal(too_large["status"], &"roi_too_large", "raw API enforces allocation cap before preview")
+
+
+static func _test_raw_boolean_bytes_and_offsets(support) -> void:
+	var left := {"roi": Rect2i(2, 3, 3, 2), "mask": PackedByteArray([1, 0, 7, 0, 255, 1])}
+	var right := {"roi": Rect2i(3, 2, 3, 3), "mask": PackedByteArray([2, 0, 3, 4, 5, 0, 0, 6, 8])}
+	var frozen_left: Dictionary = left.duplicate(true)
+	var frozen_right: Dictionary = right.duplicate(true)
+	var united: Dictionary = MASK_OPS.combine_masks(left, right, &"union")
+	support.expect_equal(united["roi"], Rect2i(2, 2, 4, 3), "raw union preserves both offset ROI extents")
+	support.expect_equal(united["mask"], PackedByteArray([0, 2, 0, 3, 1, 4, 7, 0, 0, 255, 6, 8]), "union takes literal maximum nonbinary byte values")
+	var subtracted: Dictionary = MASK_OPS.combine_masks(left, right, &"subtract")
+	support.expect_equal(subtracted["roi"], united["roi"], "subtract retains merged ROI contract")
+	support.expect_equal(subtracted["mask"], PackedByteArray([0, 0, 0, 0, 1, 0, 0, 0, 0, 255, 0, 0]), "subtract clears only right foreground in literal offset fixture")
+	support.expect_equal(left, frozen_left, "boolean operations do not mutate left source")
+	support.expect_equal(right, frozen_right, "boolean operations do not mutate right source")
+	support.expect(MASK_OPS.masks_overlap(left, right), "overlap uses shared image coordinates")
+	var far := {"roi": Rect2i(8, 7, 1, 1), "mask": PackedByteArray([255])}
+	var far_subtract: Dictionary = MASK_OPS.combine_masks(left, far, &"subtract")
+	support.expect_equal(far_subtract["roi"], Rect2i(2, 3, 7, 5), "disjoint subtract still preserves original merged ROI")
+	support.expect_equal(_selected_count(far_subtract), 4, "disjoint subtract keeps every source foreground byte")
+	support.expect(not MASK_OPS.masks_overlap(left, far), "disjoint ROIs have no overlap")
+	var blank := {"roi": left["roi"], "mask": PackedByteArray([0, 1, 0, 1, 0, 0])}
+	support.expect(not MASK_OPS.masks_overlap(left, blank), "intersecting ROI alone is not foreground overlap")
+	var empty := {"roi": Rect2i(), "mask": PackedByteArray()}
+	for operation in [&"union", &"subtract"]:
+		var result: Dictionary = MASK_OPS.combine_masks(left, empty, operation)
+		support.expect_equal(result["roi"], left["roi"], "empty right preserves left ROI")
+		support.expect_equal(result["mask"], left["mask"], "empty right preserves all byte values")
+	var only_right: Dictionary = MASK_OPS.combine_masks(empty, right, &"union")
+	support.expect_equal(only_right["mask"], right["mask"], "empty left union copies right bytes")
+	var empty_subtract: Dictionary = MASK_OPS.combine_masks(empty, right, &"subtract")
+	support.expect_equal(_selected_count(empty_subtract), 0, "empty left subtraction cannot invent right foreground")
 
 
 static func _test_polygon_rasterization_is_bounded_and_isolated(support) -> void:

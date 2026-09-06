@@ -1,59 +1,134 @@
 {
+  "$comment": "本文件定义单张图像或单帧的模型标注合同；JSONL 文件的每一行分别按此合同校验。$comment 是开发者注释，description 是数据含义说明，二者均不新增校验限制，也无需写入实际标注数据。$schema 指定 JSON Schema 标准版本；$id 标识本合同；title 是便于阅读的标题。数值类型均不接受布尔值或数字字符串；integer 按数学整数值判断，例如 1.0 也属于整数。标准 JSON 不允许 NaN 或 Infinity，项目校验器也显式拒绝非有限数。",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "model_output_v1.schema.json",
   "title": "Model Output V1 Per-Image Annotation Record",
+  "description": "一条记录描述一个帧源中的一帧及其全部标注区域。type: object 要求记录是 JSON 对象；additionalProperties: false 禁止顶层出现 properties 未声明的字段。required 列出必须提供的四个字段；time_s 可省略。properties 仅定义各字段存在时的要求，本身不代表必填。",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "source", "frame", "regions"],
   "properties": {
-    "schema_version": {"type": "integer", "const": 1},
-    "source": {"type": "string", "minLength": 1},
-    "frame": {"type": "integer", "minimum": 0},
-    "time_s": {"type": "number", "minimum": 0},
+    "schema_version": {
+      "description": "数据合同版本。type: integer ；const: 1 要求值固定为数字 1，不接受字符串或其他版本号。",
+      "type": "integer",
+      "const": 1
+    },
+    "source": {
+      "description": "帧源标识，例如 sample_v1，用于说明这一帧属于哪个图像或视频来源。type: string 要求字符串；minLength: 1 禁止空字符串。它不是模型名称或合同版本；本合同不检查该帧源是否存在，也不排除纯空白字符串。",
+      "type": "string",
+      "minLength": 1
+    },
+    "frame": {
+      "description": "帧在来源中的编号。type: integer 要求整数值；minimum: 0 要求大于或等于 0。本合同不设编号上限，也不检查多条记录的帧编号是否连续、重复或对应真实图像。",
+      "type": "integer",
+      "minimum": 0
+    },
+    "time_s": {
+      "description": "该帧对应的时间戳，单位为秒。type: number 允许整数或小数；minimum: 0 要求非负。省略不代表自动补 0；提供时不能为 null。本合同不校验时间戳与帧率、帧编号的对应关系。",
+      "type": "number",
+      "minimum": 0
+    },
     "regions": {
+      "description": "本帧的标注区域列表。type:数组；未设置 minItems，因此允许空数组，表示没有标注区域。items 要求每一个元素都满足 $ref 引用的区域合同；#/$defs/region 指向本文件内的 region 定义。",
       "type": "array",
       "items": {"$ref": "#/$defs/region"}
     }
   },
   "$defs": {
     "region": {
+      "$comment": "$defs 保存可复用的子合同，不是实际数据必须包含的字段；region 通过上方 $ref 应用于 regions 中的每个元素。type: object 要求单个区域是对象；additionalProperties: false 禁止未声明的区域字段。required 要求 id、class、kind 必填；末尾 anyOf 另外要求至少提供一种几何数据。",
+      "description": "单个标注区域，包括标识、类别、类别分组、几何形状，以及可选的置信度和跟踪标识。",
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "class", "kind"],
       "properties": {
-        "id": {"type": "string", "minLength": 1},
-        "class": {"type": "string", "minLength": 1},
-        "kind": {"type": "string", "minLength": 1},
+        "id": {
+          "description": "区域标识，例如 reg-003。type: string 要求字符串；minLength: 1 禁止空字符串。本合同不规定命名格式，不检查同帧或跨帧的标识唯一性，也不排除纯空白字符串。",
+          "type": "string",
+          "minLength": 1
+        },
+        "class": {
+          "description": "区域的具体类别名称，例如 grasper 或 cystic_duct。type: string 要求字符串；minLength: 1 禁止空字符串。本合同没有枚举或类别表约束，不检查该类别与 kind 是否匹配，也不排除纯空白字符串。",
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "description": "类别所属的分组，例如 instrument 或 anatomy。type: string 要求字符串；minLength: 1 禁止空字符串。示例不是固定枚举，允许其他非空字符串，也不排除纯空白字符串。",
+          "type": "string",
+          "minLength": 1
+        },
         "box": {
+          "description": "矩形框，按图像坐标表示为 [x, y, width, height]，单位为像素。它与 polygon 至少提供一个，也可同时提供；提供时不能为 null。type: array 要求数组；minItems: 4 要求至少四项；prefixItems 按位置分别约束四项；items: false 禁止第五项及后续项，合起来要求恰好四项。本合同不检查矩形是否超出图像边界。",
           "type": "array",
           "minItems": 4,
           "prefixItems": [
-            {"type": "number", "minimum": 0},
-            {"type": "number", "minimum": 0},
-            {"type": "number", "exclusiveMinimum": 0},
-            {"type": "number", "exclusiveMinimum": 0}
+            {
+              "description": "第 1 项 x：矩形左上角的横坐标。number 允许整数或小数；minimum: 0 要求大于或等于 0。",
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "description": "第 2 项 y：矩形左上角的纵坐标。number 允许整数或小数；minimum: 0 要求大于或等于 0。",
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "description": "第 3 项 width：矩形宽度。number 允许整数或小数；exclusiveMinimum: 0 要求严格大于 0，不允许零宽度。",
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            {
+              "description": "第 4 项 height：矩形高度。number 允许整数或小数；exclusiveMinimum: 0 要求严格大于 0，不允许零高度。",
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
           ],
           "items": false
         },
         "polygon": {
+          "description": "多边形的有序顶点列表，使用图像像素坐标，形式为 [[x1, y1], [x2, y2], ...]。它与 box 至少提供一个；提供时不能为 null。type: array 要求数组；minItems: 3 要求至少三项顶点；items 对每个顶点应用下方的二维坐标规则，顶点数量未设上限。",
+          "$comment": "这里仅检查坐标结构与数值范围：不检查顶点是否重复、是否共线、面积是否为零、边是否自交，也不要求首尾坐标重复或指定顺逆时针。单层顶点列表没有孔洞或多个独立多边形的编码结构；编辑器的其他几何检查不由本 Schema 实施。",
           "type": "array",
           "minItems": 3,
           "items": {
+            "description": "单个顶点 [x, y]。type: array 要求数组；minItems: 2 要求至少两项；prefixItems 依次规定 x 和 y；items: false 禁止第三项及后续项，因此每个顶点必须恰好包含两个坐标。",
             "type": "array",
             "minItems": 2,
             "prefixItems": [
-              {"type": "number", "minimum": 0},
-              {"type": "number", "minimum": 0}
+              {
+                "description": "第 1 项 x：顶点横坐标。number 允许整数或小数；minimum: 0 要求非负，未设图像宽度上限。",
+                "type": "number",
+                "minimum": 0
+              },
+              {
+                "description": "第 2 项 y：顶点纵坐标。number 允许整数或小数；minimum: 0 要求非负，未设图像高度上限。",
+                "type": "number",
+                "minimum": 0
+              }
             ],
             "items": false
           }
         },
-        "conf": {"type": "number", "minimum": 0, "maximum": 1},
-        "track_id": {"type": ["string", "null"]}
+        "conf": {
+          "description": "可选，模型对该区域的置信度。type: number 允许整数或小数；minimum: 0 和 maximum: 1 将值限制在闭区间 [0, 1]，两个端点都允许。提供时不能为 null；本合同没有设置默认值。",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "track_id": {
+          "description": "可选，跨帧关联同一目标的跟踪标识，例如 T02。type 数组表示允许字符串或 JSON 的 null；null 表示没有跟踪标识。未设置 minLength，因此空字符串也能通过本合同；不检查跨帧关联是否正确。",
+          "type": ["string", "null"]
+        }
       },
       "anyOf": [
-        {"required": ["box"]},
-        {"required": ["polygon"]}
+        {
+          "$comment": "anyOf 要求至少一个分支成立。本分支要求存在 box 字段，其内容仍必须满足 properties.box 的规则。",
+          "required": ["box"]
+        },
+        {
+          "$comment": "本分支要求存在 polygon 字段，其内容仍必须满足 properties.polygon 的规则。两个分支可同时成立，因此允许同时提供 box 和 polygon；两者都提供时均须合法，但本合同不检查两者的几何一致性。",
+          "required": ["polygon"]
+        }
       ]
     }
   }

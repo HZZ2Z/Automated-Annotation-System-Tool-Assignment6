@@ -77,59 +77,112 @@ A post-run 1280×800 framebuffer capture was also inspected: the original frame 
 
 Godot tests cover transform inversion, resize-center preservation, letterbox input exclusion, clamped drags, Fit, polygon-first behavior, concave-notch hit-testing, draw order, class/fallback colors, confidence labels, fill-only opacity, label bounds, geometry-cache reuse, and off-screen culling. Python tests verify that the regenerated 120-frame sample has exactly one 12-or-more-vertex concave polygon per frame and still validates with zero Model Output V1 errors.
 
-Nothing in this Part 2.1 result expands Model Output V1 or claims holes, multipolygons, mask export, polygon vertex editing, or GPU acceleration. Part 2.2 is under a separate, blocked rebuild and does not change this measured result.
+Nothing in this Part 2.1 result expands Model Output V1 or claims holes, multipolygons, mask export, polygon vertex editing, or GPU acceleration. Part 2.2 has separate editing measurements below and does not change this stored display baseline.
 
 ## Part 2.2 Editing status
 
-Part 2.2 remains `BLOCKED` only on the visible performance and manual-review gates. The running toolbar now contains seven implemented tools: Add Box, Subtract, Lasso, Fill, Paint, Eraser and Select. Close Gaps, Region Growing and Live Wire were removed by the approved product decisions. Direct deletion of one selected object remains a Select-only `Delete`/`Backspace` action; unselected Subtract may also delete objects fully consumed by its batch contour.
+Assignment 2.2 implementation, automated interaction checks and visible performance checks are complete on the measured host. The project-level Part 2.2/2.3 release status remains `BLOCKED` only on the human reviewer run on the canonical sample and a paused surgical-video frame. Automated visible execution is not recorded as human acceptance.
 
-Part 2.2 Editing and Part 2.3 Design note now follow the approved seven-tool interaction contract.
-The real viewport, keyboard, undo/redo and V1-refusal gates pass. The current implementation is not accepted as PASS until the visible performance and manual reviewer gates below have run.
+The seven tools are Add Box, Subtract, Lasso, Fill, Paint, Eraser and Select. Selection, dragging, bounds handles, 1/5/10 image-pixel nudging, list/free-text reclassification, creation and deletion use validated commands. The optional saved-polygon vertex editing is now available within Lasso.
 
-| Assignment behavior | Required validation before PASS | Release-gate evidence |
-|---|---|---|
-| Select, move, resize, 1/5/10 px nudge | Select through the real viewport and command path | Focused integration and keyboard gates pass |
-| Relabel list + free text | Both Inspector input routes use validated commands | Focused Inspector and integration gates pass |
-| Add and remove | Add Box/Lasso and Select-only deletion | Command and keyboard gates pass |
-| Undo/redo for every committed edit | One successful gesture is one reversible command | Command/history gates pass |
-| Fill and approximately closed shapes | Ordinary Fill extracts the clicked enclosed blank; Paint WorkingMask Fill accumulates each clicked hole and requests one class only after the whole mask becomes one solid V1 polygon | Advanced-tool, keyboard and real UI gates pass |
-| Paint/Eraser live result | Paint repairs/creates simple objects and hands hollow closed outlines to Fill; Eraser subtracts from selection; both preview the result mask with no trajectory or centre dot | Advanced-tool, WorkingMask, renderer-suppression and integration gates pass |
-| Batch Subtract and selection cancel | With no selection one contour atomically clips/deletes every intersected region in one history item; repeated/self-crossing paths apply every enclosed lobe; right click clears selection and returns to Select without a command | Advanced-tool and mounted real-UI gates pass |
-| Contour closure | Lasso and Subtract auto-snap releases within 12 viewport px; `Space` force-closes and `Enter` does not duplicate closure; viewport pan is middle-button drag only | Advanced-tool, viewport, keyboard and real UI gates pass |
-| Keyboard-only reachability | `V/A/S/L/F/P/Shift+P`, spatial input and focus traversal; `C/E/G/I` unbound | Keyboard gate passes |
-| Invalid-edit refusal | V1 rejection leaves Store/history unchanged | Command and geometry gates pass |
+| Assignment behavior | Implementation and direct evidence |
+|---|---|
+| Select, move, resize, nudge | Shared transform; topmost interior hit, then a 6 viewport-px edge fallback; nearest handle within 8 viewport px. Existing command/keyboard suites plus overlapping-handle regression. |
+| Relabel list + free text | Current Main uses the annotation tree and ClassAssignmentDialog; Enter activates a row, suggestions and editable class/kind fields use the same validated command. Mounted Main and dialog tests. |
+| Saved-polygon vertices | Select a polygon and activate Lasso. Drag vertices, double-click edges to insert, Delete/Backspace to remove; brackets select vertices, arrows nudge by 1/5/10 image px, Insert bisects the next edge. Validated geometry commands preserve metadata and support undo/redo. |
+| Add and remove | Keyboard/mouse box and Lasso creation; Select Delete/Backspace; atomic unselected Subtract. Existing advanced and keyboard suites. |
+| Undo/redo | 200 committed commands. Failed apply/revert retains both stacks; batch restoration validates all frames before mutation. Real Store refusal and observer/provenance regressions in `test_checked_history.gd`. |
+| Approximately closed Fill | Strict fill first, then square-kernel morphological closing with radius 0/1/2/3 image px, default 1. Only repair components adjacent to the chosen blank survive. Green candidate and pink repair pixels require Enter/Apply fill; Escape/Cancel restores the prior contour. |
+| WorkingMask continuation | F enters a seed cursor; arrows and Enter continue filling the same frozen contour. Two-hole Fill, local undo/redo, final one-command commit and cancellation are tested. |
+| Keyboard reachability | Tab/Shift+Tab leave active spatial tools without discarding the draft. Text focus owns text undo, an active contour owns draft undo, otherwise Main owns committed undo. Real Main input/focus and repair buttons are tested. |
+| Invalid-edit refusal | Bounds, non-finite coordinates, degenerate/self-intersecting geometry, holes, multiple components and mask budget violations produce explanatory errors. Oversized or subpixel-empty Paint targets cannot silently turn into new regions. |
 
-### V1 geometry, fill and responsiveness gates
+### Algorithm changes and limits
 
-Finite, non-self-intersecting V1 geometry and atomic rejection without Store/history mutation pass automated validation. Responsiveness during visible Paint/Eraser editing and the manual reviewer sequence remain pending, so this section does not claim Part 2.2 PASS.
+`BrushStrokeBuffer` visits only the newly appended capsule, stores a geometrically growing local mask and returns owned snapshots. Region masks are rasterized lazily after a bounds overlap check. Raw polygon rasterization skips contour extraction; union/subtract use row copies and limited changed-area scans. `EditOverlay` uses two-byte luminance/alpha images and reuses compatible textures. Contour extraction and validated command creation occur on release, not on every motion event.
 
-Automated checkpoint on 2026-09-05:
+The measured 128-point brush fixture took 4.663 ms for all appends and 4.071 ms for all snapshots, compared with 532.850 ms for one final legacy rasterization. A separate 1280×800 mask plus 32×32 stroke fixture measured union 349.530→0.259 ms and subtraction 346.989→0.087 ms. These are headless microbenchmarks with different work counts, not FPS claims; the visible complete-preview measurement below is authoritative for responsiveness. Reproduction notes remain in `tests/output/brush-buffer-report.md` and `tests/output/mask-preview-report.md`.
 
-- `tests/run_tests.sh` exited `0`; its component gates reported `PASS: complete Godot test suite`, `PASS: PolygonOps vector geometry`, `PASS: image region algorithms`, `PASS: advanced edit tools`, and `PASS: keyboard-only edit reachability`.
-- `tests/run_tests.sh` reported `219 passed` for the Python suite before running the Godot gates.
-- `python/validate_model_output.py sample/assignment_v1/model_output_v1.jsonl` reported `Validation errors: 0`.
-- `git diff --check` produced no errors.
+Every raster ROI remains capped at 1,048,576 pixels, including padding. Oversized annotation-boundary unions are explicitly refused. Artificial ROI boundaries are padded; exterior-connected seeds and real image edges are never treated as closed annotation boundaries. Closing is a proposed repair, not image-content inference. A radius is the square kernel's reach; a particular gap is not guaranteed to close. Filled masks must still become one legal V1 ring. Boundary simplification uses at most 0.5 image-px deviation with topology validation; contours above 256 vertices retain their exact collinear-reduced boundary. Existing 16,384 boundary-edge and 2,048 output-vertex limits remain.
+
+WorkingMask history records changed mask bytes and ROI transitions, bounded to 200 entries / 32 MiB of diff storage. It does not mutate Store. A repaired candidate is not a history entry until accepted; accepting the final Fill and class produces one committed region command. Ctrl+Z on a repair preview cancels that preview first. New draft edits clear draft redo.
+
+### Lasso vertex editing — 2026-09-06
+
+Click-based Lasso creation now exposes the actual clicked points while drawing: p1, p2, p3 and subsequent points remain individually draggable. Space or double-click closes the contour; class confirmation immediately keeps those same saved vertices editable. Explicit clicked coordinates and ordering, including collinear control points, are preserved without simplification or raster reconstruction. Freehand stroke processing retains its separate simplification path. Idle vertex mode displays the class fill and label, hides bounding-box handles and overlays only the actual contour controls.
+
+`polygon_vertex_editor.gd` owns vertex selection, screen-space handle/edge picking and frozen drag previews. Picking uses an 8 viewport-pixel tolerance and nearest point/segment searches; edge insertion projects onto the edge. Geometry remains in image coordinates. Release-time simple-polygon validation rejects duplicate vertices, crossings, zero area and more than 2,048 vertices; at least three vertices must remain. Keyboard edits outside the image are refused, while pointer drags follow the existing viewport boundary clamp. A changed frame, selection or Store snapshot refuses a stale drag. Each accepted operation uses `ReplaceRegionGeometryCommand`, preserving region metadata and global undo/redo. No existing polygon is rasterized or simplified for vertex editing.
+
+`test_polygon_vertex_editing.gd` covers mouse and keyboard changes, 1/5/10 px steps, insertion, deletion, cancellation, minimum vertex count, invalid topology, stale snapshots, full-record undo/redo and mounted Main input. Idle handles remain available after empty undo/redo. The existing FPS figures below measure Select/brush/zoom scenarios; they are not a separate vertex-editing performance benchmark. The final full runner exited 0 with 221 Python tests, the complete Godot suite and all nine standalone gates passing. The vertex suite also passed in an independent X11 window. A real click-create-drag test used a six-point concave contour, moved the inward third point before and after class confirmation, and verified that only that point changed; the captured viewport shows contour controls and the filled polygon without bounding-box handles.
+
+### Visible editing performance — 2026-09-06
+
+```bash
+source scripts/project_env.sh
+"$GODOT_BIN" --path . --script tests/benchmarks/godot/editing_benchmark.gd -- \
+  --output tests/benchmarks/results/part2_2_editing.json --screenshot /tmp/project6-editing.png
+```
+
+The independent X11 window was 1280×800, using the canonical 640×360 first frame and 20 mixed regions. The edited target was enlarged to 320×150 image px to exercise larger result-mask previews. Each scenario received 2 s warmup and 10 s measurement, with an 8 image-px brush. Godot 4.7.2 GL Compatibility used `llvmpipe (LLVM 15.0.7, 256 bits)`. Thresholds were mean ≥30 fps and p95 frame interval ≤40 ms.
+
+| Scenario | Frames | Mean fps | p95 frame ms | Release/commit ms | Result |
+|---|---:|---:|---:|---:|---|
+| Select drag | 1869 | 186.86 | 8.181 | 1.087 | PASS |
+| Paint | 1745 | 174.49 | 8.775 | 82.052 | PASS |
+| Eraser | 1802 | 180.16 | 8.643 | 91.566 | PASS |
+| Zoom/pan | 2342 | 234.12 | 6.848 | n/a | PASS |
+
+Frame intervals cover live preview and rendering. Release, contour conversion, validation and the command are measured separately; the 82–92 ms brush commits are not included in the live-preview FPS. Each editing scenario additionally required exactly one successful command. The unrestricted Eraser follows the enlarged target’s top edge (x=85..220, y=82±6 image px) and processes every touched region. A separate multi-target test covers complete deletion, empty-space strokes and atomic refusal when one result would split a region. The raw samples, configuration and screenshot paths are in `tests/benchmarks/results/part2_2_editing.json`. Paint/Eraser screenshots were inspected. These figures describe this host and fixture, not all image sizes, drivers or video workloads.
+
+### Automated verification
+
+The final verification command is `XDG_DATA_HOME=/tmp/project6-edit-verify XDG_CONFIG_HOME=/tmp/project6-edit-config tests/run_tests.sh`. The runner includes the existing Python/Godot gates and four new standalone gates: brush buffer, bounded Fill solver, checked history, and Assignment editing regressions. The latter mounts real Main, tests text-versus-draft undo and repair buttons, and exports repaired geometry through the actual Feedback plugin. Its exported JSONL is also checked by the independent Python validator. Original-model digest and file-byte invariance remain covered.
+
+The 2026-09-06 final run exited 0: **221 Python tests passed**, the complete Godot suite and all eight standalone Godot gates passed. Both the canonical model JSONL and the repaired corrected export reported `Validation errors: 0`. Additional solver checks confirmed unrelated outlines are not repaired and safety padding counts toward the mask budget. The visible mounted-Main regression also passed; its screenshot showed annotation boundaries, the green fill candidate, pink gap repair and both confirmation buttons. The canonical model SHA-256 remained `87bf665f80aacd97c44a2122a178e9522e63df076192cabb16758758965851bf` before and after verification. `git diff --check` was clean. Expected corrupt-image recovery fixtures and the headless editor's unavailable debug-listen socket did not fail the suite.
+
+The independent code review identified two edge cases: empty subpixel raster targets and Tab consumed during keyboard Fill. Both were reproduced by failing regressions, fixed, and rerun successfully. A subsequent review caught R interrupting a just-pressed Selection drag; gesture-state routing now protects both move and resize before their first motion. Mounted-Main tests verify R relabel with free text; dialog tests verify the full initial class list. No human reviewer sign-off is implied by that code review.
 
 ## Part 2.3 MITK interaction-fidelity decision log
 
-Part 2.3 remains `BLOCKED` until the seven-tool visible-performance and manual-review gates have run. The reference is the official [MITK Segmentation View](https://docs.mitk.org/latest/org_mitk_views_segmentation.html); these decisions do not claim MITK equivalence.
+### Reference and design scope
 
-| MITK-style interaction | Target status | Proposed 2D target | Why |
-|---|---|---|---|
-| Active selection and visible selected state | Implemented | Shared-transform hit-test, opaque selected fill, wider outline and eight bounds handles | Directly preserves the mature-tool principle that the active object must be unambiguous. |
-| Application-wide undo/redo | Implemented | Bounded 200-command history; `Ctrl+Z`, `Ctrl+Shift+Z`, and visible Redo button; no visible Undo button by project UI decision | Matches the interaction expectation while satisfying the requested compact toolbar. |
-| First-letter tool activation | Implemented | `V/A/S/L/F/P/Shift+P`; `C/E/G/I` are unbound; Tab remains standard focus traversal | Keeps keyboard reachability while reserving Space for Lasso/Subtract closure and arrows for spatial editing. |
-| Move, bounds resize and pixel nudge | Implemented | Select manipulates 2D box/single-ring polygon geometry in image coordinates | Video annotations are structured vector regions, not MITK image voxels; one shared transform prevents display/edit drift. |
-| Fill | Adapted and implemented | Clicking blank annotation-layer space flood-fills its smallest enclosed connected component, then creates one classified V1 polygon | MITK Fill relabels connected pixels; this client treats existing annotations as boundaries and refuses occupied or exterior-connected seeds. |
-| Close Gaps | Dropped | No toolbar descriptor, capability or shortcut; `C` is inert | The user removed this interaction; Fill now reports an annotation boundary that remains genuinely open. |
-| Paint and Eraser brushes | Adapted and implemented | Paint repairs/creates a simple object; a hollow closed outline remains an orange WorkingMask for retryable Fill; Eraser subtracts from selection | Preserves correction-brush interaction without writing holes or masks into V1. |
-| Region Growing | Dropped | No descriptor, capability or shortcut; `G` is inert | It is not required by the Assignment representative subset and the colour-tolerance result was not dependable enough for this medical-video scope. |
-| Live Wire | Dropped | No descriptor, capability or shortcut; `I` is inert | Straight anchor segments duplicated Lasso's point-by-point contour interaction without adding a distinct editing result. |
-| Freehand contour add and Subtract | Adapted and implemented | Lasso adds one solid V1 ring; Subtract targets the selection or atomically clips/deletes all intersected regions when unselected; near endpoints auto-snap and multi-enclosure paths use a bounded mask fallback | One gesture remains one undo item; holes or inexpressible remainders are never persisted. |
-| polygon vertex editing (add/move/delete individual vertices) | Proposed exclusion | No individual-vertex mode is planned; polygon resize remains bounds-affine | The Assignment marks it optional; direct vertex UX would add substantial state and validation work. |
-| 3D volume, multi-slice interpolation and other volumetric workflows | Proposed exclusion | No 3D or slice-stack editing semantics are planned | The assigned client is a 2D video-region workflow; claiming these would be outside the source/data model and would falsely imply MITK equivalence. |
+This note answers Assignment 2.3 for the current client. The reference is MITK's official [Segmentation View](https://docs.mitk.org/latest/org_mitk_views_segmentation.html), particularly selection, label naming, manual 2D tools and undo/redo; the [ContourTool implementation documentation](https://docs.mitk.org/latest/classmitk_1_1ContourTool.html) also describes visible contour feedback followed by a release-time write. These references were checked on 2026-09-06. The comparison is based on documentation and our client's tested behavior; it does not claim a side-by-side usability study in MITK Workbench.
 
-The immutable `model_output_v1` baseline remains a Part 1 contract. Automated Part 2.2 interaction evidence now passes, but the visible-performance and manual reviewer gates remain **待验证**; therefore Part 2.2/2.3 are not yet marked PASS.
+Our editing unit is an identified box or single-ring polygon on one video frame. The design therefore preserves visible targets, direct manipulation, reversible edits and explicit feedback, while adapting operations to Model Output V1. The seven shipped tools are Add Box, Subtract, Lasso, Fill, Paint, Eraser and Select.
+
+### Interactions emulated and adapted
+
+| Interaction / reference behavior | Decision | Current client behavior and reason |
+|---|---|---|
+| MITK selection and label highlighting | Emulated, with 2D picking adaptations | Clicking selects the topmost region under the shared image/viewport transform; the selected state and sidebar identify the target. Sidebar hover highlights the corresponding region. A 6 viewport-px edge tolerance assists small targets, and the nearest resize handle is picked within 8 viewport px. These tolerances remain usable after zooming. |
+| Manual contour feedback and completion | Emulated at the interaction level | Lasso/Subtract show an editable path; Paint/Eraser show the resulting masks while drawing. Completed geometry is validated before a command changes annotations. New objects additionally require class confirmation. This keeps unfinished work visible and cancellable. |
+| Saved-polygon vertex correction | Added for explicit object geometry | Lasso also edits individual vertices of an already saved polygon, with visible active-point feedback, edge insertion and vertex deletion. Mouse and keyboard use the same validated geometry command. This supplements contour drawing without claiming MITK has identical object-vertex controls. |
+| Region manipulation required by the Assignment | Added for object annotations | Select supports dragging and eight bounding handles for box/polygon resize. Arrow keys move by 1 image px, Shift by 5, and Ctrl+Shift by 10; Alt+Arrow resizes. These are object-space operations for correcting model boxes/polygons, rather than a claim that MITK's segmentation Selection tool provides identical handles. |
+| MITK label naming and suggestions | Adapted | Double-clicking a right-sidebar annotation opens the class dialog; list Enter or canvas R provides keyboard access. The dialog initially shows all suggestions and permits free-text Class and Kind. Wheel navigation changes the selected suggestion, updates both fields and previews its color; Confirm saves, Cancel discards. Double-clicking a suggestion also confirms. MITK's ordinary label double-click selects/centers; our direct rename entry and wheel navigation are deliberate shortcuts for repeated corrections. |
+| Add/Subtract and brush correction | Adapted | Add Box creates a rectangular object; Lasso creates a polygon. Paint unions with the unique overlapping or explicitly selected target; an independent stroke can create an object. Subtract affects a selected object, or all intersecting objects when unselected. Eraser always affects every region touched by its stroke, regardless of selection, and may delete fully erased objects. A multi-object stroke is one atomic undoable command. This removes repeated target-selection steps during cleanup. |
+| MITK Fill and Close | Adapted, with different geometry semantics | Our Fill operates on blank areas bounded by annotations or a temporary Paint mask. It first attempts strict enclosure, then optionally proposes small-gap repair with a 0–3 image-px closing radius. The filled candidate is green and proposed repairs are pink; Enter/Apply fill accepts, Escape/Cancel restores the previous draft. Hollow Paint contours retain the same WorkingMask while successive holes are filled. This implements the Assignment's approximate closure without treating RGB intensity as a segmentation boundary or equating our Fill with MITK's connected-label replacement. |
+| Undo/redo | Emulated and extended to draft ownership | Up to 200 committed commands cover creation, movement, resize, relabel, filling, subtraction and deletion. WorkingMask edits have a separate history capped at 200 entries and 32 MiB; focused text fields retain their own text undo. A failed edit leaves annotation data and history unchanged. This gives each undo action a predictable scope. |
+| Tool shortcuts and interaction ownership | Adapted | All implemented edits have keyboard paths documented in README. Space closes keyboard contours; Enter completes brush strokes or confirms dialogs; Escape cancels. Editing pauses playback and operates on a fixed frame. Class dialogs own their input, and R cannot interrupt an active drag. Explicit tools replace modifier-based inversion, leaving Ctrl combinations available for history and precise nudging. |
+
+### Interactions omitted and trade-offs
+
+- **Region Growing and Live Wire:** not exposed in the current client. The representative subset focuses on manual correction of existing model regions; intensity thresholds and edge-following would need separate evaluation on surgical RGB frames with changing illumination and weak boundaries.
+- **Close Gaps as a separate tool:** omitted from the toolbar. Approximate closure is an explicit Fill option with an acceptance preview, keeping its effect visible without another editing mode.
+- **3D volumes, orthogonal-slice editing and slice interpolation:** outside this frame-based region editor. Video frames are treated as temporal observations; slice interpolation is not used as automatic propagation between them.
+- **MITK group/label locking semantics:** not reproduced. Regions retain independent IDs and can overlap. Schema validation, atomic commands and undo protect edits, but there is no equivalent lock preventing Eraser from touching a region. Users should inspect the batch preview before completing a stroke.
+- **Holes, multipolygons and persistent raster-mask geometry:** outside Model Output V1. Working masks are temporary editing data; committed regions must remain valid boxes or simple single-ring polygons. An inexpressible result is refused with an explanation, and one invalid target rejects an entire multi-object edit. This favors explicit refusal over silently changing the exported representation.
+
+### Evidence and reviewer procedure
+
+The runnable client opens the canonical synthetic sample through the README runbook. The [README shortcut table and reviewer script](README.md#part-2223-实现状态与验收门禁) cover each editing feature on that sample and a paused surgical-video frame. Current automated evidence includes:
+
+- `test_edit_integration.gd` and `test_keyboard_reachability.gd`: real client input, selection, drag/resize, 1/5/10 px steps, creation, relabel and keyboard editing paths.
+- `test_class_assignment_dialog.gd`: list/free-text input, real wheel events, field/color synchronization, long-list navigation, explicit confirmation and cancellation. The same dialog suite passed in a visible X11 window.
+- `test_advanced_edit_tools.gd`, `test_fill_region_solver.gd`, `test_checked_history.gd` and `test_editing_assignment.gd`: multi-region erasure, complete deletion, all-or-nothing refusal, cumulative Fill, gap acceptance/cancellation, checked history and modal/gesture ownership.
+
+The latest complete Godot suite and 12 documentation tests passed after wheel selection was added. Performance measurements are recorded separately in Part 2.1/2.2: with 20 regions at 1280×800, the current benchmark measured 186.86 fps for dragging and 234.12 fps for zoom/pan on Ryzen 9 7945HX with llvmpipe software rendering. This is responsiveness evidence for that host, not a measurement of human labeling speed or a test on an ordinary-configured laptop.
+
+The Part 2.3 design note is complete. Human reviewer results on the canonical sample and paused surgical video have not been recorded; the combined Part 2.2/2.3 release rows therefore remain **待验证 / BLOCKED**. Automated interaction tests do not substitute for that human acceptance record.
 
 ## Part 3.1 Frame-accurate stream status
 

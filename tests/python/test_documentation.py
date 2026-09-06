@@ -55,8 +55,8 @@ def test_readme_is_a_complete_part1_runbook() -> None:
 
     assert "Part 3.1 整体为 **PASS**" in readme
 
-    principles = readme.index("开发原则")
-    quick_start = readme.index("快速开始")
+    principles = readme.index("\n## 开发原则\n")
+    quick_start = readme.index("\n## 快速开始\n")
     assert principles < quick_start
     for phrase in (
         "mitk",

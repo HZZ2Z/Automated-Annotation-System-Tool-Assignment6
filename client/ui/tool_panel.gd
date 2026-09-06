@@ -4,6 +4,7 @@ extends VBoxContainer
 signal tool_requested(tool_id: StringName)
 signal unavailable_tool_requested(tool_id: StringName)
 signal tool_option_changed(tool_id: StringName, option_id: StringName, value: Variant)
+signal fill_repair_action(action: StringName)
 
 const COMPACT_ICON_MAX_WIDTH := 16
 const COMPACT_FONT_SIZE := 11
@@ -22,11 +23,27 @@ var _definitions: Array[Dictionary] = []
 var _option_values: Dictionary = {}
 var _active_option: Dictionary = {}
 var _syncing_option := false
+var _repair_actions: HBoxContainer
 
 
 func _ready() -> void:
 	_option_value.value_changed.connect(_on_option_value_changed)
 	_option_row.visible = false
+	_repair_actions = HBoxContainer.new()
+	_repair_actions.name = "FillRepairActions"
+	add_child(_repair_actions)
+	for definition: Array in [["Apply fill", &"confirm_fill_repair"], ["Cancel", &"cancel_fill_repair"]]:
+		var button := Button.new()
+		button.text = definition[0]
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.pressed.connect(func(): fill_repair_action.emit(definition[1]))
+		_repair_actions.add_child(button)
+	_repair_actions.hide()
+
+
+func set_fill_repair_visible(enabled: bool) -> void:
+	if is_instance_valid(_repair_actions):
+		_repair_actions.visible = enabled
 
 
 func validate_tools(definitions: Array[Dictionary]) -> PackedStringArray:
