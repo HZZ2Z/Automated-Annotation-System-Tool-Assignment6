@@ -1,6 +1,6 @@
 # Plugin API version 1
 
-本文档是 Part 1.4 的团队扩展规范。可执行契约位于 `client/pipeline/stages/`，注册与兼容性规则位于 `client/pipeline/plugin_api.gd` 和 `plugin_registry.gd`。插件属于受信任的仓库代码，但所有外部数据仍必须验证；预期内错误用 `PackedStringArray` 返回，空数组表示成功。所有 stage 都必须明确生命周期、深拷贝边界和故障隔离方式。
+本文档是 Part 1.4 的团队扩展规范。可执行契约位于 `client/pipeline/stages/`，注册与兼容性规则位于 `client/pipeline/plugin_api.gd` 和 `plugin_registry.gd`；Source 的统一创建与输出校验边界分别位于 `SourceFactory` 和 `SourceSessionBuilder`。插件属于受信任的仓库代码，但所有外部数据仍必须验证；预期内错误用 `PackedStringArray` 返回，空数组表示成功。所有 stage 都必须明确生命周期、深拷贝边界和故障隔离方式。
 
 ## 1. 目录与 manifest
 
@@ -26,7 +26,7 @@
 }
 ```
 
-Registry 在启动时扫描 Main 的 `plugin_roots`（默认只有 `client/plugins`，可追加团队插件目录）。损坏 JSON、未知字段/阶段、路径穿越、重复 ID、API 不兼容、未继承对应抽象 Stage、不可实例化脚本、缺方法或参数数量错误只会拒绝相应插件。`list_plugins(stage)` 和 `get_descriptor(stage, id)` 只返回元数据；`create_plugin(stage, id)` 每次产生独立实例，Registry 不保存有状态单例。Source 的 `resolve_source_plugin_id(locator, preferred_id)` 调用各插件的 `can_open`；默认不固定 preferred ID，而按 `priority` 降序、ID 升序确定重叠来源。只有显式配置 `source_plugin_id` 才覆盖该顺序，因此新增格式不需要修改 Main 的扩展名分支。
+Registry 在启动时扫描 Main 的 `plugin_roots`（默认只有 `client/plugins`，可追加团队插件目录）。损坏 JSON、未知字段/阶段、路径穿越、重复 ID、API 不兼容、未继承对应抽象 Stage、不可实例化脚本、缺方法或参数数量错误只会拒绝相应插件。`list_plugins(stage)` 和 `get_descriptor(stage, id)` 只返回元数据；`create_plugin(stage, id)` 每次产生独立实例，Registry 不保存有状态单例。Source 的 `resolve_source_plugin_id(locator, preferred_id)` 调用各插件的 `can_open`；默认不固定 preferred ID，而按 `priority` 降序、ID 升序确定重叠来源。应用调用方必须通过 `SourceFactory.open(locator, preferred_id)` 进入该路由，不直接实例化 Source 脚本。Main 的文件/目录选择和 `WorkspaceCatalog` 都先调用同一工厂的只读 `resolve_plugin_id`，工作区条目固定记录已选中的 Source ID；只有未被 Source 接受的视频文件才落到 FFmpeg 归一化。显式 `source_plugin_id` 在直接 Open 和 Workspace 中都覆盖默认顺序，因此新增 locator 格式不需要修改 Main 或 Workspace 的格式分支。
 
 Godot 导出包默认不会自动携带普通 JSON。仓库的 `export_presets.cfg` 明确包含 `client/plugins/**/*.json`；不得删除该规则，否则导出后的启动发现会缺少 manifest。
 
@@ -48,9 +48,11 @@ Godot 导出包默认不会自动携带普通 JSON。仓库的 `export_presets.c
 - `load_texture(index: int) -> Texture2D`
 - `close() -> void`
 
-帧、frame entry 和模型记录必须按同一显式索引对齐。manifest、presentation 与记录 getter 返回深拷贝。`get_presentation` 由 Source 自己把文件、localhost 或远程 locator 投影为格式无关的浏览数据：`display_name`、`source_path`、连续的 `frames[{index,label,path}]` 和 `artifacts[{label,path}]`；Main 只校验并消费这些字段，不猜测 `manifest.json`、`image_path` 或模型文件名。现有工作插件是 `image_sequence_source` 和 `single_image_source`；视频先经 `python/frame_source.py` 归一化后，与原生图像序列使用同一个 Source API。
+位置 `i` 的 frame entry 必须使用连续的 `frame == i`；可选 `frame_id` 是原始数据帧号，缺失时规范为 `frame`。位置 `i` 的模型记录必须使用该 `frame_id`。`SourceSessionBuilder` 为直接 Open 和 Workspace 同时校验这一映射、唯一帧 ID、非递减时间、manifest/record 数量、首帧纹理和可选 presentation。manifest、presentation、entries 与记录均在该边界深拷贝。Main 提交后保留这份 accepted frame-entry snapshot；每次加载纹理前都将 Source 当前 entry 的缺省 `frame_id` 补为 `frame` 并与快照比较，发生动态重映射时拒绝跳帧且保留上一个已接受画面。
 
-工作区数字图片序列是兼容的应用层 Source：entry 中的 `frame` 仍是连续播放索引，可选 `frame_id` 保留原始稀疏帧号。这不修改 SourceStage V1 的方法签名。工作区发现、单媒体 `label/<media_id>.json`、自动保存和训练 `sample_id` 属于应用协调层，不是插件 API；新插件不应读写这些私有文件。
+`get_presentation` 由 Source 自己把文件、localhost 或远程 locator 投影为格式无关的浏览数据：`display_name`、`source_path`、连续的 `frames[{index,label,path}]` 和 `artifacts[{label,path}]`；Main 只校验并消费这些字段，不猜测 `manifest.json`、`image_path` 或模型文件名。现有三个工作插件是 `image_sequence_source`、`numeric_image_sequence_source` 和 `single_image_source`。视频先经 `python/frame_source.py` 归一化后由 `image_sequence_source` 读取；数字图片序列由 `numeric_image_sequence_source` 直接读取，其 `frame` 是播放位置、`frame_id` 保留稀疏原始帧号。这不修改 SourceStage V1 的方法签名。
+
+工作区发现、单媒体 `label/<media_id>.json`、自动保存和训练 `sample_id` 属于应用协调层，不是插件 API；新插件不应读写这些文件。
 
 ### RenderStage
 
@@ -110,7 +112,7 @@ training_update_v1/
     └── corrected_annotations.jsonl
 ```
 
-manifest 包含 schema/package 版本、确定性 package ID、源数据集 ID/SHA-256、模型基线版本/摘要、taxonomy 版本、帧覆盖、dirty frames、独立 batch operations，以及 corrected artifact 的相对路径、字节数和 SHA-256。原始 `model_output_v1.jsonl` 永远只读。
+manifest 包含 schema/package 版本、确定性 package ID、源数据集 ID/SHA-256、模型基线版本/摘要、taxonomy 版本、帧覆盖、dirty frames、独立 batch operations，以及 corrected artifact 的相对路径、字节数和 SHA-256。records 的 `frame`（即原始 `frame_id`）必须严格递增，dirty frames 必须属于该 record 集合；数字图像序列无整体原文件哈希时，`source_dataset.sha256` 保留为 `null`。原始 `model_output_v1.jsonl` 永远只读。
 
 ## 3. 新增插件（不修改 Registry 或 core）
 

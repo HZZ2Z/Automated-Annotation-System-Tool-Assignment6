@@ -9,22 +9,28 @@ signal import_progress(payload: Dictionary)
 signal import_cancelled
 
 const PATHS_SCRIPT := preload("res://client/workspace/workspace_paths.gd")
-const SEQUENCE_SOURCE_SCRIPT := preload("res://client/workspace/workspace_sequence_source.gd")
-const IMAGE_SOURCE_SCRIPT := preload("res://client/plugins/source/single_image_source/plugin.gd")
-const NORMALIZED_SOURCE_SCRIPT := preload("res://client/plugins/source/image_sequence_source/plugin.gd")
 
 
 var _workspace_root := ""
 var _importer: Variant
+var _source_factory: Variant
+var _source_plugin_id := ""
 var _pending_entry: Dictionary = {}
 var _pending_cache_path := ""
 
 
-func configure(workspace_root: String, importer: Variant) -> void:
+func configure(
+	workspace_root: String,
+	importer: Variant,
+	source_factory: Variant,
+	preferred_source_plugin_id: String = ""
+) -> void:
 	_disconnect_importer()
 	_workspace_root = ProjectSettings.globalize_path(
 		workspace_root).simplify_path().trim_suffix("/")
 	_importer = importer
+	_source_factory = source_factory
+	_source_plugin_id = preferred_source_plugin_id
 	if _importer is Object:
 		_connect_importer_signal("progress", _on_import_progress)
 		_connect_importer_signal("completed", _on_import_completed)
@@ -38,9 +44,11 @@ func select_media(media_entry: Dictionary) -> PackedStringArray:
 	var errors := _entry_errors(media_entry)
 	if not errors.is_empty():
 		return errors
+	if not String(media_entry.get("source_plugin_id", "")).is_empty():
+		return _open_source_media(media_entry)
 	match String(media_entry["media_type"]):
 		"image":
-			return _open_image(media_entry)
+			return _open_source_media(media_entry)
 		"image_sequence":
 			return _open_sequence(media_entry)
 		"video":
@@ -69,12 +77,15 @@ func cancel() -> void:
 		_importer.cancel()
 
 
-func _open_image(media_entry: Dictionary) -> PackedStringArray:
-	var source = IMAGE_SOURCE_SCRIPT.new()
-	var errors: PackedStringArray = source.open(media_entry["source_path"])
+func _open_source_media(media_entry: Dictionary) -> PackedStringArray:
+	var opened := _open_source(
+		media_entry["source_path"],
+		String(media_entry.get("source_plugin_id", "")),
+	)
+	var errors: PackedStringArray = opened["errors"]
 	if not errors.is_empty():
-		source.close()
 		return _emit_failure(errors)
+	var source: Variant = opened["source"]
 	var entry := media_entry.duplicate(true)
 	entry["source_sha256"] = source.get_manifest().get("source_sha256")
 	media_ready.emit({
@@ -86,14 +97,13 @@ func _open_image(media_entry: Dictionary) -> PackedStringArray:
 
 
 func _open_sequence(media_entry: Dictionary) -> PackedStringArray:
-	var source = SEQUENCE_SOURCE_SCRIPT.new()
-	var errors: PackedStringArray = source.open_for_media(
-		media_entry["source_path"], media_entry["media_id"], 1.0)
+	var opened := _open_source(media_entry["source_path"])
+	var errors: PackedStringArray = opened["errors"]
 	if not errors.is_empty():
-		source.close()
 		return _emit_failure(errors)
+	var source: Variant = opened["source"]
 	var entry := media_entry.duplicate(true)
-	entry["source_sha256"] = null
+	entry["source_sha256"] = source.get_manifest().get("source_sha256")
 	media_ready.emit({
 		"source": source,
 		"media_entry": entry,
@@ -142,12 +152,12 @@ func _open_cached_video(
 	cache_path: String,
 	expected_digest: String
 ) -> PackedStringArray:
-	var source = NORMALIZED_SOURCE_SCRIPT.new()
-	var errors: PackedStringArray = source.open(cache_path)
+	var opened := _open_source(cache_path)
+	var errors: PackedStringArray = opened["errors"]
 	if not errors.is_empty():
-		source.close()
 		return _emit_failure(PackedStringArray([
 			"Existing video cache is invalid and was preserved: %s" % errors[0]]))
+	var source: Variant = opened["source"]
 	var actual_digest: Variant = source.get_manifest().get("source_sha256")
 	if actual_digest != expected_digest:
 		source.close()
@@ -161,6 +171,48 @@ func _open_cached_video(
 		"source_path": cache_path,
 	})
 	return PackedStringArray()
+
+
+func _open_source(locator: String, preferred_id: String = "") -> Dictionary:
+	if not _source_factory is Object or not _source_factory.has_method("open"):
+		return {
+			"source": null,
+			"plugin_id": "",
+			"errors": PackedStringArray(["Source factory is unavailable"]),
+		}
+	var routed_preference := (
+		preferred_id if not preferred_id.is_empty() else _source_plugin_id)
+	var value: Variant = _source_factory.open(locator, routed_preference)
+	if not value is Dictionary:
+		return {
+			"source": null,
+			"plugin_id": "",
+			"errors": PackedStringArray([
+				"Source factory must return a Dictionary"]),
+		}
+	var errors: Variant = value.get("errors")
+	var source: Variant = value.get("source")
+	if not errors is PackedStringArray:
+		if source is Object and source != null and source.has_method("close"):
+			source.close()
+		return {
+			"source": null,
+			"plugin_id": String(value.get("plugin_id", "")),
+			"errors": PackedStringArray([
+				"Source factory errors must be PackedStringArray"]),
+		}
+	if errors.is_empty() and (not source is Object or source == null):
+		return {
+			"source": null,
+			"plugin_id": String(value.get("plugin_id", "")),
+			"errors": PackedStringArray([
+				"Source factory returned no opened Source"]),
+		}
+	return {
+		"source": source,
+		"plugin_id": String(value.get("plugin_id", "")),
+		"errors": PackedStringArray(errors),
+	}
 
 
 func _on_import_progress(payload: Dictionary) -> void:
@@ -210,6 +262,15 @@ func _entry_errors(entry: Dictionary) -> PackedStringArray:
 		return PackedStringArray(["Workspace media_id is not portable"])
 	if entry["media_type"] not in ["image", "video", "image_sequence"]:
 		return PackedStringArray(["Workspace media type is unsupported"])
+	var entry_source_plugin_id: Variant = entry.get("source_plugin_id", "")
+	if (
+		typeof(entry_source_plugin_id) != TYPE_STRING
+		or (
+			not entry_source_plugin_id.is_empty()
+			and not entry_source_plugin_id.is_valid_identifier()
+		)
+	):
+		return PackedStringArray(["Workspace source_plugin_id is invalid"])
 	if (
 		entry["media_type"] == "image_sequence"
 		and not DirAccess.dir_exists_absolute(entry["source_path"])

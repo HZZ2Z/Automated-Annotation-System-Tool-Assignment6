@@ -25,7 +25,7 @@ func open(_path: String):
 func get_frame_count():
 	if mode == "frame_count_wrong_type":
 		return "one"
-	if mode in ["frame_count_mismatch", "valid_two", "records_count_mismatch", "records_hole", "entry_second_bad_frame", "entry_second_bad_time"]:
+	if mode in ["frame_count_mismatch", "valid_two", "valid_sparse", "records_count_mismatch", "records_hole", "entry_second_bad_frame", "entry_second_bad_time", "entry_second_remapped"]:
 		return 2
 	return 1
 
@@ -39,6 +39,13 @@ func get_frame_entry(index: int):
 		return {"frame": 0, "time_s": 2.5, "image_path": "fixture.png"}
 	if mode == "entry_second_bad_time" and index == 1:
 		return {"frame": 1, "time_s": NAN, "image_path": "fixture.png"}
+	if mode in ["valid_sparse", "entry_second_remapped"]:
+		return {
+			"frame": index,
+			"frame_id": 16 if index == 0 or mode == "entry_second_remapped" else 23,
+			"time_s": 1.25 + float(index),
+			"image_path": "fixture.png",
+		}
 	return {"frame": index, "time_s": 1.25 + float(index), "image_path": "fixture.png"}
 
 
@@ -52,14 +59,19 @@ func get_model_records():
 		"time_s": 1.25,
 		"regions": [],
 	}]
-	if mode in ["valid_two", "records_hole", "entry_second_bad_frame", "entry_second_bad_time"]:
+	if mode in ["valid_two", "valid_sparse", "records_hole", "entry_second_bad_frame", "entry_second_bad_time", "entry_second_remapped"]:
 		records.append({
 			"schema_version": 1,
 			"source": "sample_v1",
-			"frame": 2 if mode == "records_hole" else 1,
+			"frame": (
+				2 if mode == "records_hole"
+				else 23 if mode in ["valid_sparse", "entry_second_remapped"]
+				else 1),
 			"time_s": 2.25,
 			"regions": [],
 		})
+	if mode in ["valid_sparse", "entry_second_remapped"]:
+		records[0]["frame"] = 16
 	return records
 
 
@@ -71,7 +83,7 @@ func get_manifest():
 	var fps: Variant = 20.0
 	if mode == "manifest_bad_fps":
 		fps = 0.0
-	var count := 2 if mode in ["valid_two", "records_count_mismatch", "records_hole", "entry_second_bad_frame", "entry_second_bad_time"] else 1
+	var count := 2 if mode in ["valid_two", "valid_sparse", "records_count_mismatch", "records_hole", "entry_second_bad_frame", "entry_second_bad_time", "entry_second_remapped"] else 1
 	var frames: Array[Dictionary] = []
 	for index in range(count):
 		frames.append({

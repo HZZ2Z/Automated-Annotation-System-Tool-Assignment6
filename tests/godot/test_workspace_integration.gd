@@ -220,6 +220,21 @@ func _test_restore_autosave_and_playback(support, tree: SceneTree) -> void:
 		source.get_frame_entry(1),
 	], source_entries_before_fps,
 		"custom playback must not rewrite any committed source-frame metadata")
+	var export_path := root.path_join("training_update_v1")
+	support.expect_equal(main.export_handoff(export_path), PackedStringArray(),
+		"workspace export should accept sparse original frame ids")
+	support.expect_equal(_read_jsonl_frames(
+		export_path.path_join("data/corrected_annotations.jsonl")), [16, 23],
+		"workspace handoff should preserve sparse original frame ids")
+	var handoff_manifest: Variant = JSON.parse_string(
+		FileAccess.get_file_as_string(export_path.path_join("manifest.json")))
+	support.expect(handoff_manifest is Dictionary
+		and handoff_manifest.get("source_dataset", {}).get("id") == "VID68",
+		"workspace handoff should identify the selected media")
+	support.expect(handoff_manifest is Dictionary
+		and handoff_manifest.get("source_dataset", {}).get(
+			"sha256", "missing") == null,
+		"workspace handoff should retain an unavailable sequence hash as null")
 	await _free_main(main, tree)
 
 	var reopened = await _mounted_main(tree)
@@ -383,6 +398,21 @@ func _write_json(path: String, value: Variant) -> void:
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	if file != null:
 		file.store_string(JSON.stringify(value, "  ", false) + "\n")
+
+
+func _read_jsonl_frames(path: String) -> Array:
+	var result: Array = []
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return result
+	while not file.eof_reached():
+		var line := file.get_line().strip_edges()
+		if line.is_empty():
+			continue
+		var value: Variant = JSON.parse_string(line)
+		if value is Dictionary:
+			result.append(int(value.get("frame", -1)))
+	return result
 
 
 func _remove_tree(path: String) -> void:

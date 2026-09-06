@@ -32,7 +32,10 @@ var _cache = CACHE_SCRIPT.new(12)
 
 func can_open(locator: String) -> bool:
 	var root := ProjectSettings.globalize_path(locator).simplify_path().trim_suffix("/")
-	return DirAccess.dir_exists_absolute(root)
+	return (
+		DirAccess.dir_exists_absolute(root)
+		and FileAccess.file_exists(root.path_join("manifest.json"))
+	)
 
 
 func open(path: String) -> PackedStringArray:

@@ -13,13 +13,15 @@ flowchart LR
     Workspace[工作区文件夹] --> Catalog[WorkspaceCatalog]
     Catalog --> Explorer[左侧媒体树]
     Explorer --> Media[WorkspaceMediaController]
-    Media --> Source
+    Media --> Factory[SourceFactory + PluginRegistry]
     Video[选中的原始视频] --> Import[VideoImportController]
     Import --> Normalizer[Python frame_source + FFmpeg]
     Normalizer --> Normalized[归一化索引帧目录]
-    Input[单图 / 图像序列] --> Source[数据源插件]
-    Normalized --> Source
-    Source --> Store[不可变模型输出 + 修正副本]
+    Input[单图 / 图像序列] --> Factory
+    Normalized --> Factory
+    Factory --> Source[数据源插件]
+    Source --> Session[SourceSessionBuilder]
+    Session --> Store[不可变模型输出 + 修正副本]
     Store --> Render[渲染插件]
     Render --> Viewport[AnnotationViewport]
     Viewport --> Edit[编辑工具插件]
@@ -30,7 +32,9 @@ flowchart LR
     Feedback --> Handoff[修正数据/训练交接]
 ```
 
-数据源插件先读取帧源清单，再根据清单中的 `model_version` 定位同名模型输出文件。例如 `model_version: "model_output_v1"` 只允许读取 `model_output_v1.jsonl`。它不会退回读取无版本文件，也不会把记录中的 `source` 当成模型版本。
+`SourceFactory` 是所有 Source 创建入口。它让 `PluginRegistry` 按 `can_open`、priority 和可选 preferred ID 选择插件，创建独立实例并调用 `open`；打开失败时关闭候选实例。`image_sequence_source` 读取归一化帧源清单，并根据 `model_version` 定位同名模型输出文件。例如 `model_version: "model_output_v1"` 只允许读取 `model_output_v1.jsonl`。它不会退回读取无版本文件，也不会把记录中的 `source` 当成模型版本。
+
+`SourceSessionBuilder` 随后把任何已打开插件规范化为一个经过深拷贝和验证的会话快照。旧的直接 Open 与工作区媒体选择都消费同一个快照，不再各自解释 Source 数据。Main 在会话生命期内固定已验证的 frame entries，跳帧时使用该映射查找记录，并在纹理加载前拒绝 Source 的动态重映射。`image_sequence_source`、`numeric_image_sequence_source` 和 `single_image_source` 因而共享创建、校验、播放和失败清理边界。
 
 `source` 表示图像或帧来源，例如 `sample_v1`；`model_output_v1` 表示模型输出契约和文件版本。两者职责不同。
 
@@ -63,9 +67,11 @@ MainVBox
 
 各层所有权如下：
 
-- `AnnotationMain` 组装应用并执行失败原子的 Source 替换，只通过 Stage API 调用插件，不实现解码、绘制、编辑或导出细节。
+- `AnnotationMain` 组装应用并执行失败原子的 Source 替换；Source 创建交给 `SourceFactory`，Source 输出校验交给 `SourceSessionBuilder`，不直接加载具体 Source 插件脚本。
 - `DatasetExplorer` 只拥有当前数据集的呈现和帧请求意图，不打开、验证、缓存、编辑或写入源数据。
-- `WorkspaceCatalog` 递归发现图片、视频和数字图片序列，并为每个媒体建立最近数据集根的标签上下文索引；它不解码视频或读取图像像素。
+- `WorkspaceCatalog` 递归遍历时先使用注入的 `SourceFactory.resolve_plugin_id` 识别插件所有的文件或目录，再为未命中项保留图片、视频和数字序列的内置发现回退；它为每个媒体建立最近数据集根的标签上下文索引，不解码视频或读取图像像素。
+- `WorkspaceMediaController` 只准备媒体 locator，并调用注入的同一个 `SourceFactory`；它不再拥有数字序列插件的私有构造路径。
+- `SourceFactory` 只负责 Registry 路由、实例创建、`open` 结果类型和失败关闭；`SourceSessionBuilder` 只负责 manifest、record、entry、首帧纹理和 presentation 的公共校验与映射。
 - `MediaLabelStore` 按该上下文拥有单个 `label/<media_id>.json`、原始帧 ID 索引和验证后原子替换；`WorkspaceSession` 只协调 300 ms 合并保存和切换前强刷新。
 - `ToolPanel` 消费 Edit 插件的声明式工具描述，并把可用编辑意图与不可用工具意图分开。
 - Source 插件拥有文件句柄和缓存，并返回 manifest 与模型记录的深拷贝。
@@ -82,7 +88,9 @@ MainVBox
 client/pipeline/
 ├── plugin_api.gd                 # V1 方法/参数数量
 ├── plugin_descriptor.gd          # 发现元数据
-├── plugin_registry.gd            # 多目录发现、Stage 继承校验、工厂、Source 路由
+├── plugin_registry.gd            # 多目录发现、Stage 继承校验、descriptor/script 工厂
+├── source_factory.gd             # 统一 Source 路由、创建、打开与失败关闭
+├── source_session_builder.gd     # 统一 Source 输出校验与帧身份映射
 ├── null_renderer.gd              # 视口的中性缺省对象
 └── stages/
     ├── source_stage.gd
@@ -95,7 +103,7 @@ client/plugins/<stage>/<plugin>/
 └── plugin.gd                     # 对应抽象 Stage 的实现
 ```
 
-Registry 启动时从 Main 的 `plugin_roots` 发现 manifest，强制入口脚本继承声明的抽象 Stage，保存 descriptor 和 Script，不保存有状态插件单例。Main 使用 `create_plugin` 获得独立实例。Source 是否接受 locator 由 `can_open` 决定，默认按 priority 选择；文件、帧服务器等来源的浏览元数据由 `get_presentation` 提供，Main 不再推测文件名。Edit 的按钮由 `get_tool_descriptors` 决定，Inspector 行为经 `invoke` 进入插件。因此增加新来源或替换工具不需要修改 Registry、Main 或 ToolPanel 的格式分支。
+Registry 启动时从 Main 的 `plugin_roots` 发现 manifest，强制入口脚本继承声明的抽象 Stage，保存 descriptor 和 Script，不保存有状态插件单例。`SourceFactory` 使用 Registry 的 `resolve_source_plugin_id` 和 `create_plugin` 获得独立 Source 实例。Source 是否接受 locator 由 `can_open` 决定，默认按 priority 选择；格式无关的浏览元数据由 `get_presentation` 提供。Main 和 Workspace 在内置图片/视频回退之前先通过工厂询问插件，也不直接实例化插件；已命中的工作区条目保留 Source ID，使选择时与扫描时路由一致。Edit 的按钮由 `get_tool_descriptors` 决定，Inspector 行为经 `invoke` 进入插件。因此增加新来源或替换工具不需要修改 Registry、Main、Workspace 或 ToolPanel 的格式分支。
 
 范围传播把 keyframe 区域以 `overwrite` 或 `merge` 模式复制到闭区间目标帧。命令先构建并验证全部记录，然后由 Store 原子替换；目标记录的 `source`、`frame` 和 `time_s` 不变，整段只占一个 undo/redo 项。传播 marker 存入独立 batch operation 列表，Model Output V1 仍只包含其 Schema 允许的字段。
 
@@ -164,13 +172,17 @@ Region Growing 未被 Assignment 要求，且对本医疗场景的单点颜色�
 
 `PlaybackController` 只拥有播放/暂停、帧间隔累积、播放时钟和下一个请求索引；`AnnotationMain` 仍是 current frame 和原子 frame commit 的唯一所有者。顶部 `PlaybackSpeedControl` 常驻部分只显示当前速度，点击后才弹出 Custom、3 s/frame、默认 1 s/frame 和 Max 调节条；前三者换算为 review FPS，Max 不增加人工等待。每个 `_process(delta)` 最多请求 `current + 1`；定时模式丢弃超出的累积时间，Max 也保持一次一个索引，因此加载或渲染较慢时只会降低实际播放率，不会跳帧追钟。运行条把已提交 Source entry 的 `time_s` 格式化为显式 `HH:MM:SS.mmm`，并单独显示实际交付 FPS；时间不是墙钟计时。`PlaybackFpsMeter` 只接收成功原子提交后的单调时钟采样。速度、时间和统计状态只用于展示，不改变 Store、dirty frames、原始 `frame_id`/`time_s` 或文件。Previous、Next、timeline 和 Explorer seek 都先暂停；切换速度也会暂停并清空旧累积时间；最后一帧停止且不循环；加载失败保留最后成功画面并暂停。
 
-图像像素仍由 `image_sequence_source` 按需加载，`FrameCache` 是上限 12 的 LRU；manifest、frame entries 和 annotation metadata 可以驻留内存。Timeline 只在 `_draw()` 中画可见 cell，不为每帧创建 Button。首版不在工作线程创建 `ImageTexture`，也不引入 codec player、预取或跳帧。
+图像像素由当前 Source 插件按需加载：`image_sequence_source` 处理带 manifest 的归一化目录，`numeric_image_sequence_source` 处理数字文件名的原生图像序列，`single_image_source` 处理单图。序列插件内的 `FrameCache` 是上限 12 的 LRU；manifest、frame entries 和 annotation metadata 可以驻留内存。Timeline 只在 `_draw()` 中画可见 cell，不为每帧创建 Button。首版不在工作线程创建 `ImageTexture`，也不引入 codec player、预取或跳帧。
 
 ### 3.5 工作区标注与三种身份
 
 `playback_index` 是时间轴中的连续位置，`frame_id` 是数据集的原始帧号，`sample_id` 是训练边界才派生的 `<media_id>_<frame_id:06d>`。例如 `VID68` 的第一个播放项可以是 `playback_index=0`、`frame_id=16`、`sample_id=VID68_000016`。`AnnotationMain.set_frame()` 先同时解析图像、时间和原始帧 ID 标注，全部有效后再提交 viewport 与 timeline，因此连续播放不会把帧 23 的标注画在帧 16 上。
 
+`SourceSessionBuilder` 强制位置 `i` 的 entry 使用 `frame == i`，将可选 `frame_id` 规范为原始数据帧号（缺失时等于 `frame`），并要求位置 `i` 的 record 使用该 `frame_id`。播放器只消费连续 `playback_index`；Store、标注键、dirty frames 和 Feedback 始终消费原始 `frame_id`。
+
 每个媒体的原生文件只有其最近数据集根下的 `label/<media_id>.json`。目录扫描生成的内存索引同时驱动原生读取、只读 `labels/` 导入和自动保存，因此打开外层大目录也不会把标注写到错误层级。`frames` 字典的键是不补零的原始帧 ID；键缺席表示尚未标注，显式 `regions: []` 才表示已确认负样本。如果已有原生文件，它优先于同一数据集根下的只读 `labels/` 标注；否则 CholecT50 适配器可做一次导入。详细格式和失败策略见 `docs/workspace-label-storage-design.md`。
+
+数字图像序列没有一个能诚实代表整个媒体的原文件哈希，因此 manifest 显式使用 `source_sha256: null`。Feedback 导出保留该 null，并要求 corrected records 按原始 `frame_id` 严格递增、dirty frame 必须存在于 record 集合。这保证稀疏序列不被重新编号，同时不伪造 SHA-256。
 
 ## 4. Part 1.1 模块所有权
 
@@ -181,7 +193,9 @@ Region Growing 未被 Assignment 要求，且对本医疗场景的单点颜色�
 | Python Schema 加载与严格类型检查 | `python/annotation_data/contracts.py` | 独立验证器、样本生成器 |
 | Godot 等价验证 | `client/domain/model_output_validator.gd` | 数据源、Store、导出插件 |
 | 不可变模型基线与修正副本 | `client/domain/annotation_store.gd` | 编辑命令、界面、导出插件 |
+| Source 路由与会话校验 | `client/pipeline/source_factory.gd`、`source_session_builder.gd` | Main、Workspace media controller |
 | 版本化目录读取 | `client/plugins/source/image_sequence_source/plugin.gd` | 主应用 |
+| 数字图像序列适配 | `client/plugins/source/numeric_image_sequence_source/plugin.gd` | SourceFactory |
 | 单图空记录适配 | `client/plugins/source/single_image_source/plugin.gd` | 主应用 |
 | 修正副本导出 | `client/plugins/feedback/file_training_handoff/plugin.gd` | 后续导出界面 |
 | 跨语言合法/非法样例 | `tests/fixtures/model_output_v1/{valid,invalid}/` | Python 与 Godot 测试 |
@@ -248,6 +262,8 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 |---|---|---|
 | 应用组装 | `client/app/main.gd`、`client/app/main.tscn` | 连接界面、Store 和插件，不实现契约规则 |
 | 插件注册 | `client/pipeline/plugin_api.gd`、`plugin_registry.gd` | 定义并发现数据源、渲染、编辑、回传阶段 |
+| Source 工厂 | `client/pipeline/source_factory.gd` | 通过 Registry 统一路由、创建、打开和失败关闭 |
+| Source 会话快照 | `client/pipeline/source_session_builder.gd` | 校验并分离 `playback_index` 与 `frame_id` |
 | 视口与坐标 | `client/services/viewport_transform.gd`、`client/ui/annotation_viewport.gd` | 唯一 `Transform2D` 正逆变换、缩放、平移、Fit 和输入边界 |
 | Region 几何与显示 | `client/domain/region_geometry.gd`、`canvas_region_renderer/plugin.gd` | polygon-first 几何、hit-test、overlay 缓存、opacity 和裁剪 |
 | 编辑工具 | `client/plugins/edit/basic_edit_tools/plugin.gd` | 7 个工具、指针/键盘手势、实时 mask 与 viewport-only preview；自动化通过，人工门禁待完成 |
@@ -270,6 +286,7 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 | 客户端即时拒绝条件 | `client/domain/model_output_validator.gd` | Schema 与共享样例 | Godot 验证器测试 |
 | 模型不可变或修正副本行为 | `client/domain/annotation_store.gd` | 编辑命令、导出插件 | `test_annotation_store.gd` |
 | 模型文件版本选择 | `client/plugins/source/image_sequence_source/plugin.gd` | 样本清单中的 `model_version` | `test_source_plugin.gd` |
+| Source 路由或公共输出契约 | `source_factory.gd`、`source_session_builder.gd` | 三个 Source 插件、Main、Workspace | `test_source_factory.gd`、`test_source_session_builder.gd` |
 | 帧来源名称 | 模型生产方的 `source` 与清单 `source_name` | Source 对齐检查 | Python 样本测试、Godot Source 测试 |
 | 类别或颜色显示 | `client/domain/taxonomy.gd` | 渲染器、属性面板 | 渲染与界面测试 |
 | Part 2.1 坐标或几何 | `viewport_transform.gd`、`region_geometry.gd` | Viewport、Renderer、Edit 和样本 | `test_viewport_transform.gd`、`test_region_geometry.gd`、`test_renderer.gd` |

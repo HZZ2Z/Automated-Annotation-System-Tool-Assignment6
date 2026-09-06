@@ -45,11 +45,12 @@ func export(context: Dictionary) -> PackedStringArray:
 func _validate_context(context: Dictionary) -> PackedStringArray:
 	var errors := PackedStringArray()
 	var records: Variant = context.get("records")
+	var seen_frames := {}
 	if not records is Array or records.is_empty():
 		errors.append("records: expected a non-empty Array")
 	else:
 		var validator = VALIDATOR_SCRIPT.new()
-		var seen_frames := {}
+		var previous_frame := -1
 		for index in range(records.size()):
 			if not records[index] is Dictionary:
 				errors.append("records.%d: expected a Dictionary" % index)
@@ -58,11 +59,16 @@ func _validate_context(context: Dictionary) -> PackedStringArray:
 				errors.append("records.%d.%s" % [index, error])
 			var frame: Variant = records[index].get("frame")
 			if _is_logical_integer(frame):
-				if seen_frames.has(int(frame)):
-					errors.append("records.%d.frame: duplicate frame %d" % [index, int(frame)])
-				seen_frames[int(frame)] = true
-				if int(frame) != index:
-					errors.append("records.%d.frame: expected contiguous frame %d" % [index, index])
+				var frame_id := int(frame)
+				if seen_frames.has(frame_id):
+					errors.append(
+					"records.%d.frame: duplicate frame %d" % [index, frame_id])
+				elif frame_id <= previous_frame:
+					errors.append(
+					"records.%d.frame: expected strictly increasing frame IDs"
+					% index)
+				seen_frames[frame_id] = true
+				previous_frame = frame_id
 	var output_value: Variant = context.get("output_path")
 	if typeof(output_value) != TYPE_STRING or String(output_value).strip_edges().is_empty():
 		errors.append("output_path: expected a non-empty String")
@@ -87,8 +93,10 @@ func _validate_context(context: Dictionary) -> PackedStringArray:
 			errors.append("source_manifest.frame_count: expected positive integer")
 		if records is Array and source_manifest.get("frame_count") != records.size():
 			errors.append("source_manifest.frame_count: must match corrected records")
-		if not _is_sha256(source_manifest.get("source_sha256")):
-			errors.append("source_manifest.source_sha256: expected SHA-256")
+		var source_sha256: Variant = source_manifest.get("source_sha256")
+		if source_sha256 != null and not _is_sha256(source_sha256):
+			errors.append(
+				"source_manifest.source_sha256: expected SHA-256 or null")
 	var model_digest: Variant = context.get("model_digest")
 	if not _is_sha256(model_digest):
 		errors.append("model_digest: expected SHA-256")
@@ -99,10 +107,15 @@ func _validate_context(context: Dictionary) -> PackedStringArray:
 		var previous := -1
 		for index in range(dirty_frames.size()):
 			var frame: Variant = dirty_frames[index]
-			if not _is_logical_integer(frame) or int(frame) < 0 or (records is Array and int(frame) >= records.size()):
-				errors.append("dirty_frames.%d: expected in-range frame index" % index)
+			if not _is_logical_integer(frame) or int(frame) < 0:
+				errors.append(
+					"dirty_frames.%d: expected a non-negative frame ID" % index)
+			elif not seen_frames.has(int(frame)):
+				errors.append(
+					"dirty_frames.%d: expected an existing record frame ID" % index)
 			elif int(frame) <= previous:
-				errors.append("dirty_frames.%d: expected strictly increasing indices" % index)
+				errors.append(
+					"dirty_frames.%d: expected strictly increasing frame IDs" % index)
 			else:
 				previous = int(frame)
 	var batch_operations: Variant = context.get("batch_operations", [])
@@ -117,9 +130,13 @@ func _validate_context(context: Dictionary) -> PackedStringArray:
 
 func _build_manifest(context: Dictionary, corrected_sha256: String, corrected_bytes: int) -> Dictionary:
 	var source_manifest: Dictionary = context["source_manifest"]
-	var identity := "%s:%s:%s:%s" % [
-		source_manifest["dataset_id"], source_manifest["source_sha256"], context["model_digest"], corrected_sha256,
-	]
+	var identity_fields := {
+		"corrected_sha256": corrected_sha256,
+		"dataset_id": source_manifest["dataset_id"],
+		"model_digest": context["model_digest"],
+		"source_sha256": source_manifest.get("source_sha256"),
+	}
+	var identity := JSON.stringify(identity_fields, "", true, true)
 	return {
 		"schema_version": 1,
 		"package_type": PACKAGE_TYPE,

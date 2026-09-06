@@ -1,6 +1,6 @@
 extends RefCounted
 
-const SOURCE_PATH := "res://client/workspace/workspace_sequence_source.gd"
+const SOURCE_PATH := "res://client/plugins/source/numeric_image_sequence_source/plugin.gd"
 const TEMP_PREFIX := "/tmp/annotool-workspace-sequence-"
 
 
@@ -10,14 +10,22 @@ func run(support) -> void:
 		"WorkspaceSequenceSource should map sparse frame IDs to ordered playback")
 	if script == null:
 		return
-	var root := "%s%d-%d" % [
+	var fixture_root := "%s%d-%d" % [
 		TEMP_PREFIX, OS.get_process_id(), Time.get_ticks_usec()]
+	var root := fixture_root.path_join("VID68")
 	DirAccess.make_dir_recursive_absolute(root)
 	_save_image(root.path_join("000023.png"), Color.BLUE)
 	_save_image(root.path_join("000016.png"), Color.RED)
+	var unrelated := fixture_root.path_join("unrelated")
+	DirAccess.make_dir_recursive_absolute(unrelated)
+	_write_text(unrelated.path_join("notes.txt"), "not a frame sequence")
 
 	var source = script.new()
-	support.expect_equal(source.open_for_media(root, "VID68", 1.0), PackedStringArray(),
+	support.expect(source.can_open(root),
+		"numeric sequence source should accept two numeric images")
+	support.expect(not source.can_open(unrelated),
+		"numeric sequence source should reject an arbitrary directory")
+	support.expect_equal(source.open(root), PackedStringArray(),
 		"numeric image sequence should open without decoding all textures")
 	support.expect_equal(source.get_frame_count(), 2,
 		"sequence should expose its exact ordered item count")
@@ -46,7 +54,7 @@ func run(support) -> void:
 	source.close()
 	support.expect_equal(source.get_frame_count(), 0,
 		"close should clear sequence state")
-	_remove_tree(root)
+	_remove_tree(fixture_root)
 
 
 func _save_image(path: String, color: Color) -> void:
@@ -67,4 +75,6 @@ func _remove_tree(path: String) -> void:
 		return
 	for file_name: String in directory.get_files():
 		DirAccess.remove_absolute(path.path_join(file_name))
+	for child_name: String in directory.get_directories():
+		_remove_tree(path.path_join(child_name))
 	DirAccess.remove_absolute(path)

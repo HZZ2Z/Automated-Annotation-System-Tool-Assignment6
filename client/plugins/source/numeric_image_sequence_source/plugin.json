@@ -1,0 +1,9 @@
+{
+  "id": "numeric_image_sequence_source",
+  "version": "1.0.0",
+  "api_version": 1,
+  "stage": "source",
+  "entry": "plugin.gd",
+  "priority": 80,
+  "capabilities": ["frames", "model_annotations", "locator.numeric_image_directory"]
+}
