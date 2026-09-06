@@ -237,6 +237,7 @@ var _edit_context_bridge: Variant
 var _render_plugin: Variant
 var _feedback_plugin: Variant
 var _manifest: Dictionary = {}
+var _frame_entries: Array[Dictionary] = []
 var _taxonomy: Dictionary = {}
 var _class_catalog = PROJECT_CLASS_CATALOG_SCRIPT.new()
 var _color_resolver = CLASS_COLOR_RESOLVER_SCRIPT.new()
@@ -332,6 +333,7 @@ func open_workspace(path: String) -> PackedStringArray:
 		_show_errors("Cannot open workspace", busy_errors)
 		return busy_errors
 	var candidate = WORKSPACE_CATALOG_SCRIPT.new()
+	candidate.configure_source_resolver(_source_factory, source_plugin_id)
 	var errors: PackedStringArray = candidate.scan(path)
 	if not errors.is_empty():
 		_show_errors("Cannot open workspace", errors)
@@ -344,7 +346,11 @@ func open_workspace(path: String) -> PackedStringArray:
 	_workspace_catalog = candidate
 	_workspace_root = candidate.get_root()
 	_workspace_media_controller.configure(
-		_workspace_root, _video_import_controller, _source_factory)
+		_workspace_root,
+		_video_import_controller,
+		_source_factory,
+		source_plugin_id,
+	)
 	_dataset_explorer.populate_workspace(candidate.get_view_model())
 	_set_status("Workspace opened: %s" % _workspace_root)
 	_refresh_toolbar()
@@ -544,6 +550,7 @@ func _activate_workspace_media(
 	_class_catalog = candidate_catalog
 	_color_resolver = CLASS_COLOR_RESOLVER_SCRIPT.new(_taxonomy)
 	_manifest = candidate_manifest.duplicate(true)
+	_frame_entries = _copy_frame_entries(frame_entries)
 	_workspace_media_id = media_entry["media_id"]
 	_workspace_label_store = candidate_label_store
 	_current_frame = 0
@@ -796,6 +803,7 @@ func open_source(path: String) -> PackedStringArray:
 	_viewport.set_edit_selection_authoritative(true)
 	_tool_panel.configure_tools(candidate_tool_descriptors)
 	_manifest = candidate_manifest.duplicate(true)
+	_frame_entries = _copy_frame_entries(frame_entries)
 	_workspace_root = ""
 	_workspace_media_id = ""
 	_workspace_label_store = null
@@ -821,10 +829,21 @@ func set_frame(index: int) -> bool:
 	var frame_count := _active_frame_count()
 	if _source == null or index < 0 or index >= frame_count:
 		return false
+	var entry := _frame_entry_for_playback(index)
+	var live_entry_value: Variant = _source.get_frame_entry(index)
+	var live_entry: Dictionary = (
+		live_entry_value.duplicate(true)
+		if live_entry_value is Dictionary
+		else {})
+	var live_frame_id: Variant = live_entry.get(
+		"frame_id", live_entry.get("frame"))
+	if _logical_integer(live_frame_id):
+		live_entry["frame_id"] = int(live_frame_id)
+	if entry.is_empty() or live_entry != entry:
+		_set_status("Frame %d metadata changed after source validation" % index)
+		return false
 	var texture_value: Variant = _source.load_texture(index)
 	var texture: Texture2D = texture_value if texture_value is Texture2D else null
-	var entry_value: Variant = _source.get_frame_entry(index)
-	var entry: Dictionary = entry_value.duplicate(true) if entry_value is Dictionary else {}
 	var record_frame := _record_frame_for_playback(index, entry)
 	var record: Dictionary = _store.get_corrected_record(record_frame)
 	if texture == null or record.is_empty() or entry.is_empty() or record_frame < 0:
@@ -966,7 +985,8 @@ func _current_record_frame() -> int:
 func _record_frame_for_playback(index: int, entry: Dictionary = {}) -> int:
 	if _source == null or index < 0:
 		return -1
-	var value: Variant = entry if not entry.is_empty() else _source.get_frame_entry(index)
+	var value: Variant = (
+		entry if not entry.is_empty() else _frame_entry_for_playback(index))
 	if not value is Dictionary:
 		return -1
 	var frame_value: Variant = value.get("frame_id", value.get("frame"))
@@ -1030,7 +1050,9 @@ func _on_file_selected(path: String) -> void:
 		_modal_refusal("Source selection")
 		return
 	var extension := path.get_extension().to_lower()
-	if VIDEO_EXTENSIONS.has(extension) or not IMAGE_EXTENSIONS.has(extension):
+	if _source_factory.resolve_plugin_id(path, source_plugin_id) != "":
+		open_source(path)
+	elif VIDEO_EXTENSIONS.has(extension) or not IMAGE_EXTENSIONS.has(extension):
 		_begin_video_import(path)
 	else:
 		open_source(path)
@@ -1040,7 +1062,10 @@ func _on_directory_selected(path: String) -> void:
 	if _is_class_dialog_active():
 		_modal_refusal("Source selection")
 		return
-	open_workspace(path)
+	if _source_factory.resolve_plugin_id(path, source_plugin_id) != "":
+		open_source(path)
+	else:
+		open_workspace(path)
 
 
 func _on_export_parent_selected(path: String) -> void:
@@ -1721,6 +1746,7 @@ func _clear_active_source() -> void:
 	_playback_speed.select_mode(
 		PLAYBACK_SPEED_ONE_SECOND, DEFAULT_SECONDS_PER_FRAME, false)
 	_manifest.clear()
+	_frame_entries.clear()
 	_workspace_media_id = ""
 	_workspace_label_store = null
 	_current_frame = -1
@@ -1746,6 +1772,20 @@ func _active_frame_count() -> int:
 		return 0
 	var value: Variant = _manifest.get("frame_count")
 	return int(value) if _logical_positive_integer(value) else 0
+
+
+func _copy_frame_entries(values: Array) -> Array[Dictionary]:
+	var result: Array[Dictionary] = []
+	for value: Variant in values:
+		if value is Dictionary:
+			result.append(value.duplicate(true))
+	return result
+
+
+func _frame_entry_for_playback(index: int) -> Dictionary:
+	if index < 0 or index >= _frame_entries.size():
+		return {}
+	return _frame_entries[index].duplicate(true)
 
 
 func _connect_ui() -> void:
@@ -1809,7 +1849,10 @@ func _refresh_labels(entry: Dictionary = {}) -> void:
 		_frame_label.text = "Frame - / -  ·  Time --:--:--.---"
 		_refresh_fps_label()
 		return
-	var entry_value: Variant = entry if not entry.is_empty() else _source.get_frame_entry(_current_frame)
+	var entry_value: Variant = (
+		entry
+		if not entry.is_empty()
+		else _frame_entry_for_playback(_current_frame))
 	var frame_entry: Dictionary = entry_value if entry_value is Dictionary else {}
 	var record_frame := _record_frame_for_playback(_current_frame, frame_entry)
 	var frame_text := (

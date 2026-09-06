@@ -34,7 +34,7 @@ flowchart LR
 
 `SourceFactory` 是所有 Source 创建入口。它让 `PluginRegistry` 按 `can_open`、priority 和可选 preferred ID 选择插件，创建独立实例并调用 `open`；打开失败时关闭候选实例。`image_sequence_source` 读取归一化帧源清单，并根据 `model_version` 定位同名模型输出文件。例如 `model_version: "model_output_v1"` 只允许读取 `model_output_v1.jsonl`。它不会退回读取无版本文件，也不会把记录中的 `source` 当成模型版本。
 
-`SourceSessionBuilder` 随后把任何已打开插件规范化为一个经过深拷贝和验证的会话快照。旧的直接 Open 与工作区媒体选择都消费同一个快照，不再各自解释 Source 数据。`image_sequence_source`、`numeric_image_sequence_source` 和 `single_image_source` 因而共享创建、校验、播放和失败清理边界。
+`SourceSessionBuilder` 随后把任何已打开插件规范化为一个经过深拷贝和验证的会话快照。旧的直接 Open 与工作区媒体选择都消费同一个快照，不再各自解释 Source 数据。Main 在会话生命期内固定已验证的 frame entries，跳帧时使用该映射查找记录，并在纹理加载前拒绝 Source 的动态重映射。`image_sequence_source`、`numeric_image_sequence_source` 和 `single_image_source` 因而共享创建、校验、播放和失败清理边界。
 
 `source` 表示图像或帧来源，例如 `sample_v1`；`model_output_v1` 表示模型输出契约和文件版本。两者职责不同。
 
@@ -69,7 +69,7 @@ MainVBox
 
 - `AnnotationMain` 组装应用并执行失败原子的 Source 替换；Source 创建交给 `SourceFactory`，Source 输出校验交给 `SourceSessionBuilder`，不直接加载具体 Source 插件脚本。
 - `DatasetExplorer` 只拥有当前数据集的呈现和帧请求意图，不打开、验证、缓存、编辑或写入源数据。
-- `WorkspaceCatalog` 递归发现图片、视频和数字图片序列，并为每个媒体建立最近数据集根的标签上下文索引；它不解码视频或读取图像像素。
+- `WorkspaceCatalog` 递归遍历时先使用注入的 `SourceFactory.resolve_plugin_id` 识别插件所有的文件或目录，再为未命中项保留图片、视频和数字序列的内置发现回退；它为每个媒体建立最近数据集根的标签上下文索引，不解码视频或读取图像像素。
 - `WorkspaceMediaController` 只准备媒体 locator，并调用注入的同一个 `SourceFactory`；它不再拥有数字序列插件的私有构造路径。
 - `SourceFactory` 只负责 Registry 路由、实例创建、`open` 结果类型和失败关闭；`SourceSessionBuilder` 只负责 manifest、record、entry、首帧纹理和 presentation 的公共校验与映射。
 - `MediaLabelStore` 按该上下文拥有单个 `label/<media_id>.json`、原始帧 ID 索引和验证后原子替换；`WorkspaceSession` 只协调 300 ms 合并保存和切换前强刷新。
@@ -103,7 +103,7 @@ client/plugins/<stage>/<plugin>/
 └── plugin.gd                     # 对应抽象 Stage 的实现
 ```
 
-Registry 启动时从 Main 的 `plugin_roots` 发现 manifest，强制入口脚本继承声明的抽象 Stage，保存 descriptor 和 Script，不保存有状态插件单例。`SourceFactory` 使用 Registry 的 `resolve_source_plugin_id` 和 `create_plugin` 获得独立 Source 实例。Source 是否接受 locator 由 `can_open` 决定，默认按 priority 选择；格式无关的浏览元数据由 `get_presentation` 提供。Main 和 Workspace 不推测文件名，也不直接实例化插件。Edit 的按钮由 `get_tool_descriptors` 决定，Inspector 行为经 `invoke` 进入插件。因此增加新来源或替换工具不需要修改 Registry、Main、Workspace 或 ToolPanel 的格式分支。
+Registry 启动时从 Main 的 `plugin_roots` 发现 manifest，强制入口脚本继承声明的抽象 Stage，保存 descriptor 和 Script，不保存有状态插件单例。`SourceFactory` 使用 Registry 的 `resolve_source_plugin_id` 和 `create_plugin` 获得独立 Source 实例。Source 是否接受 locator 由 `can_open` 决定，默认按 priority 选择；格式无关的浏览元数据由 `get_presentation` 提供。Main 和 Workspace 在内置图片/视频回退之前先通过工厂询问插件，也不直接实例化插件；已命中的工作区条目保留 Source ID，使选择时与扫描时路由一致。Edit 的按钮由 `get_tool_descriptors` 决定，Inspector 行为经 `invoke` 进入插件。因此增加新来源或替换工具不需要修改 Registry、Main、Workspace 或 ToolPanel 的格式分支。
 
 范围传播把 keyframe 区域以 `overwrite` 或 `merge` 模式复制到闭区间目标帧。命令先构建并验证全部记录，然后由 Store 原子替换；目标记录的 `source`、`frame` 和 `time_s` 不变，整段只占一个 undo/redo 项。传播 marker 存入独立 batch operation 列表，Model Output V1 仍只包含其 Schema 允许的字段。
 

@@ -198,7 +198,7 @@ Registry 在启动时扫描 `client/plugins`，验证插件 manifest、API versi
 - **Edit tools：**`basic_edit_tools` 提供上述七工具；自动化实现已验证，可见性能与人工 reviewer 门禁仍待完成。
 - **Export / Feedback：**`file_training_handoff` 验证修正记录并原子生成本地训练交接包。
 
-无论是直接 Open 还是在大工作区中选择媒体，都通过同一个 `SourceFactory` 路由和创建 Source，再由 `SourceSessionBuilder` 统一验证 manifest、records、frame entries 和首帧纹理。播放使用连续 `playback_index`，Store、标注和导出使用原始 `frame_id`；数字图像序列的整体源哈希不可用时显式保留为 `source_sha256: null`。
+无论是直接 Open 还是在大工作区中选择媒体，都先通过同一个 `SourceFactory` 探测、路由和创建 Source，再由 `SourceSessionBuilder` 统一验证 manifest、records、frame entries 和首帧纹理。已接受的 frame-entry 映射在会话内固定，Source 后续动态重映射会被拒绝。播放使用连续 `playback_index`，Store、标注和导出使用原始 `frame_id`；数字图像序列的整体源哈希不可用时显式保留为 `source_sha256: null`。
 
 新增插件只需在相应 stage 目录中添加 `plugin.json` 和 Stage 实现，不需要修改 Registry 或 core。完整 manifest 字段、方法签名、生命周期、深拷贝和错误隔离规则见 [docs/plugin-api.md](docs/plugin-api.md)。
 

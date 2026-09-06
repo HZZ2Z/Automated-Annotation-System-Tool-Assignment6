@@ -24,6 +24,16 @@ const EXCLUDED_DIRECTORIES := {
 var _root := ""
 var _entries: Array[Dictionary] = []
 var _entries_by_id: Dictionary = {}
+var _source_resolver: Variant
+var _preferred_source_plugin_id := ""
+
+
+func configure_source_resolver(
+	source_resolver: Variant,
+	preferred_source_plugin_id: String = ""
+) -> void:
+	_source_resolver = source_resolver
+	_preferred_source_plugin_id = preferred_source_plugin_id
 
 
 func scan(root: String) -> PackedStringArray:
@@ -113,6 +123,16 @@ func _scan_directory(
 		if directory.is_link(child_name):
 			continue
 		var child_path := directory_path.path_join(child_name)
+		var source_plugin_id := _resolve_source_plugin_id(child_path)
+		if not source_plugin_id.is_empty():
+			entries.append(_media_entry(
+				workspace_root,
+				child_path,
+				child_name,
+				"image_sequence",
+				source_plugin_id,
+			))
+			continue
 		var sequence_files := _numeric_sequence_files(child_path)
 		if sequence_files.size() >= 2:
 			entries.append(_media_entry(
@@ -130,15 +150,23 @@ func _scan_directory(
 			continue
 		var extension := file_name.get_extension().to_lower()
 		var media_type := ""
-		if IMAGE_EXTENSIONS.has(extension):
+		var source_path := directory_path.path_join(file_name)
+		var source_plugin_id := _resolve_source_plugin_id(source_path)
+		if not source_plugin_id.is_empty():
+			media_type = "video" if VIDEO_EXTENSIONS.has(extension) else "image"
+		elif IMAGE_EXTENSIONS.has(extension):
 			media_type = "image"
 		elif VIDEO_EXTENSIONS.has(extension):
 			media_type = "video"
 		else:
 			continue
-		var source_path := directory_path.path_join(file_name)
 		entries.append(_media_entry(
-			workspace_root, source_path, file_name.get_basename(), media_type))
+			workspace_root,
+			source_path,
+			file_name.get_basename(),
+			media_type,
+			source_plugin_id,
+		))
 
 
 func _numeric_sequence_files(directory_path: String) -> PackedStringArray:
@@ -161,13 +189,14 @@ func _media_entry(
 	workspace_root: String,
 	source_path: String,
 	id_stem: String,
-	media_type: String
+	media_type: String,
+	source_plugin_id: String = ""
 ) -> Dictionary:
 	var relative_path := source_path.substr(workspace_root.length() + 1)
 	var media_id_value := PATHS_SCRIPT.portable_media_id(id_stem)
 	var label_root := _resolve_label_root(workspace_root, source_path, media_id_value)
 	var source_relative_path := source_path.substr(label_root.length() + 1)
-	return {
+	var result := {
 		"display_name": source_path.get_file(),
 		"media_id": media_id_value,
 		"media_type": media_type,
@@ -176,6 +205,20 @@ func _media_entry(
 		"label_root": label_root,
 		"source_relative_path": source_relative_path.replace("\\", "/"),
 	}
+	if not source_plugin_id.is_empty():
+		result["source_plugin_id"] = source_plugin_id
+	return result
+
+
+func _resolve_source_plugin_id(locator: String) -> String:
+	if (
+		not _source_resolver is Object
+		or not _source_resolver.has_method("resolve_plugin_id")
+	):
+		return ""
+	var value: Variant = _source_resolver.resolve_plugin_id(
+		locator, _preferred_source_plugin_id)
+	return value if typeof(value) == TYPE_STRING else ""
 
 
 func _resolve_label_root(

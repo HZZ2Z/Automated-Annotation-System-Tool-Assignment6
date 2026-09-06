@@ -40,6 +40,11 @@ Source。`SourceSessionBuilder` 只读取并验证 V1 输出，生成帧映射�
 playback 条目和首帧纹理组成的候选快照。工作区层在快照之后再注入
 `media_id`、标签根目录和持久化策略。
 
+文件/目录 Open 与 `WorkspaceCatalog` 都先使用工厂的只读解析进行
+locator 探测；工作区把命中的 Source ID 带到选择阶段，未命中视频
+才进入 FFmpeg 归一化。快照一旦提交，Main 就固定已验证的 entry
+映射；后续 Source 重新报告的映射与快照不等时，本次导航失败原子地被拒绝。
+
 该方案保持 V1 稳定，又使两个入口共用同一个严格的候选验证边界，
 是本次改造的最小可靠闭环。
 

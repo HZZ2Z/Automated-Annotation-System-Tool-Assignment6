@@ -22,6 +22,8 @@ func run(support) -> void:
 	_save_image(image_path)
 
 	var factory = factory_script.new(registry)
+	support.expect_equal(factory.resolve_plugin_id(image_path), "single_image_source",
+		"SourceFactory should expose the same read-only route used by UI discovery")
 	var opened: Dictionary = factory.open(image_path)
 	support.expect(opened.get("source") != null,
 		"SourceFactory should return an opened registry instance")
@@ -41,6 +43,13 @@ func run(support) -> void:
 		and rejected.get("errors") is PackedStringArray
 		and not rejected["errors"].is_empty(),
 		"unsupported locators should return a closed, readable failure result")
+	var missing_preferred: Dictionary = factory.open(image_path, "missing_source")
+	support.expect(
+		missing_preferred.get("source") == null
+		and missing_preferred.get("plugin_id") == "missing_source"
+		and "Configured source plugin is unavailable" in " ".join(
+			missing_preferred.get("errors", PackedStringArray())),
+		"an unavailable configured Source should fail before fallback routing")
 	_remove_tree(root)
 
 

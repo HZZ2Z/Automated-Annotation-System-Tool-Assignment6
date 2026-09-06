@@ -47,6 +47,18 @@ class PointerEditProbe extends RefCounted:
 		return active_tool
 
 
+class RecordingSourceFactory extends RefCounted:
+	var delegate: Variant
+	var preferred_ids: Array[String] = []
+
+	func _init(source_factory: Variant) -> void:
+		delegate = source_factory
+
+	func open(locator: String, preferred_id: String = "") -> Dictionary:
+		preferred_ids.append(preferred_id)
+		return delegate.open(locator, preferred_id)
+
+
 func run(support, tree: SceneTree) -> void:
 	await _test_main_owns_the_only_history_ui_entrypoints(support, tree)
 	await _test_pointer_reads_only_at_commit_boundaries(support, tree)
@@ -60,6 +72,8 @@ func run(support, tree: SceneTree) -> void:
 	await _test_navigation_wrappers_have_one_cancel_owner(support, tree)
 	await _test_source_boundary_validation(support, tree)
 	await _test_numeric_sequence_uses_sparse_source_mapping(support, tree)
+	await _test_workspace_forwards_configured_source_plugin(support, tree)
+	await _test_source_dialog_routes_plugin_owned_locators(support, tree)
 	await _test_configured_plugin_ids(support, tree)
 	_cleanup(support)
 
@@ -752,6 +766,23 @@ func _test_source_boundary_validation(support, tree: SceneTree) -> void:
 		support.expect(not main.set_frame(1), "malformed later entry mode %s should be rejected" % mode)
 		support.expect_equal(main.get_current_frame(), 0, "malformed later entry mode %s should preserve current frame" % mode)
 		support.expect(viewport.get("_texture") == first_texture, "malformed later entry mode %s should preserve visible texture" % mode)
+
+	SOURCE_PROBE.reset("valid_sparse")
+	_replace_plugin(main, "source", "image_sequence_source", SOURCE_PROBE.new())
+	support.expect_equal(main.open_source(root), PackedStringArray(),
+		"sparse mutable-source fixture should pass initial session validation")
+	support.expect_equal(main.call("_current_record_frame"), 16,
+		"accepted sparse session should start with original frame 16")
+	var sparse_texture = viewport.get("_texture")
+	SOURCE_PROBE.mode = "entry_second_remapped"
+	support.expect(not main.set_frame(1),
+		"runtime Source remapping must be rejected after session validation")
+	support.expect_equal(main.get_current_frame(), 0,
+		"rejected runtime remapping should preserve the accepted playback index")
+	support.expect_equal(main.call("_current_record_frame"), 16,
+		"rejected runtime remapping should preserve the accepted record mapping")
+	support.expect(viewport.get("_texture") == sparse_texture,
+		"rejected runtime remapping should preserve the accepted texture")
 	await _free_main(main, tree)
 
 
@@ -793,6 +824,73 @@ func _test_numeric_sequence_uses_sparse_source_mapping(
 		"MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport")
 	support.expect_equal(viewport.get("_record").get("frame"), 23,
 		"direct sparse playback should display the record for original frame 23")
+	await _free_main(main, tree)
+
+
+func _test_workspace_forwards_configured_source_plugin(
+	support,
+	tree: SceneTree
+) -> void:
+	var main: Variant = await _mounted_main(tree)
+	var recording_factory := RecordingSourceFactory.new(main.get("_source_factory"))
+	main.set("_source_factory", recording_factory)
+	main.set("source_plugin_id", "numeric_image_sequence_source")
+	var root := _make_numeric_workspace(support, "VID70")
+	support.expect_equal(main.open_workspace(root), PackedStringArray(),
+		"configured Source forwarding fixture should open its workspace")
+	main.call("_on_workspace_media_requested", "VID70")
+	support.expect_equal(recording_factory.preferred_ids,
+		["numeric_image_sequence_source"],
+		"workspace Source routing should honor Main's configured preferred plugin")
+	await _free_main(main, tree)
+
+
+func _test_source_dialog_routes_plugin_owned_locators(
+	support,
+	tree: SceneTree
+) -> void:
+	var main: Variant = await _mounted_main(tree)
+	var registry: Variant = main.get("_plugin_registry")
+	support.expect_equal(registry.discover_roots(PackedStringArray([
+		"res://client/plugins",
+		"res://tests/godot/fixtures/extension_plugins",
+	])), PackedStringArray(),
+		"UI routing fixture should discover beside production plugins")
+	var file_path := "%sui-route-%d-%d.fixture" % [
+		TEMP_PREFIX, OS.get_process_id(), Time.get_ticks_usec()]
+	_temp_paths.append(file_path)
+	_write_text(file_path, "plugin-owned locator")
+	main.call("_on_file_selected", file_path)
+	support.expect_equal(main.get_current_frame(), 0,
+		"file selection should route a plugin-owned extension through SourceFactory")
+	support.expect_equal(main.get("_manifest").get("dataset_id"), "fixture",
+		"file selection should commit the Source plugin session")
+	var import_dialog := main.get_node("VideoImportDialog") as Window
+	support.expect(not import_dialog.visible,
+		"a Source-claimed file must not fall through to FFmpeg import")
+
+	var directory_path := "%sui-route-directory-%d-%d.fixture" % [
+		TEMP_PREFIX, OS.get_process_id(), Time.get_ticks_usec()]
+	_temp_paths.append(directory_path)
+	DirAccess.make_dir_recursive_absolute(directory_path)
+	main.call("_on_directory_selected", directory_path)
+	support.expect_equal(main.get_current_frame(), 0,
+		"directory selection should route a plugin-owned locator through SourceFactory")
+	support.expect_equal(main.get("_manifest").get("dataset_id"), "fixture",
+		"directory selection should commit the claimed Source session")
+
+	var workspace_root := "%sui-route-workspace-%d-%d" % [
+		TEMP_PREFIX, OS.get_process_id(), Time.get_ticks_usec()]
+	_temp_paths.append(workspace_root)
+	DirAccess.make_dir_recursive_absolute(workspace_root)
+	_write_text(workspace_root.path_join("custom.fixture"), "workspace locator")
+	support.expect_equal(main.open_workspace(workspace_root), PackedStringArray(),
+		"workspace should catalog a plugin-owned locator")
+	main.call("_on_workspace_media_requested", "custom")
+	support.expect_equal(main.get_current_frame(), 0,
+		"workspace selection should open a plugin-owned locator through SourceFactory")
+	support.expect_equal(main.get("_workspace_media_id"), "custom",
+		"workspace selection should commit the plugin-owned logical media")
 	await _free_main(main, tree)
 
 
@@ -950,6 +1048,27 @@ func _make_numeric_sequence(support, label: String) -> String:
 			image.save_png(root.path_join("%06d.png" % frame_id)), OK,
 			"numeric Source fixture frame should save")
 	return root
+
+
+func _make_numeric_workspace(support, media_id_value: String) -> String:
+	var root := "%sworkspace-%d-%d" % [
+		TEMP_PREFIX, OS.get_process_id(), Time.get_ticks_usec()]
+	_temp_paths.append(root)
+	var sequence := root.path_join("videos").path_join(media_id_value)
+	DirAccess.make_dir_recursive_absolute(sequence)
+	for frame_id: int in [16, 23]:
+		var image := Image.create(48, 36, false, Image.FORMAT_RGBA8)
+		image.fill(Color(0.11, 0.14 + float(frame_id) * 0.002, 0.2, 1.0))
+		support.expect_equal(
+			image.save_png(sequence.path_join("%06d.png" % frame_id)), OK,
+			"configured Source workspace frame should save")
+	return root
+
+
+func _write_text(path: String, value: String) -> void:
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file != null:
+		file.store_string(value)
 
 
 func _project_counts(rows: Array[Dictionary]) -> Dictionary:

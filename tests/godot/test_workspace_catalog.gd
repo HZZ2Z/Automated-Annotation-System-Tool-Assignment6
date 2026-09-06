@@ -2,6 +2,8 @@ extends RefCounted
 
 const CATALOG_PATH := "res://client/workspace/workspace_catalog.gd"
 const PATHS_SCRIPT := preload("res://client/workspace/workspace_paths.gd")
+const REGISTRY_SCRIPT := preload("res://client/pipeline/plugin_registry.gd")
+const SOURCE_FACTORY_SCRIPT := preload("res://client/pipeline/source_factory.gd")
 const TEMP_PREFIX := "/tmp/annotool-workspace-catalog-"
 
 
@@ -12,6 +14,7 @@ func run(support) -> void:
 	if script == null:
 		return
 	_test_nested_media_and_sequence_claiming(script, support)
+	_test_registry_claimed_locator(script, support)
 	_test_media_id_collision_is_explicit(script, support)
 	_test_portable_media_id_boundaries(support)
 
@@ -81,6 +84,31 @@ func _test_media_id_collision_is_explicit(script: Script, support) -> void:
 		"collision error should identify both conflicting relative paths")
 	support.expect_equal(catalog.get_entries(), [],
 		"failed scan must not publish a partial workspace")
+	_remove_tree(root)
+
+
+func _test_registry_claimed_locator(script: Script, support) -> void:
+	var root := _new_temp_root("plugin-source")
+	_write_text(root.path_join("custom.fixture"), "plugin-owned locator")
+	var registry = REGISTRY_SCRIPT.new()
+	support.expect_equal(registry.discover_roots(PackedStringArray([
+		"res://client/plugins",
+		"res://tests/godot/fixtures/extension_plugins",
+	])), PackedStringArray(),
+		"workspace plugin fixture should discover with production plugins")
+	var catalog = script.new()
+	support.expect(catalog.has_method("configure_source_resolver"),
+		"WorkspaceCatalog should accept the shared SourceFactory resolver")
+	if catalog.has_method("configure_source_resolver"):
+		catalog.configure_source_resolver(SOURCE_FACTORY_SCRIPT.new(registry))
+	var errors: PackedStringArray = catalog.scan(root)
+	support.expect_equal(errors, PackedStringArray(),
+		"workspace scan should include a locator claimed by a Source plugin")
+	var entries: Array = catalog.get_entries()
+	support.expect_equal(entries.size(), 1,
+		"a plugin-owned file should become one logical workspace media item")
+	support.expect_equal(_entry(entries, "custom.fixture").get("media_type"), "image",
+		"a plugin-owned file should use the existing file media contract")
 	_remove_tree(root)
 
 
