@@ -65,8 +65,8 @@ MainVBox
 
 - `AnnotationMain` 组装应用并执行失败原子的 Source 替换，只通过 Stage API 调用插件，不实现解码、绘制、编辑或导出细节。
 - `DatasetExplorer` 只拥有当前数据集的呈现和帧请求意图，不打开、验证、缓存、编辑或写入源数据。
-- `WorkspaceCatalog` 只递归发现图片、视频和数字图片序列，不解码视频或读取图像像素。
-- `MediaLabelStore` 拥有单个 `label/<media_id>.json`、原始帧 ID 索引和验证后原子替换；`WorkspaceSession` 只协调 300 ms 合并保存和切换前强制刷新。
+- `WorkspaceCatalog` 递归发现图片、视频和数字图片序列，并为每个媒体建立最近数据集根的标签上下文索引；它不解码视频或读取图像像素。
+- `MediaLabelStore` 按该上下文拥有单个 `label/<media_id>.json`、原始帧 ID 索引和验证后原子替换；`WorkspaceSession` 只协调 300 ms 合并保存和切换前强刷新。
 - `ToolPanel` 消费 Edit 插件的声明式工具描述，并把可用编辑意图与不可用工具意图分开。
 - Source 插件拥有文件句柄和缓存，并返回 manifest 与模型记录的深拷贝。
 - `AnnotationStore` 分别拥有不可变模型基线和可编辑修正副本。
@@ -162,7 +162,7 @@ Region Growing 未被 Assignment 要求，且对本医疗场景的单点颜色�
 
 `VideoImportController` 是原始视频的导入任务边界，不是新的 codec-level Source 插件，也不修改 Source API version 1。它只使用项目固定的 `.venv/bin/python` 通过 `OS.create_process()` 启动 `python/frame_source.py`，轮询原子 JSON progress/result 文件，并用 cancel 文件请求协作式取消。Python 子进程负责终止自己的 FFmpeg、删除本任务 staging，只在 probe、extract、validate 和 publish 全部成功后原子发布新目录。原视频、已有目标和当前数据集不属于导入任务的可变状态。
 
-`PlaybackController` 只拥有播放/暂停、帧间隔累积和下一个请求索引；`AnnotationMain` 仍是 current frame 和原子 frame commit 的唯一所有者。间隔优先使用 `time_s[i+1] - time_s[i]`，非正值才回退 `1 / nominal_fps`。每个 `_process(delta)` 最多请求 `current + 1`；超出的累积时间被丢弃，因此加载或渲染较慢时只会降低实际播放率，不会跳帧追钟。Previous、Next、timeline 和 Explorer seek 都先暂停；最后一帧停止且不循环；加载失败保留最后成功画面并暂停。
+`PlaybackController` 只拥有播放/暂停、帧间隔累积、播放时钟和下一个请求索引；`AnnotationMain` 仍是 current frame 和原子 frame commit 的唯一所有者。顶部 `PlaybackSpeedControl` 常驻部分只显示当前速度，点击后才弹出 Custom、3 s/frame、默认 1 s/frame 和 Max 调节条；前三者换算为 review FPS，Max 不增加人工等待。每个 `_process(delta)` 最多请求 `current + 1`；定时模式丢弃超出的累积时间，Max 也保持一次一个索引，因此加载或渲染较慢时只会降低实际播放率，不会跳帧追钟。运行条把已提交 Source entry 的 `time_s` 格式化为显式 `HH:MM:SS.mmm`，并单独显示实际交付 FPS；时间不是墙钟计时。`PlaybackFpsMeter` 只接收成功原子提交后的单调时钟采样。速度、时间和统计状态只用于展示，不改变 Store、dirty frames、原始 `frame_id`/`time_s` 或文件。Previous、Next、timeline 和 Explorer seek 都先暂停；切换速度也会暂停并清空旧累积时间；最后一帧停止且不循环；加载失败保留最后成功画面并暂停。
 
 图像像素仍由 `image_sequence_source` 按需加载，`FrameCache` 是上限 12 的 LRU；manifest、frame entries 和 annotation metadata 可以驻留内存。Timeline 只在 `_draw()` 中画可见 cell，不为每帧创建 Button。首版不在工作线程创建 `ImageTexture`，也不引入 codec player、预取或跳帧。
 
@@ -170,7 +170,7 @@ Region Growing 未被 Assignment 要求，且对本医疗场景的单点颜色�
 
 `playback_index` 是时间轴中的连续位置，`frame_id` 是数据集的原始帧号，`sample_id` 是训练边界才派生的 `<media_id>_<frame_id:06d>`。例如 `VID68` 的第一个播放项可以是 `playback_index=0`、`frame_id=16`、`sample_id=VID68_000016`。`AnnotationMain.set_frame()` 先同时解析图像、时间和原始帧 ID 标注，全部有效后再提交 viewport 与 timeline，因此连续播放不会把帧 23 的标注画在帧 16 上。
 
-工作区原生文件只有 `label/<media_id>.json`。`frames` 字典的键是不补零的原始帧 ID；键缺席表示尚未标注，显式 `regions: []` 才表示已确认负样本。如果已有原生文件，它优先于只读 `labels/` 数据集标注；否则 CholecT50 适配器可做一次导入。详细格式和失败策略见 `docs/workspace-label-storage-design.md`。
+每个媒体的原生文件只有其最近数据集根下的 `label/<media_id>.json`。目录扫描生成的内存索引同时驱动原生读取、只读 `labels/` 导入和自动保存，因此打开外层大目录也不会把标注写到错误层级。`frames` 字典的键是不补零的原始帧 ID；键缺席表示尚未标注，显式 `regions: []` 才表示已确认负样本。如果已有原生文件，它优先于同一数据集根下的只读 `labels/` 标注；否则 CholecT50 适配器可做一次导入。详细格式和失败策略见 `docs/workspace-label-storage-design.md`。
 
 ## 4. Part 1.1 模块所有权
 
@@ -257,7 +257,7 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 | 样本生成 | `python/annotation_data/sample.py`、`python/make_sample_input.py` | 生成 `sample_v1` 和 `model_output_v1.jsonl` |
 | 帧源归一化 | `python/annotation_data/frame_source.py`、`python/frame_source.py` | 将视频解码为索引帧和内部数据清单 |
 | 视频导入任务 | `client/services/video_import_controller.gd` | 非阻塞启动固定 Python、轮询进度、取消和成功后交给现有 Source |
-| 逐帧播放 | `client/services/playback_controller.gd`、`client/app/main.gd` | manifest 时间差、不跳帧状态机与原子帧提交 |
+| 逐帧播放 | `client/services/playback_controller.gd`、`client/services/playback_fps_meter.gd`、`client/ui/playback_speed_control.gd`、`client/app/main.gd` | Custom/3 s/1 s/Max 时钟、实际 FPS、不跳帧状态机与原子帧提交 |
 
 帧源归一化先用 `ffprobe` 获取第一个视频流的帧时间，再用同一个 `0:v:0` 流逐帧输出 PNG。FFmpeg 默认应用显示旋转，manifest 因此从实际 PNG 读回显示后宽高，并拒绝中途变尺寸的序列。负起始 PTS 整体平移到零而不改变帧间隔；整段无 PTS 时用 nominal FPS 合成时间，部分缺失则拒绝。发布前还会核对探测帧数与 PNG 帧数，然后原子替换到目标目录。可选 CLI control files 使用原子 progress JSON、cancel request 和显式 sibling staging，同时保持原两参数调用与 `--result-file` 格式兼容。客户端只读发布后的索引帧目录契约，因此视频与原生图像序列走同一 Source 路径。
 

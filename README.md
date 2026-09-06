@@ -2,13 +2,15 @@
 
 ## 前端 0.0.1
 
-![Automated Annotation Tool frontend](docs/image.png)
+![Current Automated Annotation System frontend](docs/image.png)
 
-本项目使用 Godot 客户端和 Python 工具链，实现版本化、插件化的图像与视频标注工作流。当前已验证 Assignment Part 1、Part 2.1 Display 和 Part 3.1 Frame-accurate stream；Part 2.2 Editing 的七工具实现已通过自动化回归，仍需完成可见性能与人工 reviewer 门禁后才能标记 PASS。
+> 当前界面顶部只常驻显示播放速度状态，点击后才展开调节条；下方运行栏同时显示只读帧时间和 actual FPS。
+
+本项目使用 Godot 客户端和 Python 工具链，实现版本化、插件化的图像与视频标注工作流。当前已验证 Assignment Part 1、Part 2.1 Display 和 Part 3.1 Frame-accurate stream。Part 2.2 Editing 的七工具实现已通过自动化回归，仍需完成可见性能与人工 reviewer 门禁后才能标记 PASS。
 
 ## 当前交付范围
 
-- 已完成 Part 1.1–1.4、Part 2.1 和 Part 3.1，并提供 Python、Godot、真实视频导入、可见播放和 10,000 帧压力测试证据。
+- 已完成 Part 1.1–1.4、Part 2.1 和 Part 3.1；显式 frame/time、真实视频导入、连续播放、精确 seek 和 10,000 帧有界加载都已验证，Part 3.1 整体为 **PASS**。
 - 原始模型输出以 `model_output_vX` 命名并保持只读；编辑结果保存在独立副本中。
 - Part 2.2/2.3 仍为 **待验证**：七工具运行时和自动化门禁已经实现；可见性能与人工 reviewer 复跑尚未完成。
 - Part 3.2 batch labelling 仍未完成；现有 range-propagate primitive 不代表已完成该工作流。
@@ -125,7 +127,7 @@ Validation errors: 0
 
 客户端推荐流程：点击 **Open** 选择数据集根目录，再在左侧树中选择图片、视频或数字文件名的图片序列。打开工作区时只扫描元数据；只有选中视频后才使用项目固定的 `.venv/bin/python` 和 FFmpeg 在后台解析，结果固定缓存到工作区的 `.annotool/cache/<media_id>/`。数字图片序列直接按原始帧号排序，不运行 FFmpeg。原有单文件 **Start import** 进度窗口仍保留为兼容入口。
 
-标注工具只写入工作区根目录下的 `label/<media_id>.json`，每个媒体一个 JSON，不生成逐帧 JSON 或额外 manifest。例如 `videos/VID68/000016.png` 的媒体 ID 是 `VID68`，标注键是原始帧号 `16`，训练时才派生样本 ID `VID68_000016`。`labels/VID68.json` 等数据集自带标注只读；首次可导入，之后优先读取 `label/VID68.json`。编辑成功后 300 ms 自动合并保存，切换媒体、工作区或退出前会强制刷新。
+打开外层大目录时，目录扫描会为每个媒体建立标签上下文索引，向上定位最近的数据集根。标注工具只写入该数据集根下的 `label/<media_id>.json`，每个媒体一个 JSON，不生成逐帧 JSON 或额外 manifest。例如 `videos/VID68/000016.png` 的媒体 ID 是 `VID68`，标注键是原始帧号 `16`，训练时才派生样本 ID `VID68_000016`。同一数据集根下的 `labels/VID68.json` 等自带标注只读；首次可导入，之后优先读取 `label/VID68.json`。编辑成功后 300 ms 自动合并保存，切换媒体、工作区或退出前会强制刷新。
 
 也可以直接使用兼容的原有 CLI：
 
@@ -135,7 +137,7 @@ Validation errors: 0
 
 该命令把任意 FFmpeg 可读取的视频转换为带显式索引和时间戳的归一化目录，作为 GUI 按需解析之外的兼容入口。客户端将视频转换结果与原生图像序列统一视为 frames-from-a-source。GUI 不回退到系统 Python；如果 `.venv/bin/python`、`ffmpeg` 或 `ffprobe` 缺失，先按“开发环境”修复，不要绕过已验证工具链。
 
-Part 3.1 已验证的播放控件为 **Previous**、**Play**、**Pause** 和 **Next**；时间显示采用 `HH:MM:SS.mmm`。其真实导入、连续播放与 10,000 帧压力测试证据见 [RESULTS.md](RESULTS.md)，不依赖 Part 2.2/2.3 的待验证重建。
+Part 3.1 已验证的播放控件为 **Previous**、**Play**、**Pause** 和 **Next**。顶部平时只显示当前速度状态，例如 `1 s/frame ▾`；点击后才展开 `Custom`、`3 s/frame`、默认 `1 s/frame` 和 `Max` 四档调节条。Custom 可输入 0.01–60 秒/帧，Max 不增加人工等待但仍逐个连续索引提交。下方运行条以 `Time HH:MM:SS.mmm` 显示当前帧的只读 `time_s`，并显示 actual FPS；时间不是墙钟播放计时。速度选择、时间与 FPS 统计只描述运行时展示，不改写 `frame_id`、`time_s`、Store 或标注 JSON。其真实导入、连续播放与 10,000 帧压力测试证据见 [RESULTS.md](RESULTS.md)，不依赖 Part 2.2/2.3 的待验证重建。
 
 ### 4. 启动客户端
 

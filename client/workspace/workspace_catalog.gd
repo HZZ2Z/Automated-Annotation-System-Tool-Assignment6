@@ -164,13 +164,62 @@ func _media_entry(
 	media_type: String
 ) -> Dictionary:
 	var relative_path := source_path.substr(workspace_root.length() + 1)
+	var media_id_value := PATHS_SCRIPT.portable_media_id(id_stem)
+	var label_root := _resolve_label_root(workspace_root, source_path, media_id_value)
+	var source_relative_path := source_path.substr(label_root.length() + 1)
 	return {
 		"display_name": source_path.get_file(),
-		"media_id": PATHS_SCRIPT.portable_media_id(id_stem),
+		"media_id": media_id_value,
 		"media_type": media_type,
 		"source_path": source_path,
 		"relative_path": relative_path.replace("\\", "/"),
+		"label_root": label_root,
+		"source_relative_path": source_relative_path.replace("\\", "/"),
 	}
+
+
+func _resolve_label_root(
+	workspace_root: String,
+	source_path: String,
+	media_id_value: String
+) -> String:
+	var current := source_path.get_base_dir()
+	var nearest_label_directory_root := ""
+	while current == workspace_root or current.begins_with(workspace_root + "/"):
+		var native_directory := current.path_join("label")
+		var source_directory := current.path_join("labels")
+		var native_path := native_directory.path_join("%s.json" % media_id_value)
+		var source_label_path := source_directory.path_join("%s.json" % media_id_value)
+		if (
+			_label_file_exists(native_directory, native_path)
+			or _label_file_exists(source_directory, source_label_path)
+		):
+			return current
+		if nearest_label_directory_root.is_empty() and (
+			_safe_directory_exists(native_directory)
+			or _safe_directory_exists(source_directory)
+		):
+			nearest_label_directory_root = current
+		if current == workspace_root:
+			break
+		current = current.get_base_dir()
+	return (
+		nearest_label_directory_root
+		if not nearest_label_directory_root.is_empty()
+		else workspace_root
+	)
+
+
+func _label_file_exists(directory_path: String, file_path: String) -> bool:
+	return (
+		_safe_directory_exists(directory_path)
+		and FileAccess.file_exists(file_path)
+		and not _path_is_link(file_path)
+	)
+
+
+func _safe_directory_exists(path: String) -> bool:
+	return DirAccess.dir_exists_absolute(path) and not _path_is_link(path)
 
 
 func _path_is_link(path: String) -> bool:

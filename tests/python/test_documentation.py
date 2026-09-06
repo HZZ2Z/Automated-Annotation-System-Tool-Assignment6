@@ -53,6 +53,8 @@ def test_readme_is_a_complete_part1_runbook() -> None:
     readme = _read("README.md")
     lower = readme.lower()
 
+    assert "Part 3.1 整体为 **PASS**" in readme
+
     principles = readme.index("开发原则")
     quick_start = readme.index("快速开始")
     assert principles < quick_start
@@ -113,7 +115,12 @@ def test_readme_is_a_complete_part1_runbook() -> None:
         assert rendering_term in readme
     for stream_term in (
         "Start import",
-        "HH:MM:SS.mmm",
+        "Custom",
+        "3 s/frame",
+        "1 s/frame",
+        "Max",
+        "actual FPS",
+        "Time HH:MM:SS.mmm",
         "Previous",
         "Play",
         "Pause",
@@ -286,6 +293,10 @@ def test_traceability_covers_completed_parts_and_blocks_unfinished_scope() -> No
         assert columns[5] in {"PASS", "FAIL", "BLOCKED"}
     assert any("Part 2.1" in row and "| PASS |" in row for row in table_rows)
     assert any("Part 3.1" in row and "| PASS |" in row for row in table_rows)
+    assert any(
+        "Part 3.1 Frame-accurate stream" in row and "| PASS |" in row
+        for row in table_rows
+    )
     for part in ("Part 2.2", "Part 2.3"):
         assert any(part in row and "| BLOCKED |" in row for row in table_rows)
     for part in ("Part 3.2", "Part 3.3", "Part 4", "Part 5"):
@@ -340,6 +351,9 @@ def test_part31_results_match_import_playback_and_long_source_benchmarks() -> No
     assert playback["pass"] is True
     assert playback["source_resolution"] == [640, 360]
     assert playback["region_count"] == 20
+    assert playback["requested_clock"] == "review"
+    assert playback["requested_fps"] == 30.0
+    assert abs(playback["requested_seconds_per_frame"] - (1.0 / 30.0)) < 1e-12
     assert playback["measured_seconds"] >= 10.0
     assert playback["indices_continuous"] is True
     assert playback["skipped_frame_count"] == 0
@@ -377,8 +391,11 @@ def test_part31_results_match_import_playback_and_long_source_benchmarks() -> No
         assert value in results
     for required in (
         "OS.create_process()",
-        "time_s[i + 1] - time_s[i]",
-        "HH:MM:SS.mmm",
+        "PlaybackFpsMeter",
+        "read-only actual FPS",
+        "explicit frame/time",
+        "1 s/frame",
+        "Max",
         "zero",
         "10,000",
         "Part 3.2",

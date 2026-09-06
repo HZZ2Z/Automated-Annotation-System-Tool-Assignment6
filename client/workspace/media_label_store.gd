@@ -43,13 +43,30 @@ func prepare(
 		return errors
 	var media_id_value: Variant = media_entry.get("media_id")
 	var media_type: Variant = media_entry.get("media_type")
-	var relative_path: Variant = media_entry.get("relative_path")
+	var relative_path: Variant = _source_relative_path(media_entry)
+	var label_root_value: Variant = media_entry.get("label_root", root)
 	if typeof(media_id_value) != TYPE_STRING or not PATHS_SCRIPT.is_portable_media_id(media_id_value):
 		errors.append("Media label requires a portable media_id")
 	if typeof(media_type) != TYPE_STRING or not MEDIA_TYPES.has(media_type):
 		errors.append("Media label requires image, video, or image_sequence media_type")
 	if typeof(relative_path) != TYPE_STRING or relative_path.is_empty() or _unsafe_relative_path(relative_path):
 		errors.append("Media label source_relative_path must be a contained POSIX path")
+	if typeof(label_root_value) != TYPE_STRING or label_root_value.strip_edges().is_empty():
+		errors.append("Media label root must be a non-empty path")
+	var label_root := (
+		ProjectSettings.globalize_path(label_root_value).simplify_path().trim_suffix("/")
+		if typeof(label_root_value) == TYPE_STRING
+		else ""
+	)
+	if (
+		not label_root.is_empty()
+		and not _path_is_contained(root, label_root)
+	):
+		errors.append("Media label root must remain inside the opened workspace")
+	if not label_root.is_empty() and not DirAccess.dir_exists_absolute(label_root):
+		errors.append("Media label root does not exist: %s" % label_root)
+	if not label_root.is_empty() and _path_is_link(label_root):
+		errors.append("Media label root must not be a symbolic link: %s" % label_root)
 
 	var frame_map := {}
 	var frame_order: Array[int] = []
@@ -73,7 +90,7 @@ func prepare(
 	if not errors.is_empty():
 		return errors
 
-	var candidate_label_path := PATHS_SCRIPT.label_path(root, media_id_value)
+	var candidate_label_path := PATHS_SCRIPT.label_path(label_root, media_id_value)
 	var explicit := {}
 	var label_exists := FileAccess.file_exists(candidate_label_path)
 	if label_exists:
@@ -226,7 +243,7 @@ func _payload() -> Dictionary:
 		"schema_version": 1,
 		"media_id": _media_entry["media_id"],
 		"media_type": _media_entry["media_type"],
-		"source_relative_path": _media_entry["relative_path"],
+		"source_relative_path": _source_relative_path(_media_entry),
 		"source_sha256": _media_entry.get("source_sha256"),
 		"frame_digits": 6,
 		"frames": frames,
@@ -254,8 +271,12 @@ func _validate_payload(
 	if payload.get("frame_digits") != 6:
 		errors.append("frame_digits: expected 6")
 	for field: String in ["media_id", "media_type", "source_relative_path"]:
-		var expected_field := "relative_path" if field == "source_relative_path" else field
-		if payload.get(field) != expected_media.get(expected_field):
+		var expected_value: Variant = (
+			_source_relative_path(expected_media)
+			if field == "source_relative_path"
+			else expected_media.get(field)
+		)
+		if payload.get(field) != expected_value:
 			errors.append("%s: does not match selected media" % field)
 	if payload.get("source_sha256") != expected_media.get("source_sha256"):
 		errors.append("source_sha256: does not match selected media")
@@ -390,6 +411,14 @@ func _unsafe_relative_path(value: String) -> bool:
 		or value.begins_with("../")
 		or value.contains("/../")
 	)
+
+
+func _source_relative_path(media_entry: Dictionary) -> Variant:
+	return media_entry.get("source_relative_path", media_entry.get("relative_path"))
+
+
+func _path_is_contained(root: String, candidate: String) -> bool:
+	return candidate == root or candidate.begins_with(root + "/")
 
 
 func _path_is_link(path: String) -> bool:

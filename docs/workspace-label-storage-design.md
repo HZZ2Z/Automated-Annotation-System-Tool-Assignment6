@@ -1,6 +1,6 @@
 # Workspace Media and Label Storage Design
 
-Date: 2026-09-05
+Date: 2026-09-06
 
 ## Goal
 
@@ -14,23 +14,24 @@ It does not add annotation tools, change region geometry, choose a training fram
 
 ## Selected storage model
 
-The workspace owns one managed `label/` directory. Each logical media item owns exactly one native annotation file:
+Each dataset root owns one managed `label/` directory. An opened outer folder may contain several nested dataset roots, but each logical media item still owns exactly one native annotation file in its nearest label context:
 
 ```text
-workspace/
-├── operation.mp4
-├── overview.jpg
-├── videos/
-│   └── VID68/
-│       ├── 000016.png
-│       ├── 000023.png
-│       └── ...
-├── labels/                 # optional source-dataset labels; read-only
-│   └── VID68.json
-├── label/                  # annotation tool output
-│   ├── operation.json
-│   ├── overview.json
-│   └── VID68.json
+opened-folder/
+├── dataset-a/
+│   ├── operation.mp4
+│   ├── overview.jpg
+│   ├── videos/
+│   │   └── VID68/
+│   │       ├── 000016.png
+│   │       ├── 000023.png
+│   │       └── ...
+│   ├── labels/                 # optional source-dataset labels; read-only
+│   │   └── VID68.json
+│   └── label/                  # annotation tool output
+│       ├── operation.json
+│       ├── overview.json
+│       └── VID68.json
 └── .annotool/
     └── cache/
         └── operation/
@@ -54,7 +55,7 @@ The preferred media ID is the source file or sequence-directory stem converted t
 
 Examples are `VID68`, `operation_01`, and `overview`. If two discovered media items normalize to the same ID, neither is silently renamed: workspace opening reports both relative paths and requires an unambiguous source name. This preserves stable training identity when files are added elsewhere in the workspace.
 
-The label path is always:
+Within the resolved dataset root, the label path is always:
 
 ```text
 label/<media_id>.json
@@ -96,7 +97,7 @@ Required top-level fields are:
 - `schema_version`: integer `1`.
 - `media_id`: the unique workspace media ID and label filename stem.
 - `media_type`: `image`, `video`, or `image_sequence`.
-- `source_relative_path`: normalized POSIX path relative to the workspace.
+- `source_relative_path`: normalized POSIX path relative to the resolved dataset root that owns the label.
 - `source_sha256`: full lowercase source SHA-256 for a single image or video file; `null` for an external frame sequence whose individual files are validated when opened.
 - `frame_digits`: integer `6`.
 - `frames`: object keyed by the unpadded decimal original frame ID.
@@ -119,7 +120,7 @@ A standalone photo has one source frame with `playback_index=0`, `frame_id=0`, a
 
 ## Workspace catalog
 
-The catalog scans the selected root recursively and excludes the managed `label/` and `.annotool/` directories, hidden temporary entries, symbolic-link traversal, and unsupported files.
+The catalog scans the selected root recursively and excludes the managed `label/` and `.annotool/` directories, hidden temporary entries, symbolic-link traversal, and unsupported files. For every media entry it also builds an in-memory label-context index. Starting at the media parent, it walks toward the opened root and selects the nearest ancestor containing `label/<media_id>.json` or `labels/<media_id>.json`; an existing nearest `label/` or `labels/` directory is the fallback, followed by the opened root. No persistent index file is created, so moving or adding datasets cannot leave stale paths on disk.
 
 It discovers:
 
@@ -164,7 +165,7 @@ The CholecT50 adapter preserves sparse original frame IDs. It does not pretend t
 
 ## Automatic loading and saving
 
-Opening a selected media item loads its single native JSON once. Frame records are kept in memory and looked up by original frame ID, so playback does not read or parse JSON on every tick.
+Opening a selected media item uses its catalogued label context to load the single native JSON once. Source import, native reads, and later automatic writes all use that same resolved dataset root. Frame records are kept in memory and looked up by original frame ID, so playback does not read or parse JSON on every tick.
 
 Every successfully committed edit marks the corresponding frame ID dirty. Saves are automatically coalesced with a short 300 ms debounce and publish the complete media JSON using a sibling temporary file:
 
@@ -189,6 +190,8 @@ If saving fails, the in-memory edit remains visible, playback pauses, the status
 6. Commit the visible image, annotation, timeline position, and label only after all validation succeeds.
 
 Failure pauses playback and preserves the last fully accepted image and annotation. Playback still advances by at most one ordered source item per tick; slow loading slows playback instead of skipping frames.
+
+Playback timing is deliberately separate from stored identity. Every multi-frame source defaults to one second per ordered item, so sparse frame IDs such as `16, 23` remain consecutive review items instead of inheriting a seven-second gap. The compact top bar provides Custom 0.01–60 s/frame, 3 s/frame, 1 s/frame and Max. Max removes artificial delay while preserving one ordered index per process tick. The transport's actual FPS is derived only from successful image-plus-annotation commit timestamps, not from the selected target interval. Reading or refreshing it never rewrites `frame_id`, `time_s`, `sample_id`, Store records, dirty state, source labels or native labels; changing speed only changes runtime scheduling and pauses before the new mode starts.
 
 ## Safety and compatibility
 
@@ -215,7 +218,8 @@ The per-media JSON is the editable source of truth. A future training exporter m
 
 ## Verification criteria
 
-- Opening `Dataset_test/cholect50-challenge-val` shows `VID68`–`VID75` as five sequence media items instead of hundreds of independent photos.
+- Opening either `Dataset_test` or `Dataset_test/cholect50-challenge-val` shows `VID68`–`VID75` as five sequence media items instead of hundreds of independent photos.
+- Selecting `VID68` from the outer `Dataset_test` restores `cholect50-challenge-val/label/VID68.json`; selecting media with source labels only creates native output under that same nested dataset root, never under the outer folder.
 - Workspace opening starts no video decoder.
 - Selecting an existing sequence opens its sparse numeric frame list without FFmpeg.
 - Selecting a video file starts one background import on a cache miss and reuses a valid cache later.

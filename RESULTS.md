@@ -133,7 +133,7 @@ The immutable `model_output_v1` baseline remains a Part 1 contract. Automated Pa
 
 ## Part 3.1 Frame-accurate stream status
 
-Part 3.1 is `PASS` on the measured host. The client now imports an FFmpeg-readable video in the background, opens the resulting indexed source, provides Play/Pause, Previous, Next and timeline seek, displays an explicit zero-based frame and `HH:MM:SS.mmm` time, and keeps decoded image pixels behind a 12-texture LRU cache. Part 3.2 and Part 3.3 remain incomplete and are not claimed by this result.
+Part 3.1 is `PASS` on the measured host. The client imports an FFmpeg-readable video in the background, opens the resulting indexed source, provides Play/Pause, Previous, Next and timeline seek, displays explicit frame/time plus read-only actual FPS, and keeps decoded image pixels behind a 12-texture LRU cache. The displayed `Time HH:MM:SS.mmm` is derived from the committed frame entry's immutable `time_s`, not elapsed wall-clock playback time. Part 3.2 and Part 3.3 remain incomplete and are not claimed by this result.
 
 Model Output V1, the dataset manifest and Plugin API version 1 did not change for this work. A raw video is an import job, not a codec-level Source plugin. Successful normalization is handed to the existing `image_sequence_source`, so video-derived and native indexed image sequences use the same frame/annotation path.
 
@@ -167,42 +167,46 @@ The input used a lossless codec to make the measurement deterministic; the impor
 
 ## Playback timing and interaction contract
 
-`PlaybackController` is a small state machine; `AnnotationMain` remains the only current-frame and frame-commit owner. The wait after frame `i` is:
+`PlaybackController` is a small state machine; `AnnotationMain` remains the only current-frame and frame-commit owner. The top-toolbar product flow uses explicit seconds-per-frame review timing plus an unrestricted mode:
 
 ```text
-interval(i) = time_s[i + 1] - time_s[i]
-if interval(i) <= 0: interval(i) = 1 / nominal_fps
+Custom interval = user seconds_per_frame, bounded to [0.01, 60]
+fixed intervals = 3 s/frame or 1 s/frame
+Max interval = 0 artificial seconds; request one next index per process tick
 ```
 
-Each `_process(delta)` call can request at most `current + 1`. Once one frame becomes due, excess elapsed time is discarded instead of being retained for catch-up. Consequently a slow load or slow renderer reduces wall-clock playback speed but never skips an explicit index. `set_frame()` loads the texture, corrected annotation and frame entry before committing any state. A failure pauses and preserves the last successfully displayed texture, annotation, selection and dataset.
+All multi-frame sources default to `1 s/frame`. The top toolbar normally contains only a current-status button; clicking it opens the `Custom | 3 s | 1 s | Max` adjustment popup, and clicking outside closes it. Selecting Custom reveals a 0.01–60 s/frame numeric input inside that popup. The transport presents explicit frame/time from the committed Source entry and a separate read-only actual FPS. `PlaybackFpsMeter` receives only monotonic timestamps after `set_frame()` has successfully committed image, annotation and time alignment. Speed selection, source-time display and FPS display change only presentation: original `frame_id`, `time_s`, sample identity, Store records, dirty state and label JSON remain unchanged. Label files are parsed once when media opens and corrected records stay in memory, so playback does not re-read JSON on every frame.
+
+Each `_process(delta)` call can request at most `current + 1`. Timed modes discard excess elapsed time instead of retaining it for catch-up; Max removes that wait but preserves the same one-index-per-tick rule. Consequently a slow load or slow renderer reduces wall-clock playback speed but never skips an explicit index. `set_frame()` loads the texture, corrected annotation and frame entry before committing any state. A failure pauses and preserves the last successfully displayed texture, annotation, selection and dataset. Changing speed also pauses first, preventing partial elapsed time from leaking between modes.
 
 - Play cancels transient edit preview and starts after the current frame.
 - Pause stops immediately on the current committed frame.
 - Previous and Next pause, then move exactly one bounded index.
 - Timeline and Explorer seek pause, then request the exact chosen index.
 - The final frame pauses automatically; Play is disabled there and playback never loops.
+- Sparse workspace IDs such as 16 and 23 remain adjacent playback items: they wait one second by default, three seconds in the slow preset, an exact Custom interval, or only the next process tick in Max.
 - Playback keeps visible controls instead of claiming editing keys; Space force-closes Lasso/Subtract, near mouse releases auto-snap, arrow keys remain available for editing, and viewport pan uses middle-button drag only.
 
-The visible raw record is `tests/benchmarks/results/part3_1_playback.json`. It used the 640×360 canonical imagery expanded to 360 indexed frames, with 20 mixed box/polygon regions per frame. The 12-cache entries were warmed before the timed run so the record contains both hits and misses.
+The visible raw record is `tests/benchmarks/results/part3_1_playback.json`. It used the 640×360 canonical imagery expanded to 360 indexed frames, with 20 mixed box/polygon regions per frame. The 12-cache entries were warmed before the timed run so the record contains both hits and misses. This stored baseline uses the controller's exact 30 fps review clock directly, records that request in the raw JSON, and deliberately bypasses the Custom UI input so its 0.01-second display step cannot alter the performance baseline. The product default remains 1 s/frame.
 
 | Playback field | Measured value |
 |---|---:|
-| UTC timestamp | 2026-09-04T06:57:57 |
+| UTC timestamp | 2026-09-05T20:07:04 |
 | Host CPU | AMD Ryzen 9 7945HX with Radeon Graphics |
 | Display / adapter | X11 / llvmpipe (LLVM 15.0.7, 256 bits) |
 | Source / regions | 640×360 / 20 |
-| Measured duration / UI heartbeats | 10.011 s / 823 |
-| Delivered indices | 1 through 256, all consecutive |
+| Measured duration / UI heartbeats | 10.026 s / 153 |
+| Delivered indices | 1 through 153, all consecutive |
 | Skipped frames | 0 |
-| Actual playback rate | 25.57 fps |
-| Mean / p95 delivery interval | 39.107 / 44.616 ms |
-| Mean / p95 synchronous frame load | 3.856 / 5.194 ms |
-| Cache hits / misses | 11 / 245 |
+| Actual playback rate | 15.26 fps |
+| Mean / p95 delivery interval | 65.531 / 74.116 ms |
+| Mean / p95 synchronous frame load | 8.639 / 11.902 ms |
+| Cache hits / misses | 11 / 142 |
 | Final cache size / limit | 12 / 12 |
-| Client open time | 475.285 ms |
+| Client open time | 581.526 ms |
 | Result | PASS |
 
-The measured software-rendered host did not sustain the 30 fps nominal clock: actual delivery was 25.57 fps and p95 delivery interval was 44.616 ms. This is the expected result of the approved no-skip policy, not a hidden frame drop. Part 2.1's separate rendering threshold still passes at 175.27 fps; Part 3.1 itself requires frame-accurate controls, exact alignment and bounded loading, not a codec-player real-time guarantee. A future optimization may decode CPU image data off the main thread, but the first version intentionally does not create `ImageTexture` resources from a worker thread.
+The measured software-rendered host did not sustain the exact 30 fps requested clock: actual delivery was 15.26 fps and p95 delivery interval was 74.116 ms. This is the expected result of the approved no-skip policy, not a hidden frame drop. Part 2.1's separate rendering threshold still passes at 175.27 fps; Part 3.1 itself requires frame-accurate controls, exact alignment and bounded loading, not a codec-player real-time guarantee. A future optimization may decode CPU image data off the main thread, but the first version intentionally does not create `ImageTexture` resources from a worker thread.
 
 ## Long-clip boundedness
 

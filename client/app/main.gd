@@ -5,6 +5,7 @@ const PLUGIN_REGISTRY_SCRIPT := preload("res://client/pipeline/plugin_registry.g
 const STORE_SCRIPT := preload("res://client/domain/annotation_store.gd")
 const HISTORY_SCRIPT := preload("res://client/domain/command_history.gd")
 const PLAYBACK_CONTROLLER_SCRIPT := preload("res://client/services/playback_controller.gd")
+const PLAYBACK_FPS_METER_SCRIPT := preload("res://client/services/playback_fps_meter.gd")
 const VIEWPORT_TRANSFORM_SCRIPT := preload("res://client/services/viewport_transform.gd")
 const PROJECT_CLASS_CATALOG_SCRIPT := preload("res://client/domain/project_class_catalog.gd")
 const CLASS_COLOR_RESOLVER_SCRIPT := preload("res://client/domain/class_color_resolver.gd")
@@ -17,6 +18,13 @@ const CHOLECT50_LABEL_ADAPTER_SCRIPT := preload("res://client/workspace/cholect5
 const TAXONOMY_PATH := "res://core/taxonomy/classes.json"
 const MAX_STATUS_LENGTH := 180
 const ZOOM_FACTOR := 1.2
+const PLAYBACK_CLOCK_REVIEW := &"review"
+const PLAYBACK_CLOCK_MAX := &"max"
+const PLAYBACK_SPEED_CUSTOM := &"custom"
+const PLAYBACK_SPEED_THREE_SECONDS := &"three_seconds"
+const PLAYBACK_SPEED_ONE_SECOND := &"one_second"
+const PLAYBACK_SPEED_MAX := &"max"
+const DEFAULT_SECONDS_PER_FRAME := 1.0
 const VIDEO_EXTENSIONS := {
 	"avi": true, "m4v": true, "mkv": true, "mov": true, "mp4": true,
 	"mpeg": true, "mpg": true, "webm": true,
@@ -190,7 +198,8 @@ class StagedEditContextBridge:
 @onready var _play_pause_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/PlayPause
 @onready var _next_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/Next
 @onready var _frame_label: Label = $MainVBox/TimelinePanel/TimelineColumn/Transport/FrameLabel
-@onready var _time_label: Label = $MainVBox/TimelinePanel/TimelineColumn/Transport/TimeLabel
+@onready var _fps_label: Label = $MainVBox/TimelinePanel/TimelineColumn/Transport/FpsLabel
+@onready var _playback_speed = $MainVBox/TopToolbar/PlaybackSpeed
 @onready var _zoom_out_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/ZoomOut
 @onready var _zoom_in_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/ZoomIn
 @onready var _fit_button: Button = $MainVBox/TimelinePanel/TimelineColumn/Transport/Fit
@@ -217,6 +226,7 @@ var _source: Variant
 var _store = STORE_SCRIPT.new()
 var _history = HISTORY_SCRIPT.new(200)
 var _playback_controller = PLAYBACK_CONTROLLER_SCRIPT.new()
+var _playback_fps_meter = PLAYBACK_FPS_METER_SCRIPT.new()
 var _edit_plugin: Variant
 var _edit_context_bridge: Variant
 var _render_plugin: Variant
@@ -496,6 +506,9 @@ func _activate_workspace_media(
 	var candidate_playback = PLAYBACK_CONTROLLER_SCRIPT.new()
 	if errors.is_empty():
 		errors = candidate_playback.configure(playback_frames, float(nominal_fps))
+	if errors.is_empty():
+		errors = candidate_playback.set_clock(
+			PLAYBACK_CLOCK_REVIEW, 1.0 / DEFAULT_SECONDS_PER_FRAME)
 	var render_candidate = _plugin_registry.create_plugin("render", render_plugin_id)
 	var edit_candidate = _plugin_registry.create_plugin("edit", edit_plugin_id)
 	if render_candidate == null:
@@ -545,6 +558,9 @@ func _activate_workspace_media(
 	_store = candidate_store
 	_history = candidate_history
 	_playback_controller = candidate_playback
+	_playback_fps_meter.stop()
+	_playback_speed.select_mode(
+		PLAYBACK_SPEED_ONE_SECOND, DEFAULT_SECONDS_PER_FRAME, false)
 	_edit_plugin = edit_candidate
 	_edit_context_bridge = context_bridge
 	_render_plugin = render_candidate
@@ -581,11 +597,12 @@ func _workspace_seed_records(
 	frame_entries: Array,
 	first_texture: Texture2D
 ) -> Dictionary:
+	var label_root := String(media_entry.get("label_root", _workspace_root))
 	var native_path := WORKSPACE_PATHS_SCRIPT.label_path(
-		_workspace_root, media_entry["media_id"])
+		label_root, media_entry["media_id"])
 	if FileAccess.file_exists(native_path):
 		return {"records": [], "errors": PackedStringArray()}
-	var source_label_path := _workspace_root.path_join(
+	var source_label_path := label_root.path_join(
 		"labels/%s.json" % media_entry["media_id"])
 	if FileAccess.file_exists(source_label_path):
 		var frame_ids := PackedInt64Array()
@@ -791,6 +808,9 @@ func open_source(path: String) -> PackedStringArray:
 	if candidate_errors.is_empty():
 		candidate_errors.append_array(candidate_playback_controller.configure(
 			candidate_playback_frames, float(candidate_manifest.get("nominal_fps", 0.0))))
+	if candidate_errors.is_empty():
+		candidate_errors.append_array(candidate_playback_controller.set_clock(
+			PLAYBACK_CLOCK_REVIEW, 1.0 / DEFAULT_SECONDS_PER_FRAME))
 	if not candidate_errors.is_empty():
 		candidate.close()
 		_show_errors("Cannot open source", candidate_errors)
@@ -834,6 +854,9 @@ func open_source(path: String) -> PackedStringArray:
 	_store = candidate_store
 	_history = candidate_history
 	_playback_controller = candidate_playback_controller
+	_playback_fps_meter.stop()
+	_playback_speed.select_mode(
+		PLAYBACK_SPEED_ONE_SECOND, DEFAULT_SECONDS_PER_FRAME, false)
 	_edit_plugin = candidate_edit
 	_edit_context_bridge = candidate_context_bridge
 	_render_plugin = render_candidate
@@ -913,13 +936,52 @@ func play() -> void:
 	if not _prepare_edit_navigation():
 		return
 	if not _playback_controller.play(_current_frame):
+		_playback_fps_meter.stop()
 		_set_status("Playback could not start")
+	else:
+		_playback_fps_meter.start(Time.get_ticks_usec())
+	_refresh_labels()
 	_refresh_toolbar()
 
 
 func pause() -> void:
 	_playback_controller.pause()
+	_playback_fps_meter.stop()
+	_refresh_labels()
 	_refresh_toolbar()
+
+
+func _on_playback_speed_requested(mode: StringName, seconds_per_frame: float) -> void:
+	if _source == null:
+		return
+	var interval := 0.0
+	match mode:
+		PLAYBACK_SPEED_CUSTOM:
+			interval = seconds_per_frame
+		PLAYBACK_SPEED_THREE_SECONDS:
+			interval = 3.0
+		PLAYBACK_SPEED_ONE_SECOND:
+			interval = 1.0
+		PLAYBACK_SPEED_MAX:
+			pass
+		_:
+			_show_errors("Playback speed", PackedStringArray(["Unknown speed mode"]))
+			return
+	var errors := PackedStringArray()
+	if mode == PLAYBACK_SPEED_MAX:
+		errors = _playback_controller.set_clock(PLAYBACK_CLOCK_MAX)
+	elif not is_finite(interval) or interval < 0.01 or interval > 60.0:
+		errors.append("Seconds per frame must be between 0.01 and 60")
+	else:
+		errors = _playback_controller.set_clock(PLAYBACK_CLOCK_REVIEW, 1.0 / interval)
+	if not errors.is_empty():
+		_show_errors("Playback speed", errors)
+		return
+	_playback_fps_meter.stop()
+	_refresh_labels()
+	_refresh_toolbar()
+	_set_status("Playback: Max" if mode == PLAYBACK_SPEED_MAX
+		else "Playback: %s s/frame" % _format_seconds_per_frame(interval))
 
 
 func step(delta: int) -> bool:
@@ -1027,6 +1089,8 @@ func _process(delta: float) -> void:
 	if not set_frame(target):
 		pause()
 		return
+	_playback_fps_meter.record_delivery(Time.get_ticks_usec())
+	_refresh_fps_label()
 	if _current_frame >= _active_frame_count() - 1:
 		pause()
 
@@ -1723,6 +1787,9 @@ func _clear_active_source() -> void:
 	_store = STORE_SCRIPT.new()
 	_history = HISTORY_SCRIPT.new(200)
 	_playback_controller = PLAYBACK_CONTROLLER_SCRIPT.new()
+	_playback_fps_meter.stop()
+	_playback_speed.select_mode(
+		PLAYBACK_SPEED_ONE_SECOND, DEFAULT_SECONDS_PER_FRAME, false)
 	_manifest.clear()
 	_workspace_media_id = ""
 	_workspace_label_store = null
@@ -1757,6 +1824,7 @@ func _connect_ui() -> void:
 	_previous_button.pressed.connect(_on_previous_pressed)
 	_play_pause_button.pressed.connect(_on_play_pause_pressed)
 	_next_button.pressed.connect(_on_next_pressed)
+	_playback_speed.speed_requested.connect(_on_playback_speed_requested)
 	_zoom_out_button.pressed.connect(_on_zoom_pressed.bind(1.0 / ZOOM_FACTOR))
 	_zoom_in_button.pressed.connect(_on_zoom_pressed.bind(ZOOM_FACTOR))
 	_fit_button.pressed.connect(_on_fit_pressed)
@@ -1808,18 +1876,29 @@ func _on_export_pressed() -> void:
 
 func _refresh_labels(entry: Dictionary = {}) -> void:
 	if _source == null or _current_frame < 0:
-		_frame_label.text = "Frame - / -"
-		_time_label.text = "--:--:--.---"
+		_frame_label.text = "Frame - / -  ·  Time --:--:--.---"
+		_refresh_fps_label()
 		return
 	var entry_value: Variant = entry if not entry.is_empty() else _source.get_frame_entry(_current_frame)
 	var frame_entry: Dictionary = entry_value if entry_value is Dictionary else {}
 	var record_frame := _record_frame_for_playback(_current_frame, frame_entry)
-	_frame_label.text = (
+	var frame_text := (
 		"Frame %d (%d / %d)" % [record_frame, _current_frame + 1, _active_frame_count()]
 		if record_frame != _current_frame
 		else "Frame %d (%d total)" % [_current_frame, _active_frame_count()]
 	)
-	_time_label.text = _format_timestamp(float(frame_entry.get("time_s", 0.0)))
+	_frame_label.text = "%s  ·  Time %s" % [
+		frame_text,
+		_format_source_time(float(frame_entry.get("time_s", 0.0))),
+	]
+	_refresh_fps_label()
+
+
+func _refresh_fps_label() -> void:
+	if _source == null or _current_frame < 0:
+		_fps_label.text = "FPS --"
+		return
+	_fps_label.text = _format_fps(_playback_fps_meter.get_actual_fps())
 
 
 func _refresh_toolbar() -> void:
@@ -1835,6 +1914,8 @@ func _refresh_toolbar() -> void:
 	_next_button.disabled = import_running or class_modal or not has_source or _current_frame >= frame_count - 1
 	_play_pause_button.disabled = import_running or class_modal or not has_source or _current_frame >= frame_count - 1
 	_play_pause_button.text = "Pause" if is_playing() else "Play"
+	_playback_speed.set_enabled(
+		not import_running and not class_modal and has_source and frame_count >= 2)
 	_redo_button.disabled = import_running or class_modal or not _history.can_redo()
 	_export_button.disabled = import_running or class_modal or not has_source or _feedback_plugin == null
 	_zoom_out_button.disabled = import_running
@@ -1859,12 +1940,33 @@ func _tool_display_name(tool_id: StringName) -> String:
 	return _tool_panel.get_tool_label(tool_id)
 
 
-func _format_timestamp(time_s: float) -> String:
-	var milliseconds := maxi(0, roundi(time_s * 1000.0))
-	var hours := milliseconds / 3600000
-	var minutes := (milliseconds / 60000) % 60
-	var seconds := (milliseconds / 1000) % 60
-	return "%02d:%02d:%02d.%03d" % [hours, minutes, seconds, milliseconds % 1000]
+func _format_fps(fps: float) -> String:
+	if not is_finite(fps) or fps < 0.0:
+		return "FPS --"
+	return "FPS %s" % _format_fps_value(fps)
+
+
+func _format_fps_value(fps: float) -> String:
+	if is_equal_approx(fps, roundf(fps)):
+		return "%d" % roundi(fps)
+	return "%.2f" % fps
+
+
+func _format_source_time(seconds: float) -> String:
+	if not is_finite(seconds) or seconds < 0.0:
+		return "--:--:--.---"
+	var total_ms := roundi(seconds * 1000.0)
+	var hours := int(total_ms / 3_600_000)
+	var minutes := int(total_ms / 60_000) % 60
+	var whole_seconds := int(total_ms / 1000) % 60
+	var milliseconds := total_ms % 1000
+	return "%02d:%02d:%02d.%03d" % [hours, minutes, whole_seconds, milliseconds]
+
+
+func _format_seconds_per_frame(seconds: float) -> String:
+	if is_equal_approx(seconds, roundf(seconds)):
+		return "%d" % roundi(seconds)
+	return "%.2f" % seconds
 
 
 func _read_taxonomy() -> Dictionary:

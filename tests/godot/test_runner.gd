@@ -28,6 +28,8 @@ const REAL_EDIT_INTEGRATION_TEST = preload("res://tests/godot/test_edit_integrat
 const RANGE_PROPAGATION_TEST = preload("res://tests/godot/test_range_propagation.gd")
 const PLAYBACK_TEST = preload("res://tests/godot/test_playback.gd")
 const PLAYBACK_CONTROLLER_TEST = preload("res://tests/godot/test_playback_controller.gd")
+const PLAYBACK_FPS_METER_TEST = preload("res://tests/godot/test_playback_fps_meter.gd")
+const PLAYBACK_SPEED_CONTROL_TEST = preload("res://tests/godot/test_playback_speed_control.gd")
 const VIDEO_IMPORT_CONTROLLER_TEST = preload("res://tests/godot/test_video_import_controller.gd")
 const TIMELINE_TEST = preload("res://tests/godot/test_timeline.gd")
 const MAIN_BOUNDARIES_TEST = preload("res://tests/godot/test_main_boundaries.gd")
@@ -73,6 +75,8 @@ func _run_tests() -> void:
 	KEYBOARD_EDITING_TEST.run(support)
 	RANGE_PROPAGATION_TEST.run(support)
 	PLAYBACK_CONTROLLER_TEST.run(support)
+	PLAYBACK_FPS_METER_TEST.run(support)
+	await PLAYBACK_SPEED_CONTROL_TEST.new().run(support, self)
 	await VIDEO_IMPORT_CONTROLLER_TEST.new().run(support, self)
 	# Includes the mounted main.tscn matrix driven only through runtime UI input.
 	await REAL_EDIT_INTEGRATION_TEST.new().run(support, self)

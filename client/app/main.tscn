@@ -8,6 +8,7 @@
 [ext_resource type="PackedScene" path="res://client/ui/dataset_explorer.tscn" id="6_explorer"]
 [ext_resource type="Script" uid="uid://ba6dok5pbno3d" path="res://client/services/video_import_controller.gd" id="7_video_import"]
 [ext_resource type="PackedScene" path="res://client/ui/class_assignment_dialog.tscn" id="8_class_dialog"]
+[ext_resource type="PackedScene" path="res://client/ui/playback_speed_control.tscn" id="9_speed"]
 
 [sub_resource type="AnimatedTexture" id="AnimatedTexture_vdyxo"]
 
@@ -55,6 +56,9 @@ layout_mode = 2
 tooltip_text = "Export a checksummed training_update_v1 package"
 disabled = true
 text = "Export"
+
+[node name="PlaybackSpeed" parent="MainVBox/TopToolbar" instance=ExtResource("9_speed")]
+layout_mode = 2
 
 [node name="WorkspaceSplit" type="HSplitContainer" parent="MainVBox" unique_id=1292000105]
 layout_mode = 2
@@ -127,12 +131,12 @@ text = ">>"
 
 [node name="FrameLabel" type="Label" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=807788897]
 layout_mode = 2
-text = "Frame - / -"
+text = "Frame - / -  ·  Time --:--:--.---"
 vertical_alignment = 1
 
-[node name="TimeLabel" type="Label" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=1558459053]
+[node name="FpsLabel" type="Label" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=1558459053]
 layout_mode = 2
-text = "--:--:--.---"
+text = "FPS --"
 vertical_alignment = 1
 
 [node name="Spacer" type="Control" parent="MainVBox/TimelinePanel/TimelineColumn/Transport" unique_id=2067385723]

@@ -1,6 +1,6 @@
 # 要求追踪表
 
-本台账将老师要求与实现证据分开。`PASS` 表示已实际运行直接自动证据或已完成指定文档交付；`BLOCKED` 表示该 Part 尚未作为完整交付范围验收。当前仓库声明完成 Part 1、Part 2.1 和 Part 3.1；Part 2.2/2.3 的七工具自动化证据已通过，但可见性能与人工 reviewer 仍待验证。Part 3.2/3.3 及后续功能不提前记为完成。
+本台账将老师要求与实现证据分开。`PASS` 表示已实际运行直接自动证据或已完成指定文档交付；`BLOCKED` 表示该 Part 尚未作为完整交付范围验收。当前仓库声明完成 Part 1、Part 2.1 和 Part 3.1。Part 2.2/2.3 的七工具自动化证据已通过，但可见性能与人工 reviewer 仍待验证。Part 3.1 的导入、播放、显式 frame/time、对齐和长片测试均已通过。Part 3.2/3.3 及后续功能不提前记为完成。
 
 | 要求来源 | 要求 | 实现 | 自动化证据 | 人工证据 | 状态 | 后续任务 |
 |---|---|---|---|---|---|---|
@@ -30,8 +30,9 @@
 | Frontend layout | 右侧可滚动 Inspector 下固定无分类、四列工具区 | `InspectorScroll`; `ToolPanel` | frontend structure 与 tool panel 测试 | 描述子的图标、名称和 focus 属性可读 | PASS | 完成 |
 | Tool inventory | 七工具：Add Box、Subtract、Lasso、Fill、Paint、Eraser、Select；Close Gaps、Region Growing、Live Wire 已移除 | `basic_edit_tools` descriptors/capabilities；`C/E/G/I` 未绑定 | advanced、ToolPanel、registry、keyboard gates | 七工具已在真实 UI 路径执行 | BLOCKED | 自动化通过；可见性能/人工复跑待完成 |
 | Navigation safety | Explorer、timeline、previous/next、playback、seek 收敛到同一帧高亮；拒绝导航或替换时保留状态 | `AnnotationMain` 单向同步和失败原子 Source 事务 | playback、main boundary、explorer 测试 | 规范化数据集渲染显示帧与 timeline 对齐 | PASS | 完成 |
-| Workspace media | 递归打开数据集文件夹，左树选中后才加载图片/序列或解析视频 | `WorkspaceCatalog`; `WorkspaceMediaController`; `WorkspaceSequenceSource`; `DatasetExplorer` | catalog、media controller、workspace integration 测试 | `Dataset_test/cholect50-challenge-val` 只读扫描 | PASS | 完成 |
-| Workspace labels | 每媒体仅 `label/<media_id>.json`，自动读写，源 `labels/` 只读，保留稀疏原始帧 ID | `MediaLabelStore`; `WorkspaceSession`; `CholecT50LabelAdapter`; media-label-v1 Schema | Python contract、Godot label/session/integration 测试 | `VID68_000016` 样本 ID 由媒体 ID 和原始帧 16 派生 | PASS | 完成 |
+| Sparse review playback | 稀疏原始帧号按可调展示时钟连续评审，原始时间元数据保持只读 | `PlaybackController` review/max 时钟；顶部 Custom/3 s/1 s/Max 速度条；`PlaybackFpsMeter` 实际交付统计 | `test_playback_controller.gd`; `test_playback_fps_meter.gd`; `test_playback_speed_control.gd`; `test_workspace_integration.gd` | VID68 的 16→23 默认等待 1 s；Custom 2.5 s 和 Max 连续索引均通过，时间戳未改写 | PASS | 完成 |
+| Workspace media | 递归打开外层或数据集文件夹，左树选中后才加载图片/序列或解析视频 | `WorkspaceCatalog`; `WorkspaceMediaController`; `WorkspaceSequenceSource`; `DatasetExplorer` | catalog、media controller、workspace integration 测试 | `Dataset_test` 及 `Dataset_test/cholect50-challenge-val` 只读扫描 | PASS | 完成 |
+| Workspace labels | 每媒体仅最近数据集根的 `label/<media_id>.json`，上下文索引统一自动读写，源 `labels/` 只读，保留稀疏原始帧 ID | `WorkspaceCatalog`; `MediaLabelStore`; `WorkspaceSession`; `CholecT50LabelAdapter`; media-label-v1 Schema | Python contract、Godot nested label-root/integration 测试 | 从外层 `Dataset_test` 选择 VID68 恢复子数据集标注；`VID68_000016` 仍由媒体 ID 和原始帧 16 派生 | PASS | 完成 |
 | Resize boundary | 两个侧栏可调整，不引入 docking 或文件管理行为 | 嵌套 `WorkspaceSplit` 与 `ContentSplit` | frontend structure 测试 | split offset 250/660 时中央仍可用 | PASS | 完成 |
 | Part 1 integration | 数据契约、插件 API、三栏组合和现有编辑行为共同工作 | 完整仓库 | 2026-09-04 回归结果：Godot exit 0 且末行 `PASS`；Python `89 passed`；样本重生成 0 errors 且 SHA-256 一致 | 实际 Godot 4.7.2、X11/GL Compatibility 渲染 | PASS | 完成 |
 | Part 2.1 Display | 原图与 regions 在保持宽高比的统一 zoom/pan/camera 下显示，并使用同一逆变换 picking | `ViewportTransform` 唯一 `Transform2D`；`AnnotationViewport` Fit、resize 中心保持和越界输入防护 | `test_viewport_transform.gd`; `test_annotation_viewport.gd` | 1280×800 可见窗口中自动执行 pan、zoom 和选择 | PASS | 完成 |
@@ -46,7 +47,7 @@
 | Part 2.2 Editing | 每个 edit 键盘可达，schema-invalid 编辑解释并原子拒绝 | `V/A/S/L/F/P/Shift+P`；`C/E/G/I` unbound；Lasso/Subtract 近距离松手自动吸附，Space 强制闭合 | keyboard/refusal gates | 自动化通过 | BLOCKED | 人工复跑待完成 |
 | Part 2.2 deliverable | runnable client 与逐项 reviewer test script | 待实现与复跑 | Godot focused/full suite；`test_documentation.py` | 人工复跑尚未开始 | BLOCKED | 待验证 |
 | Part 2.3 Design note | MITK 编辑交互的 emulated/adapted/dropped/why 决策 | `RESULTS.md` pending decision log | `tests/python/test_documentation.py` | 引用官方 MITK Segmentation View，不声称 MITK 等价 | BLOCKED | 待验证 |
-| Part 3.1 Frame-accurate stream | Play/Pause、Previous/Next 单步、seek 和显式 frame/time；索引与 annotation 严格对齐 | `PlaybackController`、`AnnotationMain` 原子 `set_frame()`、manifest `time_s`、`HH:MM:SS.mmm` | `test_playback_controller.gd`; `test_playback.gd`; `tests/benchmarks/results/part3_1_playback.json` | X11/llvmpipe 可见 10.011 s，交付 1–256 连续帧，0 跳帧 | PASS | 完成 |
+| Part 3.1 Frame-accurate stream | Play/Pause、Previous/Next 单步、seek 和显式 frame/time；索引与 annotation 严格对齐 | `PlaybackController`、`PlaybackFpsMeter`、折叠式顶部速度调节、`AnnotationMain` 原子 `set_frame()`、manifest `time_s`；运行栏同时显示已提交帧的只读 `HH:MM:SS.mmm` 和 actual FPS | `test_playback_controller.gd`; `test_playback_fps_meter.gd`; `test_playback_speed_control.gd`; `test_playback.gd`; `test_workspace_integration.gd`; `tests/benchmarks/results/part3_1_playback.json` | X11/llvmpipe 基准交付 1–153 连续帧、0 跳帧；帧 0/7 与稀疏帧 16/23 的显式时间对齐；速度、时间和 FPS 显示不改动 Store/label/time_s | PASS | 完成 |
 | Part 3.1 video import | Godot 后台将 FFmpeg 可读原视频归一化，显示进度、可取消，成功后自动打开 | `VideoImportController`; 固定 `.venv/bin/python`; Python progress/cancel/staging | Python 真实视频/取消测试；`test_video_import_controller.gd`; `tests/benchmarks/results/part3_1_import.json` | 640×360/90 帧 FFV1 真实导入+打开 0.789 s，107 个 UI heartbeat，旧数据集全程保留 | PASS | 完成 |
 | Part 3.1 long clips | 图像像素按需加载且缓存有界，长片 UI 不逐帧物化 | 12-entry `FrameCache`; virtual timeline; Explorer >500 summary mode | `test_source_plugin.gd`; `test_dataset_explorer.gd`; `tests/benchmarks/results/part3_1_long_source.json` | 10,000 帧打开 1048.448 ms；0/5000/9999/137/8765 精确 seek；5 个 TreeItem；缓存 5/12 | PASS | 完成 |
 | Part 3.1 deliverable | 索引保证、时间策略、导入、性能和限制记录 | 根目录 `RESULTS.md`; README Reviewer test script; architecture | `tests/python/test_documentation.py` 与三份 raw Part 3.1 benchmark 一致 | 未创建额外 part3.1 report | PASS | 完成 |
@@ -62,6 +63,6 @@
 - **Part 2.2 人工边界：**正式 reviewer script 尚未在重建运行时复跑，不声称这些点击已被人工观察。
 - **Part 2.1 可见基准：**1280×800、20 regions 的 X11/GL Compatibility 会话自动执行 pan、zoom 和真实 region drag；帧间隔与设备信息保存在 `tests/benchmarks/results/part2_1_display.json`。基准后的 framebuffer 截图已人工核对 letterbox、20 个 overlay/对比 label、选中高亮和 12 顶点凹 polygon。
 - **Part 3.1 真实导入：**Godot 后台处理 640×360、90 帧 FFV1 视频，观测到四个 progress stage 和 107 个 UI process heartbeat；完成后自动打开 frame 0。原始数据在导入全程保留。
-- **Part 3.1 可见播放：**640×360、20 regions 的 X11/llvmpipe 会话运行 10.011 s，实际 25.57 fps，从帧 1 到 256 严格连续且 0 跳帧。这是“慢下来而不跳帧”策略的可见证据，不是对所有设备的播放速率承诺。
+- **Part 3.1 可见播放：**640×360、20 regions 的 X11/llvmpipe 会话运行 10.026 s，实际 15.26 fps，从帧 1 到 153 严格连续且 0 跳帧。帧状态读取已提交 Source entry 的 `time_s` 而不是墙钟时间；这是“慢下来而不跳帧”策略的可见证据，不是对所有设备的播放速率承诺。
 - **Part 3.1 长片压测：**10,000 帧源的五个跨段 seek 全部精确，LRU 缓存为 5/12，Explorer 只有 5 个 TreeItem，Timeline 没有逐帧 Button。
 - 不声称人工逐个点击了每个当前工具、每条导航路径或无效替换场景；未复跑的人工操作不充当 PASS 的伪造证据。

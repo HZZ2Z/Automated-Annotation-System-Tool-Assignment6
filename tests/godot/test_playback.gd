@@ -20,6 +20,14 @@ func run(support, tree: SceneTree) -> void:
 		main.queue_free()
 		await tree.process_frame
 		return
+	support.expect_equal(main.call("_format_source_time", 0.0004), "00:00:00.000",
+		"source-time display should round sub-millisecond values down")
+	support.expect_equal(main.call("_format_source_time", 0.0005), "00:00:00.001",
+		"source-time display should round half a millisecond into milliseconds")
+	support.expect_equal(main.call("_format_source_time", 59.9995), "00:01:00.000",
+		"source-time display should carry rounded milliseconds into minutes")
+	support.expect_equal(main.call("_format_source_time", 3599.9995), "01:00:00.000",
+		"source-time display should carry rounded milliseconds into hours")
 
 	var source_root := _make_source(support, "valid", 120, 0.01, "model_output_v1")
 	var errors: PackedStringArray = main.call("open_source", source_root)
@@ -30,8 +38,30 @@ func run(support, tree: SceneTree) -> void:
 	support.expect_equal(main.call("export_handoff", handoff_path), PackedStringArray(), "Main should route export through the configured Feedback plugin")
 	support.expect(FileAccess.file_exists(handoff_path.path_join("manifest.json")), "Main export should publish the training handoff package")
 	support.expect_equal(main.call("get_current_frame"), 0, "opening should select frame zero")
-	support.expect_equal(_label(main, "FrameLabel"), "Frame 0 (120 total)", "frame label should show zero-based current index and total frame count")
-	support.expect_equal(_label(main, "TimeLabel"), "00:00:00.125", "initial timestamp should come from manifest entry zero")
+	support.expect_equal(
+		_label(main, "FrameLabel"),
+		"Frame 0 (120 total)  ·  Time 00:00:00.125",
+		"frame status should explicitly show the current source timestamp")
+	var playback_speed = main.get_node_or_null("MainVBox/TopToolbar/PlaybackSpeed")
+	support.expect(playback_speed != null
+		and playback_speed.call("get_selected_mode") == &"one_second",
+		"every multi-frame source should open at the approved one-second default")
+	support.expect_equal(_label(main, "FpsLabel"), "FPS 0",
+		"a loaded but paused source should report zero actual playback FPS")
+	var fps_meter = main.get("_playback_fps_meter")
+	support.expect(fps_meter != null,
+		"Main should own the isolated actual-delivery FPS meter")
+	if fps_meter != null:
+		fps_meter.start(1_000_000)
+		fps_meter.record_delivery(2_000_000)
+		fps_meter.record_delivery(3_000_000)
+		main.call("_refresh_labels")
+		support.expect_equal(_label(main, "FpsLabel"), "FPS 1",
+			"the transport should render measured delivery cadence instead of target speed")
+		fps_meter.stop()
+		main.call("_refresh_labels")
+		support.expect_equal(_label(main, "FpsLabel"), "FPS 0",
+			"stopping the runtime meter should restore the paused FPS state")
 	var explorer = main.get_node(
 		"MainVBox/WorkspaceSplit/DatasetExplorerContainer/DatasetExplorer"
 	)
@@ -52,6 +82,10 @@ func run(support, tree: SceneTree) -> void:
 	support.expect_equal(_selected_frame(explorer), 5,
 		"explorer highlight should agree with the accepted frame")
 	support.expect(main.seek(7), "direct seek should succeed")
+	support.expect_equal(
+		_label(main, "FrameLabel"),
+		"Frame 7 (120 total)  ·  Time 00:00:14.125",
+		"seek should display the selected frame's manifest timestamp")
 	support.expect_equal(_selected_frame(explorer), 7,
 		"direct seek should update the explorer without a second request")
 	var tool_panel = main.get_node("MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/ToolPanel")
@@ -98,12 +132,13 @@ func run(support, tree: SceneTree) -> void:
 	support.expect(main.call("seek", 2), "playback setup seek should succeed")
 	main.call("play")
 	support.expect(main.call("is_playing"), "play should start before the last frame")
-	main.call("_process", 1.999)
+	support.expect_equal(_label(main, "FpsLabel"), "FPS --",
+		"a new playback run should wait for real delivery samples")
+	main.call("_process", 0.999)
 	support.expect_equal(main.call("get_current_frame"), 2,
-		"playback should wait for the exact manifest interval")
+		"the default clock should wait for one second per frame")
 	main.call("_process", 0.001)
 	support.expect_equal(main.call("get_current_frame"), 3, "one timeout should advance exactly one explicit index")
-	support.expect_equal(_label(main, "TimeLabel"), "00:00:06.125", "displayed timestamp must use manifest time_s rather than index divided by FPS")
 	main.call("_process", 20.0)
 	support.expect_equal(main.call("get_current_frame"), 4, "successive timeouts should advance indices one by one")
 	main.call("_process", 0.0)
@@ -111,6 +146,28 @@ func run(support, tree: SceneTree) -> void:
 		"late playback must discard excess time instead of catching up or skipping")
 	main.call("pause")
 	support.expect(not main.call("is_playing"), "pause should stop playback")
+	support.expect_equal(_label(main, "FpsLabel"), "FPS 0",
+		"pausing should display zero actual playback FPS")
+
+	if playback_speed != null:
+		support.expect(playback_speed.call("select_mode", &"max", 5.0, true),
+			"the integrated speed bar should accept its Max stop")
+		support.expect(main.call("seek", 2), "maximum-speed setup seek should succeed")
+		main.call("play")
+		main.call("_process", 0.0)
+		support.expect_equal(main.call("get_current_frame"), 3,
+			"Max should deliver the next annotated frame without a configured delay")
+		main.call("_process", 0.0)
+		support.expect_equal(main.call("get_current_frame"), 4,
+			"Max should retain ordered one-frame-at-a-time delivery")
+		support.expect(main.get("_playback_fps_meter").get("_delivery_ticks_usec").size() == 2,
+			"two successful Main process commits should produce two actual-FPS samples")
+		support.expect(_label(main, "FpsLabel") != "FPS --"
+			and _label(main, "FpsLabel") != "FPS 0",
+			"two successful Main process commits should expose their measured cadence")
+		main.call("pause")
+		support.expect(playback_speed.call("select_mode", &"one_second", 5.0, true),
+			"tests should restore the approved default after maximum-speed playback")
 
 	support.expect(main.call("seek", 2), "keyboard-edit playback setup seek should succeed")
 	main.call("play")
@@ -149,6 +206,8 @@ func run(support, tree: SceneTree) -> void:
 	var playback_failure_texture: Texture2D = viewport.get("_texture")
 	var playback_failure_record: Dictionary = viewport.get("_record").duplicate(true)
 	main.play()
+	var failed_delivery_count_before: int = main.get("_playback_fps_meter").get(
+		"_delivery_ticks_usec").size()
 	main.call("_process", 2.0)
 	support.expect_equal(main.get_current_frame(), 116,
 		"a playback load failure should keep the last successfully displayed frame")
@@ -157,6 +216,10 @@ func run(support, tree: SceneTree) -> void:
 		"a playback load failure should preserve the visible texture")
 	support.expect_equal(viewport.get("_record"), playback_failure_record,
 		"a playback load failure should preserve visible annotations")
+	support.expect_equal(
+		main.get("_playback_fps_meter").get("_delivery_ticks_usec").size(),
+		failed_delivery_count_before,
+		"a failed set_frame commit must not contribute an actual-FPS sample")
 	support.expect(main.seek(50), "navigation-failure tests should restore the accepted frame")
 	preserved_texture = viewport.get("_texture")
 	preserved_record = viewport.get("_record").duplicate(true)
@@ -259,7 +322,10 @@ func run(support, tree: SceneTree) -> void:
 	main.call("_on_file_selected", raw_file)
 	support.expect_equal(main.call("get_current_frame"), 0, "raw image selection should become a one-frame source")
 	support.expect(viewport.get("_texture") != null and viewport.get("_texture").get_width() == 4, "raw image selection should display its decoded texture")
-	support.expect_equal(_label(main, "FrameLabel"), "Frame 0 (1 total)", "raw image should use the same indexed frame UI")
+	support.expect_equal(
+		_label(main, "FrameLabel"),
+		"Frame 0 (1 total)  ·  Time 00:00:00.000",
+		"raw image should use the same explicit frame/time UI")
 	support.expect("Loaded" in _status(main), "raw image selection should report a successful load")
 	var image_model: Dictionary = explorer.get("_view_model")
 	support.expect_equal(image_model.get("frames", []).size(), 1,
@@ -690,7 +756,8 @@ func _make_source(
 
 func _label(main: Node, node_name: String) -> String:
 	var path := "MainVBox/TimelinePanel/TimelineColumn/Transport/%s" % node_name
-	return str(main.get_node(path).text)
+	var node := main.get_node_or_null(path) as Label
+	return str(node.text) if node != null else "<missing>"
 
 
 func _status(main: Node) -> String:

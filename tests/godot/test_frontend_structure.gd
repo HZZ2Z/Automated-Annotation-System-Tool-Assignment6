@@ -21,6 +21,7 @@ func run(support, tree: SceneTree) -> void:
 		"MainVBox/TopToolbar/Save",
 		"MainVBox/TopToolbar/Redo",
 		"MainVBox/TopToolbar/Export",
+		"MainVBox/TopToolbar/PlaybackSpeed",
 		"MainVBox/WorkspaceSplit/DatasetExplorerContainer/DatasetExplorer",
 		"MainVBox/WorkspaceSplit/ContentSplit/ViewportPanel/AnnotationViewport",
 		"MainVBox/WorkspaceSplit/ContentSplit/RightSidebarContainer/RightSidebar/AnnotationSidebar",
@@ -30,7 +31,7 @@ func run(support, tree: SceneTree) -> void:
 		"MainVBox/TimelinePanel/TimelineColumn/Transport/PlayPause",
 		"MainVBox/TimelinePanel/TimelineColumn/Transport/Next",
 		"MainVBox/TimelinePanel/TimelineColumn/Transport/FrameLabel",
-		"MainVBox/TimelinePanel/TimelineColumn/Transport/TimeLabel",
+		"MainVBox/TimelinePanel/TimelineColumn/Transport/FpsLabel",
 		"MainVBox/TimelinePanel/TimelineColumn/Transport/ZoomOut",
 		"MainVBox/TimelinePanel/TimelineColumn/Transport/ZoomIn",
 		"MainVBox/TimelinePanel/TimelineColumn/Transport/Fit",
@@ -59,6 +60,8 @@ func run(support, tree: SceneTree) -> void:
 		"MainVBox/TopToolbar/Previous",
 		"MainVBox/TopToolbar/PlayPause",
 		"MainVBox/TopToolbar/Next",
+		"MainVBox/TopToolbar/PlaybackClockLabel",
+		"MainVBox/TopToolbar/PlaybackClock",
 	]:
 		support.expect(main.get_node_or_null(removed_path) == null, "obsolete duplicate UI should be absent: %s" % removed_path)
 	support.expect(main.find_child("Undo", true, false) == null,
@@ -159,6 +162,24 @@ func run(support, tree: SceneTree) -> void:
 		"frame-accurate playback should not retain the fixed repeating Timer")
 	support.expect(main.get("_playback_controller") != null,
 		"Main should own the frame-accurate playback controller")
+	var playback_speed = main.get_node_or_null("MainVBox/TopToolbar/PlaybackSpeed")
+	support.expect(playback_speed != null,
+		"the compact playback speed bar should live in the top toolbar")
+	if playback_speed != null:
+		support.expect_equal(playback_speed.call("get_selected_mode"), &"one_second",
+			"the top speed bar should default to one second per frame")
+		var speed_summary := playback_speed.get_node("SummaryButton") as Button
+		var speed_popup := playback_speed.get_node("AdjustmentPopup") as PopupPanel
+		var speed_slider := playback_speed.get_node(
+			"AdjustmentPopup/Margin/Content/SpeedSlider") as HSlider
+		support.expect(speed_summary.text == "1 s/frame  ▾" and not speed_popup.visible,
+			"the toolbar should normally show only its current playback status")
+		support.expect(not speed_slider.editable,
+			"playback speed should remain disabled until a multi-frame source is open")
+	var fps_label := main.get_node_or_null(
+		"MainVBox/TimelinePanel/TimelineColumn/Transport/FpsLabel") as Label
+	support.expect(fps_label != null and fps_label.text == "FPS --",
+		"transport should show a read-only FPS placeholder before a source opens")
 	var opacity_label := main.get_node_or_null("MainVBox/TimelinePanel/TimelineColumn/Transport/OpacityLabel") as Label
 	support.expect(opacity_label != null and opacity_label.text == "Overlay opacity", "opacity slider should have a persistent visible label")
 	var timeline_panel := main.get_node_or_null("MainVBox/TimelinePanel") as PanelContainer

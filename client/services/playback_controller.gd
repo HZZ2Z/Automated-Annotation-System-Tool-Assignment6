@@ -1,16 +1,25 @@
 class_name PlaybackController
 extends RefCounted
 
+const CLOCK_SOURCE_TIME := &"source_time"
+const CLOCK_REVIEW := &"review"
+const CLOCK_MAX := &"max"
+const DEFAULT_REVIEW_FPS := 25.0
+
 var _times: Array[float] = []
 var _nominal_fps := 0.0
 var _accumulated_s := 0.0
 var _playing := false
+var _clock_mode: StringName = CLOCK_SOURCE_TIME
+var _review_fps := DEFAULT_REVIEW_FPS
 
 
 func configure(frames: Array, nominal_fps: float) -> PackedStringArray:
 	pause()
 	_times.clear()
 	_nominal_fps = 0.0
+	_clock_mode = CLOCK_SOURCE_TIME
+	_review_fps = DEFAULT_REVIEW_FPS
 	var errors := PackedStringArray()
 	if frames.is_empty():
 		errors.append("Playback frames must be a non-empty Array")
@@ -45,6 +54,30 @@ func configure(frames: Array, nominal_fps: float) -> PackedStringArray:
 	return errors
 
 
+func set_clock(mode: StringName, review_fps: float = DEFAULT_REVIEW_FPS) -> PackedStringArray:
+	var errors := PackedStringArray()
+	if mode != CLOCK_SOURCE_TIME and mode != CLOCK_REVIEW and mode != CLOCK_MAX:
+		errors.append("Playback clock mode must be source_time, review, or max")
+	if mode == CLOCK_REVIEW and (
+		not is_finite(review_fps) or review_fps <= 0.0
+	):
+		errors.append("Playback review FPS must be finite and positive")
+	if not errors.is_empty():
+		return errors
+	pause()
+	_clock_mode = mode
+	if mode == CLOCK_REVIEW:
+		_review_fps = review_fps
+	return errors
+
+
+func get_effective_fps(current_frame: int) -> float:
+	if current_frame < 0 or current_frame >= _times.size():
+		return 0.0
+	var interval := _frame_interval(current_frame)
+	return 1.0 / interval if is_finite(interval) and interval > 0.0 else 0.0
+
+
 func play(current_frame: int) -> bool:
 	_accumulated_s = 0.0
 	if current_frame < 0 or current_frame >= _times.size() - 1 or _nominal_fps <= 0.0:
@@ -65,11 +98,12 @@ func tick(delta: float, current_frame: int) -> int:
 	if current_frame < 0 or current_frame >= _times.size() - 1:
 		pause()
 		return -1
+	if _clock_mode == CLOCK_MAX:
+		_accumulated_s = 0.0
+		return current_frame + 1
 	if is_finite(delta) and delta > 0.0:
 		_accumulated_s += delta
-	var interval := _times[current_frame + 1] - _times[current_frame]
-	if not is_finite(interval) or interval <= 0.0:
-		interval = 1.0 / _nominal_fps
+	var interval := _frame_interval(current_frame)
 	if _accumulated_s + 0.000000001 < interval:
 		return -1
 	# Discard excess elapsed time deliberately: slow loading slows playback instead
@@ -80,6 +114,19 @@ func tick(delta: float, current_frame: int) -> int:
 
 func is_playing() -> bool:
 	return _playing
+
+
+func _frame_interval(current_frame: int) -> float:
+	if _clock_mode == CLOCK_REVIEW:
+		return 1.0 / _review_fps
+	var interval := 0.0
+	if current_frame >= 0 and current_frame < _times.size() - 1:
+		interval = _times[current_frame + 1] - _times[current_frame]
+	elif current_frame > 0 and current_frame < _times.size():
+		interval = _times[current_frame] - _times[current_frame - 1]
+	if not is_finite(interval) or interval <= 0.0:
+		interval = 1.0 / _nominal_fps if _nominal_fps > 0.0 else 0.0
+	return interval
 
 
 func _finite_non_negative(value: Variant) -> bool:

@@ -2,6 +2,8 @@ extends SceneTree
 
 const MAIN_SCENE := preload("res://client/app/main.tscn")
 const WINDOW_SIZE := Vector2i(1280, 800)
+const REQUESTED_CLOCK := &"review"
+const REQUESTED_FPS := 30.0
 
 
 func _init() -> void:
@@ -20,6 +22,14 @@ func _run() -> void:
 	var open_ms := float(Time.get_ticks_usec() - opened_at) / 1000.0
 	if not errors.is_empty():
 		_write_json(options["output"], {"pass": false, "errors": errors, "client_open_ms": open_ms})
+		quit(2)
+		return
+	# This benchmark measures the established 30 FPS playback baseline. Configure
+	# the controller directly so UI input precision cannot change the requested clock.
+	var clock_errors: PackedStringArray = main.get("_playback_controller").set_clock(
+		REQUESTED_CLOCK, REQUESTED_FPS)
+	if not clock_errors.is_empty():
+		_write_json(options["output"], {"pass": false, "errors": clock_errors})
 		quit(2)
 		return
 	for index in range(1, 12):
@@ -76,6 +86,9 @@ func _run() -> void:
 		"processor": OS.get_processor_name(),
 		"source_resolution": [int(main.get("_manifest").get("width", 0)), int(main.get("_manifest").get("height", 0))],
 		"region_count": record.get("regions", []).size(),
+		"requested_clock": String(REQUESTED_CLOCK),
+		"requested_fps": REQUESTED_FPS,
+		"requested_seconds_per_frame": 1.0 / REQUESTED_FPS,
 		"requested_seconds": measure_seconds,
 		"measured_seconds": snappedf(elapsed_s, 0.001),
 		"process_heartbeats": process_heartbeats,
