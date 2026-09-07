@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
 # Source this file from the repository root (or any subdirectory):
-#   source scripts/project_env.sh
+#   source project_env.sh
 # It keeps all dependencies project-scoped and does not modify shell startup files.
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     printf '%s\n' "Source this script so its environment reaches your shell:" >&2
-    printf '%s\n' "  source scripts/project_env.sh" >&2
+    printf '%s\n' "  source project_env.sh" >&2
     exit 2
 fi
 
@@ -15,7 +15,7 @@ _project6_configure_environment() {
     local ffmpeg_version ffprobe_version media_version_pattern media_major media_minor
     local godot_version candidate candidate_version
     local configured_path resolved_ffmpeg resolved_ffprobe resolved_godot
-    root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+    root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
     media_bin="$root/.tools/ffmpeg/bin"
     python_bin="$root/.venv/bin/python"
     configured_path="${PATH:-}"
@@ -25,7 +25,7 @@ _project6_configure_environment() {
 
     if [[ ! -x "$python_bin" ]]; then
         printf 'Project Python is missing: %s\n' "$python_bin" >&2
-        printf '%s\n' "Create .venv and install requirements.lock before launching Godot." >&2
+        printf '%s\n' "Create .venv and run: .venv/bin/python -m pip install -e \".[dev]\"" >&2
         return 1
     fi
     python_version="$("$python_bin" --version 2>&1 || true)"
@@ -34,8 +34,8 @@ _project6_configure_environment() {
     else
         python_minor=""
     fi
-    if [[ -z "$python_minor" || "$python_minor" -lt 10 || "$python_minor" -ge 15 ]]; then
-        printf 'Project Python must be Python >=3.10,<3.15; got: %s\n' "${python_version:-unreadable}" >&2
+    if [[ -z "$python_minor" || "$python_minor" -lt 12 || "$python_minor" -ge 15 ]]; then
+        printf 'Project Python must be Python >=3.12,<3.15; got: %s\n' "${python_version:-unreadable}" >&2
         return 1
     fi
 
@@ -58,7 +58,7 @@ _project6_configure_environment() {
     if [[ -z "$resolved_ffmpeg" || -z "$resolved_ffprobe" ]]; then
         printf '%s\n' "FFmpeg 6.1+ and FFprobe are unavailable." >&2
         printf 'Expected project tools: %s and %s\n' "$media_bin/ffmpeg" "$media_bin/ffprobe" >&2
-        printf '%s\n' "Run the project-local Conda command in README; no administrator access is required." >&2
+        printf '%s\n' "Install FFmpeg/FFprobe 6.1+ in .tools/ffmpeg/bin or make them available on PATH." >&2
         return 1
     fi
     ffmpeg_version="$("$resolved_ffmpeg" -version 2>&1 || true)"

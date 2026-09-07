@@ -16,7 +16,7 @@ Project/
     ├── services/                 播放控制、帧缓存、坐标变换、视频导入等辅助服务
     ├── ui/                       界面组件：标注画布、时间轴、工具面板、侧边栏等
     └── workspace/                工作区与媒体管理、标注文件读写及自动保存
-|
+
 
 ├── core/                         # JSON Schema
 
@@ -33,7 +33,8 @@ Project/
     └── validate_model_output.pu  模型输出验证脚本
     └──annotation_data/           上述脚本的函数脚本文件夹
 
-├── pyproject.toml                # Python依赖
+├── pyproject.toml                # Python包与唯一依赖配置
+├── project_env.sh                # 本地工具版本检查与环境入口
              
 ├── tests/                        # 测试文件夹
 
@@ -56,120 +57,20 @@ Project/
 | FFmpeg | FFmpeg 6.1.2（要求 FFmpeg 6.1+） |
 | OpenCV | `opencv-python-headless==4.14.0.94` |
 
-Python 包支持 `>=3.10,<3.15`。所有 Python 依赖的精确版本记录在 `requirements.lock` 中。视频解码要求可执行的 `ffmpeg` 和 `ffprobe`：程序优先使用项目内 `.tools/ffmpeg/bin/`，缺失时才查找系统 `PATH`；正式视频集成测试则强制使用项目内的固定工具，缺失时直接失败而不是 skip。如果使用其他兼容的 Python 小版本或操作系统，需要重新运行本文的完整测试门禁来确认可复现性。
+Python 包支持 `>=3.12,<3.15`，`pyproject.toml` 是唯一的 Python 依赖配置，运行与开发依赖均固定为已验证版本。视频解码要求可执行的 `ffmpeg` 和 `ffprobe`：程序优先使用项目内 `.tools/ffmpeg/bin/`，缺失时才查找系统 `PATH`。
 
-## 环境搭建
+## Python 环境配置
 
-以下命令均从仓库根目录运行。
-
-### 1. 创建 Python 环境
+以下命令均从仓库根目录运行：
 
 ```bash
 python3.14 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -e ".[dev]"
+source project_env.sh
 ```
 
-如果系统使用其他受支持的 Python 版本，请将 `python3.14` 替换成相应命令，并确认版本满足 `>=3.10,<3.15`。
+`project_env.sh` 只校验项目 Python、Godot 4.7.2-stable 以及 FFmpeg/FFprobe 6.1+，并为当前终端设置路径；它不安装 Python 包，也不修改系统环境。
 
-### 2. 下载依赖
-
-以下两条命令需要依次执行：
-
-```bash
-.venv/bin/python -m pip install -r requirements.lock
-.venv/bin/python -m pip install --no-deps -e .
-```
-
-第一条安装锁定的第三方依赖；第二条安装当前项目，但不会重新解析依赖版本。
-
-### 3. 配置必要工具
-
-推荐 source 项目环境入口。它不修改 `.bashrc` 或系统目录；只在当前终端设置 `PROJECT6_ROOT`、`PROJECT6_PYTHON`、项目 FFmpeg `PATH` 和 `GODOT_BIN`，并验证版本与可执行性。重复 source 不会重复追加 PATH。
-
-```bash
-source scripts/project_env.sh
-"$GODOT_BIN" --version
-"$PROJECT6_PYTHON" --version
-ffmpeg -version
-ffprobe -version
-```
-
-脚本会依次查找已有 `GODOT_BIN`、系统 `godot4`/`godot`，以及 Linux 常用的 `~/下载`、`~/Downloads` 位置。Godot 输出必须以 `4.7.2.stable` 开头，FFmpeg 和 FFprobe 两条检查命令都必须成功。自定义 Godot 位置可先执行 `export GODOT_BIN=/absolute/path/to/Godot_v4.7.2-stable_linux.x86_64` 再 source。
-
-当前项目已经具备可用的 `.venv` 和 `.tools/ffmpeg`，不需要安装系统 FFmpeg。仅在新 checkout 的脚本提示项目工具缺失时，才需要使用 Conda 在项目目录中部署已验证版本；不要求管理员权限：
-
-```bash
-CONDA_PKGS_DIRS="$PWD/.tools/conda-pkgs" conda create --yes \
-  --prefix "$PWD/.tools/ffmpeg" --override-channels --channel conda-forge \
-  ffmpeg=6.1.2
-source scripts/project_env.sh
-```
-
-Godot 视频导入器会优先直接使用项目内的 `.tools/ffmpeg/bin/ffmpeg` 和
-`.tools/ffmpeg/bin/ffprobe`，因此从桌面或 Godot 编辑器启动客户端时不依赖终端的
-`PATH`。项目内和系统工具都不存在时，CLI 会同时报告缺少的工具名、预期项目路径
-和 `PATH` 回退条件，不再只显示不明确的 `[Errno 2]`。
-
-
-## 快速开始
-
-### 1. 生成可复现样本
-
-默认命令使用固定种子 `6006`，将 120 帧合成图像和匹配标注生成到 `sample/assignment_v1`：
-
-```bash
-.venv/bin/python python/make_sample_input.py
-```
-
-等价的显式命令为：
-
-```bash
-.venv/bin/python python/make_sample_input.py --output sample/assignment_v1 --seed 6006
-```
-
-输出目录必须不存在。同一 seed 会产生相同文件和 SHA-256。样本每帧约含 20 个 regions，包括一个 12 顶点凹 complex polygon；同时包含 drifted regions、wrong class labels、一个 missed region、一个 hallucinated region、一次 track-id swap，以及第 40–59 帧的 near-identical segment。
-
-### 2. 验证样本
-
-```bash
-.venv/bin/python python/validate_model_output.py sample/assignment_v1/model_output_v1.jsonl
-```
-
-成功时命令退出状态为 `0`，并输出：
-
-```text
-Validation errors: 0
-```
-
-权威 Schema 位于 `core/schemas/model_output_v1.schema.json`，Godot 等价验证器位于 `client/domain/model_output_validator.gd`。
-
-### 3. 导入视频或使用 CLI 转换
-
-客户端推荐流程：点击 **Open** 选择视频，明确选择输出父目录并输入一个尚不存在的新目录名，然后点击 **Start import**。Godot 使用项目固定的 `.venv/bin/python` 在后台执行归一化；进度窗口显示 `probe`、`extract`、`validate`、`publish`，可以安全取消。成功后客户端自动打开新目录；失败或取消不会替换当前数据集。
-
-也可以直接使用兼容的原有 CLI：
-
-```bash
-.venv/bin/python python/frame_source.py input.mp4 --output sample/normalized_video
-```
-
-该命令把任意 FFmpeg 可读取的视频转换为带显式索引和时间戳的归一化目录。客户端将视频转换结果与原生图像序列统一视为 frames-from-a-source。GUI 不回退到系统 Python；如果 `.venv/bin/python`、`ffmpeg` 或 `ffprobe` 缺失，先按“开发环境”修复，不要绕过已验证工具链。
-
-Part 3.1 已验证的播放控件为 **Previous**、**Play**、**Pause** 和 **Next**；时间显示采用 `HH:MM:SS.mmm`。其真实导入、连续播放与 10,000 帧压力测试证据见 [RESULTS.md](RESULTS.md)，不依赖 Part 2.2/2.3 的待验证重建。
-
-### 4. 启动客户端
-
-首次运行或新增 Godot 资源后，先生成本地导入缓存：
-
-```bash
-"$GODOT_BIN" --headless --editor --quit --path .
-```
-
-然后启动 Godot 编辑器并点击 **Run Project**：
-
-```bash
-"$GODOT_BIN" --editor --path .
-```
 
 ## Part 2.1 流畅渲染实现
 
@@ -189,6 +90,24 @@ Renderer 仅在 annotation record 改变时解析并缓存 image-space primitive
 ## Part 3.1 如何处理帧索引和标注记录的一致性问题
 
 视频首先通过 FFmpeg 无丢帧解码为零起、连续编号的图像序列，并在 manifest 中为每帧记录唯一的 frame、time_s 和 image_path。载入时，系统严格检查帧数量、索引连续性、图像文件以及标注记录的数量和顺序，并要求每条标注的 frame 与对应 manifest 索引一致。客户端始终使用同一索引同时读取图像、时间戳和标注，三者全部加载成功后才切换当前帧。播放过程每次只前进一个明确索引，不通过追帧跳过中间帧，从而避免图像与标注错位。
+
+## Part 3.2 相似帧判断与自动标注
+1.当前流程：修正关键帧 → 查找相似段 → 预览、必要时缩小范围 → 应用标注 → 人工检查并确认
+
+2.判断流程：
+   原始图片
+ → 双线性缩小到64×64
+ → 转换为灰度数值，并归一化到0～1
+ → 计算两张图对应像素的平均绝对差（把两张图对应位置的灰度值相减、取绝对值，再计算平均值。）
+
+3.标注传播方式：复制关键帧的 regions，坐标保持不变
+
+4.当前防止累积漂移策略：
+!两个指标防止累积漂移，一是当前帧与相邻帧的相似度，二是当前帧与初始帧的相似度，当两个值都小于阈值的时候，可以加入候选。
+!停止条件：已达到 30 帧、原始帧号不连续、遇到已经人工确认的目标帧、图像尺寸发生变化、图片加载失败，或帧信息与打开时的快照不一致
+
+5.后续计划：参考卡尔曼滤波的方式进行预测，同时也可以借鉴比较成熟的卡尔曼滤波处理累积漂移的方法
+
 
 ## Plugin API 概览
 
@@ -228,7 +147,3 @@ ffmpeg -hide_banner -loglevel error -f lavfi \
 ```
 
 基准的 `/tmp` 源目录、视频和输出目录都必须预先不存在；如需重跑，请换用新的临时名称。Python 测试必须没有 failure，也不能因为缺少 FFmpeg/FFprobe 而跳过视频集成测试。Godot 测试可能因故意打开损坏图片 fixture 而打印解码警告，但最后必须输出 `PASS: complete Godot test suite`，并以状态 `0` 退出。Part 3.1 可见播放基准要求索引严格连续且零跳帧；性能不足时允许实际播放率低于 nominal FPS，但必须在 `RESULTS.md` 如实记录。
-
-
-
-

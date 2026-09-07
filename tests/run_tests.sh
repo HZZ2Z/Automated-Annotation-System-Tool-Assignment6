@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source "$(dirname "${BASH_SOURCE[0]}")/../scripts/project_env.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../project_env.sh"
 
 "$GODOT_BIN" --headless --editor --quit --path "$PROJECT6_ROOT"
 "$PROJECT6_PYTHON" -m pytest "$PROJECT6_ROOT/tests/python" -q

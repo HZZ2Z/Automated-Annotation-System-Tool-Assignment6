@@ -86,11 +86,10 @@ FORCE_ADDED_FORBIDDEN_CASES = [
         ("README.md", "file"),
         ("RESULTS.md", "file"),
         ("pyproject.toml", "file"),
-        ("requirements.lock", "file"),
+        ("project_env.sh", "file"),
         ("project.godot", "file"),
         ("python/make_sample_input.py", "file"),
         ("python/frame_source.py", "file"),
-        ("scripts/project_env.sh", "file"),
         ("docs/architecture.md", "file"),
         ("client", "directory"),
         ("core", "directory"),
@@ -108,6 +107,47 @@ def test_assignment_deliverables_keep_their_public_locations(
         assert path.is_file()
     else:
         assert path.is_dir()
+
+
+def test_pyproject_is_the_only_python_dependency_file() -> None:
+    """Developers should have one authoritative Python dependency source."""
+
+    exact_names = {
+        "Pipfile",
+        "Pipfile.lock",
+        "conda-lock.yml",
+        "environment.yml",
+        "environment.yaml",
+        "pdm.lock",
+        "pixi.lock",
+        "pixi.toml",
+        "poetry.lock",
+        "pyproject.toml",
+        "setup.cfg",
+        "setup.py",
+        "uv.lock",
+    }
+    skipped_directories = {
+        ".git",
+        ".godot",
+        ".pytest_cache",
+        ".tools",
+        ".venv",
+        ".worktrees",
+        "__pycache__",
+    }
+    dependency_files = []
+    for path in ROOT.rglob("*"):
+        if not path.is_file() or skipped_directories.intersection(path.relative_to(ROOT).parts):
+            continue
+        if path.name in exact_names or (
+            path.name.startswith("requirements")
+            and path.suffix in {".in", ".lock", ".txt"}
+        ):
+            dependency_files.append(path.relative_to(ROOT).as_posix())
+
+    assert dependency_files == ["pyproject.toml"]
+    assert not (ROOT / "scripts").exists()
 
 
 @pytest.mark.parametrize(

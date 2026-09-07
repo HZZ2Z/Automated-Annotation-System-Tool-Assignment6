@@ -118,7 +118,7 @@ Click-based Lasso creation now exposes the actual clicked points while drawing: 
 ### Visible editing performance — 2026-09-06
 
 ```bash
-source scripts/project_env.sh
+source project_env.sh
 "$GODOT_BIN" --path . --script tests/benchmarks/godot/editing_benchmark.gd -- \
   --output tests/benchmarks/results/part2_2_editing.json --screenshot /tmp/project6-editing.png
 ```
@@ -335,3 +335,21 @@ The current batch UI requires opening a **workspace folder**, then selecting its
 Validation closeout: `bash tests/run_tests.sh` completed with exit 0; **224 Python tests passed**, the complete Godot suite and all focused editing/batch suites passed. Scoped client and persistence reviews were resolved, including preview-verification rejection and failed-ingestion recovery. Known corrupt-image fixture warnings and sandbox log/socket warnings are not counted as feature failures.
 
 Publication recheck after the subsequent README rewrite: **221 Python tests passed and 3 documentation tests failed** (`test_readme_is_a_complete_part1_runbook`, `test_part22_documents_are_truthful_during_rebuild`, `test_source_pipeline_and_sparse_identity_are_documented`). The current README omits required runbook/source documentation and explicitly prohibits automatic edits, so it is preserved as supplied. The earlier 224-pass result above describes the preceding document revision; the current full test gate is not green. The batch UI screenshot remains available at `docs/part3-batch.png` even though the rewritten README no longer embeds it.
+
+### Drift mechanisms and proposed mitigation (research, 2026-09-07)
+
+The current propagator copies one fixed keyframe independently to every target. Its primary geometric failure is **static-model mismatch**: the object moves while the copied coordinates do not. It does not recursively estimate each target from the previous prediction. Recursive estimator error and prediction-memory contamination become additional risks if tracking or video-mask propagation is introduced.
+
+Consecutive similarity is not transitive. For the current MAD representation, the triangle inequality gives `d(key, target) <= sum(adjacent distances)`; many individually small changes can form a long chain. The implemented fixed-keyframe gate bounds this feature-space radius by 0.02, but grayscale downsampling is many-to-one and provides no general bound on region location or IoU. This is related to the [single-linkage chaining effect (Carlsson and Memoli, 2010)](https://www.jmlr.org/papers/volume11/carlsson10a/carlsson10a.pdf).
+
+Fresh constructed diagnostics using the actual Godot service confirm the distinction:
+
+- A 1/255-per-frame brightness ramp stops at frame 5 because the fixed-keyframe distance exceeds 0.02 at frame 6.
+- A 20x20 white target moving 1 pixel per frame on a 640x360 black image is accepted through frame 29. At frame 4, MAD is zero but copied-box IoU is 2/3; by frame 20, IoU is zero.
+- A target that moves away and returns is accepted for all 29 frames. Both endpoints have IoU 1 while the middle frame has IoU 0. Checking only the two boundaries is therefore insufficient.
+
+Reproduce with `tests/benchmarks/godot/drift_diagnostics.gd`; it writes `tests/output/drift_diagnostics.json`. Recorded results are in `tests/benchmarks/results/part3_2_drift_diagnostics.json`. These are mechanism counterexamples, not surgical accuracy measurements.
+
+The next proposed mitigation is **object-local motion and visibility gating plus fresh human-corrected anchors**. Stop or shorten propagation when local correspondence is unreliable or displacement exceeds a task-calibrated geometry tolerance; then correct a new keyframe and start a shorter segment. Inspect interior risk frames as well as endpoints. Add a source-time duration limit alongside the frame-count cap. Forward-backward image correspondence can reject some failures ([Kalal et al., 2010](https://cmp.felk.cvut.cz/ftp/articles/matas/kalal-2010-fb_track-icpr.pdf)), but applying a cycle check to identity COPY is vacuous, and consistent correspondences can still identify the wrong object. A small registration residual with large displacement supports motion compensation, not unchanged-coordinate copying.
+
+Implementation must preserve one frozen proposal through preview and commit: today `BatchController.preview` and `PropagateRangeCommand._prepare` each construct COPY results. Changing the preview alone would not change the actual saved propagation. Future motion-aware proposals must remain compatible with V1 geometry or be explicitly rejected, retain frame/source/time identity and batch provenance, and remain unverified until human acceptance. The current production algorithm is unchanged by this research. Full analysis and source limitations: [Drift Analysis](output/pdf/Drift_Analysis.pdf).
