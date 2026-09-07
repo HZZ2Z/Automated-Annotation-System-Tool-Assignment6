@@ -224,6 +224,8 @@ class StagedEditContextBridge:
 @onready var _video_import_start: Button = $VideoImportDialog/Margin/Content/Actions/Start
 @onready var _video_import_cancel: Button = $VideoImportDialog/Margin/Content/Actions/Cancel
 
+var _batch_workflow: Node
+
 var _plugin_registry = PLUGIN_REGISTRY_SCRIPT.new()
 var _source_factory = SOURCE_FACTORY_SCRIPT.new(_plugin_registry)
 var _source_session_builder = SOURCE_SESSION_BUILDER_SCRIPT.new()
@@ -267,6 +269,9 @@ var _edit_state := {
 func _ready() -> void:
 	_connect_ui()
 	_setup_workspace_services()
+	_batch_workflow = preload("res://client/ui/batch_workflow.gd").new()
+	add_child(_batch_workflow)
+	_batch_workflow.setup(self, _tool_panel.get_parent())
 	_taxonomy = _read_taxonomy()
 	_color_resolver = CLASS_COLOR_RESOLVER_SCRIPT.new(_taxonomy)
 	var plugin_errors: PackedStringArray = _plugin_registry.discover_roots(plugin_roots)
@@ -481,6 +486,11 @@ func _activate_workspace_media(
 		candidate.close()
 		return errors if not errors.is_empty() else PackedStringArray([
 			"Workspace label frame count does not match selected media"])
+	var workflow_state: Dictionary = candidate_label_store.workflow_state()
+	errors = candidate_store.load_workflow_state(workflow_state.review_state, workflow_state.batch_operations)
+	if not errors.is_empty():
+		candidate.close()
+		return errors
 	var first_frame_id: int = frame_entries[0]["frame_id"]
 	var first_record: Dictionary = candidate_store.get_corrected_record(first_frame_id)
 	if first_record.is_empty():
@@ -573,6 +583,7 @@ func _activate_workspace_media(
 		Callable(self, "pause"),
 		Callable(self, "_set_status"),
 	)
+	_batch_workflow.bind_source()
 	_dataset_explorer.select_media(_workspace_media_id)
 	_set_status("Loaded %s (%d frames)" % [_workspace_media_id, frame_count])
 	return PackedStringArray()
@@ -820,6 +831,7 @@ func open_source(path: String) -> PackedStringArray:
 	_refresh_labels(first_entry)
 	_refresh_toolbar()
 	_set_status("Loaded %s (%d frames)" % [str(_manifest.get("dataset_id", "dataset")), candidate_frame_count])
+	_batch_workflow.bind_source()
 	_dataset_explorer.populate(candidate_explorer_view_model)
 	_dataset_explorer.select_frame(0)
 	return PackedStringArray()
@@ -870,6 +882,8 @@ func set_frame(index: int) -> bool:
 	_clear_annotation_hover()
 	_refresh_annotation_sidebar()
 	_timeline.set_current_frame(index)
+	if _batch_workflow != null:
+		_batch_workflow.refresh_current()
 	_refresh_labels(entry)
 	_refresh_toolbar()
 	if _workspace_media_id.is_empty():
@@ -1017,6 +1031,7 @@ func export_handoff(output_path: String) -> PackedStringArray:
 		"model_digest": _store.model_digest(),
 		"dirty_frames": dirty_frames,
 		"batch_operations": _store.snapshot_batch_operations(),
+		"review_state": _store.snapshot_review_state(),
 	}
 	var result: Variant = _feedback_plugin.export(context)
 	var errors: PackedStringArray = result if result is PackedStringArray else PackedStringArray(["Feedback plugin export must return PackedStringArray"])
@@ -1264,6 +1279,9 @@ func _on_selection_cancel_requested() -> void:
 
 
 func _on_image_pointer_event(event: InputEvent, image_position: Vector2) -> void:
+	if _batch_workflow != null and _batch_workflow.is_previewing():
+		_set_status("关闭预览后再编辑")
+		return
 	if _edit_plugin == null or _is_class_dialog_active():
 		return
 	var mouse_button := event as InputEventMouseButton
@@ -1432,6 +1450,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 
 func _route_edit_key(event: InputEvent) -> bool:
+	if _batch_workflow != null and _batch_workflow.is_previewing():
+		return false
 	if _edit_plugin == null or not event is InputEventKey or _is_class_dialog_active():
 		return false
 	var key: Key = event.keycode if event.keycode != KEY_NONE else event.physical_keycode
@@ -1775,6 +1795,8 @@ func _flush_workspace_changes() -> PackedStringArray:
 
 
 func _unbind_workspace_session() -> void:
+	if _batch_workflow != null:
+		_batch_workflow.clear()
 	if _workspace_session != null:
 		_workspace_session.unbind()
 
@@ -1949,6 +1971,8 @@ func _refresh_toolbar() -> void:
 	_fit_button.disabled = import_running
 	_opacity_slider.editable = not import_running
 	_sync_tool_panel()
+	if _batch_workflow != null:
+		_batch_workflow.refresh_current()
 
 
 func _sync_tool_panel() -> void:

@@ -15,3 +15,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/../scripts/project_env.sh"
 "$GODOT_BIN" --headless --path "$PROJECT6_ROOT" --script "$PROJECT6_ROOT/tests/godot/test_checked_history.gd"
 "$GODOT_BIN" --headless --path "$PROJECT6_ROOT" --script "$PROJECT6_ROOT/tests/godot/test_editing_assignment.gd"
 "$GODOT_BIN" --headless --path "$PROJECT6_ROOT" --script "$PROJECT6_ROOT/tests/godot/test_polygon_vertex_editing.gd"
+
+"$GODOT_BIN" --headless --path "$PROJECT6_ROOT" --script "$PROJECT6_ROOT/tests/godot/test_batch_workflow.gd"
+"$GODOT_BIN" --headless --path "$PROJECT6_ROOT" --script "$PROJECT6_ROOT/tests/godot/test_batch_ui.gd"

@@ -15,8 +15,8 @@ SCHEMA_PATHS = {
     "model_output_v1.schema.json": ROOT / "core/schemas/model_output_v1.schema.json",
     "dataset-manifest-v1.schema.json": ROOT
     / "core/frame_source/dataset-manifest-v1.schema.json",
-    "media-label-v1.schema.json": ROOT
-    / "core/workspace/media-label-v1.schema.json",
+    "media-label-v1.schema.json": ROOT / "core/workspace/media-label-v1.schema.json",
+    "media-label-v2.schema.json": ROOT / "core/workspace/media-label-v2.schema.json",
 }
 
 

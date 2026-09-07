@@ -1,6 +1,6 @@
 # 要求追踪表
 
-本台账将老师要求与实现证据分开。`PASS` 表示已实际运行直接自动证据或已完成指定文档交付；`BLOCKED` 表示该 Part 尚未作为完整交付范围验收。当前仓库声明完成 Part 1、Part 2.1 和 Part 3.1。Part 2.2/2.3 的实现、键盘、原子拒绝与可见编辑性能已通过自动化验证，整体验收仅剩人工 reviewer 复跑，因此仍保留 BLOCKED 行。Part 3.1 的导入、播放、显式 frame/time、对齐和长片测试均已通过。Part 3.2/3.3 及后续功能不提前记为完成。
+本台账将老师要求与实现证据分开。`PASS` 表示已实际运行直接自动证据或已完成指定文档交付；`BLOCKED` 表示该 Part 尚未作为完整交付范围验收。当前仓库声明完成 Part 1、Part 2.1 和 Part 3.1。Part 2.2/2.3 的实现、键盘、原子拒绝与可见编辑性能已通过自动化验证，整体验收仅剩人工 reviewer 复跑，因此仍保留 BLOCKED 行。Part 3.1 的导入、播放、显式 frame/time、对齐和长片测试均已通过。Part 3.2/3.3 已有合成样本端到端自动证据；不代表真实手术视频精度或人工时间收益。
 
 | 要求来源 | 要求 | 实现 | 自动化证据 | 人工证据 | 状态 | 后续任务 |
 |---|---|---|---|---|---|---|
@@ -55,8 +55,8 @@
 | Part 3.1 video import | Godot 后台将 FFmpeg 可读原视频归一化，显示进度、可取消，成功后自动打开 | `VideoImportController`; 固定 `.venv/bin/python`; Python progress/cancel/staging | Python 真实视频/取消测试；`test_video_import_controller.gd`; `tests/benchmarks/results/part3_1_import.json` | 640×360/90 帧 FFV1 真实导入+打开 0.789 s，107 个 UI heartbeat，旧数据集全程保留 | PASS | 完成 |
 | Part 3.1 long clips | 图像像素按需加载且缓存有界，长片 UI 不逐帧物化 | 12-entry `FrameCache`; virtual timeline; Explorer >500 summary mode | `test_source_plugin.gd`; `test_dataset_explorer.gd`; `tests/benchmarks/results/part3_1_long_source.json` | 10,000 帧打开 1048.448 ms；0/5000/9999/137/8765 精确 seek；5 个 TreeItem；缓存 5/12 | PASS | 完成 |
 | Part 3.1 deliverable | 索引保证、时间策略、导入、性能和限制记录 | 根目录 `RESULTS.md`; README Reviewer test script; architecture | `tests/python/test_documentation.py` 与三份 raw Part 3.1 benchmark 一致 | 未创建额外 part3.1 report | PASS | 完成 |
-| Part 3.2 Batch labelling | similarity threshold、keyframe propagation、overwrite/merge marker、verified/unverified UX 和 auto-advance | 现有 Part 1 primitive 不代表该工作流已完成 | 未作为 Part 3.2 门禁评估 | 未评估 | BLOCKED | 后续阶段 |
-| Part 3.3 Measurement | batch coverage、manual comparison、threshold 和边界质检 | 依赖 Part 3.2 完整工作流 | 未评估 | 未评估 | BLOCKED | Part 3.2 后完成 |
+| Part 3.2 Batch labelling | similarity threshold、keyframe propagation、overwrite/merge marker、verified/unverified UX 和 auto-advance | BatchController、BatchWorkflow、MediaLabel V2 | `test_batch_workflow.gd`、`test_batch_ui.gd`、`test_batch_state.gd` | 实际 UI 预览、保存重开、验证与自动前进 | PASS | 简单帧差与固定坐标传播，算法优化后续开展 |
+| Part 3.3 Measurement | batch coverage、manual comparison、threshold 和边界质检 | 派生合成样本一批覆盖20帧，实际写入19帧 | `tests/benchmarks/results/part3_2_batch.json`；RESULTS | 首尾真值一致、外邻帧排除、阈值0.02 | PASS | 重复修正次数对比，未声称人工时间收益 |
 | Part 4 | Autosave、diff、完整 update package 工作流和协作协议 | Part 1.4 仅提供最小本地 checksummed handoff，不代表 Part 4 | 未作为 Part 4 门禁评估 | 未评估 | BLOCKED | 后续阶段 |
 | Part 5 | 完整稳健性、smoke session、测量和失败分析 | 超出 Part 1 范围 | 未评估 | 未评估 | BLOCKED | 后续阶段 |
 

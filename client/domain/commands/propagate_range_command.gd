@@ -7,6 +7,7 @@ var start_frame: Variant
 var end_frame: Variant
 var mode: String
 
+var _metadata: Dictionary = {}
 var _before: Dictionary = {}
 var _after: Dictionary = {}
 var _operation: Dictionary = {}
@@ -14,11 +15,12 @@ var _operation_count_before := 0
 var _prepared := false
 
 
-func _init(keyframe_value: Variant, start_value: Variant, end_value: Variant, propagation_mode: String) -> void:
+func _init(keyframe_value: Variant, start_value: Variant, end_value: Variant, propagation_mode: String, metadata: Dictionary = {}) -> void:
 	keyframe = keyframe_value
 	start_frame = start_value
 	end_frame = end_value
 	mode = propagation_mode
+	_metadata = metadata.duplicate(true)
 
 
 func apply(store: Variant) -> PackedStringArray:
@@ -64,9 +66,11 @@ func _prepare(store: Variant) -> PackedStringArray:
 		if target.is_empty():
 			errors.append("range: target frame %d does not exist" % frame)
 			continue
-		_before[frame] = target.duplicate(true)
 		var corrected := target.duplicate(true)
 		corrected["regions"] = source_regions.duplicate(true) if mode == "overwrite" else _merge_regions(target.get("regions", []), source_regions)
+		if corrected == target:
+			continue
+		_before[frame] = target.duplicate(true)
 		_after[frame] = corrected
 		affected.append(frame)
 	if not errors.is_empty():
@@ -74,7 +78,7 @@ func _prepare(store: Variant) -> PackedStringArray:
 		_after.clear()
 		return errors
 	if affected.is_empty():
-		return PackedStringArray(["range: no target frames selected"])
+		return PackedStringArray(["range: no changed target frames"])
 	_operation_count_before = store.snapshot_batch_operations().size() if store.has_method("snapshot_batch_operations") else 0
 	_operation = {
 		"schema_version": 1,
@@ -85,6 +89,9 @@ func _prepare(store: Variant) -> PackedStringArray:
 		"mode": mode,
 		"affected_frames": affected,
 	}
+	_operation.merge(_metadata, false)
+	_operation["created_at"] = Time.get_datetime_string_from_system(true)
+	_operation["keyframe_digest"] = store.record_digest(source_frame) if store.has_method("record_digest") else ""
 	_prepared = true
 	return errors
 
@@ -109,3 +116,8 @@ func _merge_regions(target_value: Variant, source_regions: Array) -> Array:
 
 func _is_logical_integer(value: Variant) -> bool:
 	return (typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT) and is_finite(float(value)) and float(value) == floorf(float(value))
+
+
+func set_metadata(metadata: Dictionary) -> void:
+	if not _prepared:
+		_metadata = metadata.duplicate(true)

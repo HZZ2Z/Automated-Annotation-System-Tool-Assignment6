@@ -186,7 +186,7 @@ The Part 2.3 design note is complete. Human reviewer results on the canonical sa
 
 ## Part 3.1 Frame-accurate stream status
 
-Part 3.1 is `PASS` on the measured host. The client imports an FFmpeg-readable video in the background, opens the resulting indexed source, provides Play/Pause, Previous, Next and timeline seek, displays explicit frame/time plus read-only actual FPS, and keeps decoded image pixels behind a 12-texture LRU cache. The displayed `Time HH:MM:SS.mmm` is derived from the committed frame entry's immutable `time_s`, not elapsed wall-clock playback time. Part 3.2 and Part 3.3 remain incomplete and are not claimed by this result.
+Part 3.1 is `PASS` on the measured host. The client imports an FFmpeg-readable video in the background, opens the resulting indexed source, provides Play/Pause, Previous, Next and timeline seek, displays explicit frame/time plus read-only actual FPS, and keeps decoded image pixels behind a 12-texture LRU cache. The displayed `Time HH:MM:SS.mmm` is derived from the committed frame entry's immutable `time_s`, not elapsed wall-clock playback time. This section covers Part 3.1 only; the Part 3.2/3.3 workflow evidence is recorded below.
 
 Model Output V1, the dataset manifest and Plugin API version 1 did not change for this work. A raw video is an import job, not a codec-level Source plugin. Successful normalization is handed to the existing `image_sequence_source`, so video-derived and native indexed image sequences use the same frame/annotation path.
 
@@ -285,4 +285,53 @@ The memory increase includes 10,000 manifest dictionaries, 10,000 synthesized em
 
 Python tests cover CFR/VFR-relevant timestamp handling, rotation, negative and wholly missing PTS, multiple streams, progress shape and monotonicity, explicit staging, target collisions, missing tools, cancellation and active child termination. Godot tests cover the playback state machine, duplicate-timestamp fallback, no catch-up skipping, controls, last-frame stop, failed-load preservation, modal routing, non-blocking process heartbeat, cooperative cancellation and 10,000-frame Explorer materialization. Reproducible benchmark tools and their raw results live together under `tests/benchmarks/`.
 
-Audio playback, codec-level seeking, background `ImageTexture` creation, prefetching, looping and all Part 3.2 batch-labelling semantics are out of scope. In particular, the existing similarity scores and range-propagation primitive do not constitute the required Part 3.2 keyframe/verification workflow, so Part 3.2 and its Part 3.3 measurement remain `BLOCKED`.
+Audio playback, codec-level seeking, background `ImageTexture` creation, prefetching and looping remain outside the Part 3.1 implementation. The batch workflow is described in the following section.
+
+
+## Part 3.2 / 3.3 — first complete batch workflow (2026-09-07)
+
+The persistent workspace path now provides keyframe correction, bounded similarity analysis, a fixed-keyframe preview, overwrite/merge application, human verification and next-unverified navigation. The real mounted Godot UI test performs this sequence, reads the saved file, reopens the clip, checks undo/redo and exports the accepted review state. The rendered 1280×800 preview was inspected on X11 / GL Compatibility / llvmpipe. This is an automated functional and visual check, not a human labelling speed study or a surgical-video accuracy claim.
+
+### Algorithm and propagation contract
+
+`godot-rgb64-bilinear-mad-v1` converts source image pixels to RGB8, resizes to 64×64 with Godot bilinear interpolation, computes `(0.299 R + 0.587 G + 0.114 B) / 255`, then averages absolute grayscale differences. Both consecutive-frame and fixed-keyframe distance must be **strictly below 0.02**. This client metric deliberately has a different ID from the earlier Python/OpenCV INTER_AREA baseline; their scores must not be mixed. Existing unversioned manifest scores are not assumed to identify the client algorithm.
+
+Analysis advances one source frame per UI process tick and retains only the anchor/current-neighbor grayscale buffers plus temporary decoded images behind the existing 12-texture cache. It scans left first, then right, and caps the total range at **30 frames including the keyframe**. A cap is reported as truncation, not a discovered scene boundary. Original-frame-ID gaps, dimension changes and verified targets stop expansion. A load failure cancels the candidate. User cancellation and edits discard the plan.
+
+Overwrite copies the keyframe's complete regions and removes target-only regions. Merge replaces matching region IDs, adds source-only regions and retains target-only regions; it does not match classes, infer object identity, union polygons or track motion. Target source/frame/time remain unchanged. A no-op creates neither history nor batch marker. Changed targets stay unverified. Preview cannot be mistaken for accepted data: verification is refused while proposed annotations are displayed.
+
+### Reproducible sample measurement
+
+Generate a new workspace with `python/make_batch_demo.py`; it copies assignment_v1 and puts a documented wrong class and +8 pixel box-x offset on the first region of frames 40–59. The original sample stays unchanged. Restore the known correct first region on frame 50 using existing edit commands, then use the Batch panel. The original 40–59 records are identical, so testing only the unmodified sample would be a no-op demonstration.
+
+| Observation | Result |
+| --- | --- |
+| Keyframe / inclusive range | 50 / 40–59 |
+| Threshold | 0.02 |
+| Consecutive distance inside range | 0.0032859823 |
+| Left excluded transition 39→40 | 0.1941240932 |
+| Right excluded transition 59→60 | 0.1932867093 |
+| Frames covered by one batch | 20: one corrected keyframe and 19 propagated targets |
+| Actually changed target frames | 19 |
+| Repeated per-frame corrections | 20 manually, versus one keyframe correction plus batch application and review |
+| Boundary quality | Frame 40 and 59 first-region class and box match synthetic truth exactly; frame 39/60 excluded by measured difference |
+
+Raw client scores and machine timings are in `tests/benchmarks/results/part3_2_batch.json`. `analysis_ms` includes process-tick scheduling; `apply_and_save_ms` includes atomic persistence. These are one-host automated measurements, not human annotation time. We did not measure `T_manual` or `T_batch` for a reviewer and do not claim a 95% time saving. All 20 frames still require an explicit acceptance decision, individually or via the labelled range-verification action. The test also proves the original model JSONL hash remains unchanged.
+
+### Verification, persistence and drift
+
+Media Label V2 atomically saves frames, content-bound `review_state` and `batch_operations` in one file. V1 opens with no verification or batch history. A review digest is retained when content changes, so the frame becomes unverified and undo can restore the accepted version. Review-only changes also save. Failed save pauses auto-advance; Retry save remains available. Geometry, batch marker and the corresponding verification view restore on undo/redo. The handoff manifest carries review and batch metadata outside Model Output V1 records.
+
+A long run can drift even when each adjacent pair looks similar. Small object motion can also be hidden by a full-image average. The implemented mitigation combines comparison against the **fixed keyframe**, a **30-frame maximum**, original-ID gap checks, protected verified targets and explicit human boundary/review controls. A synthetic brightness ramp regression confirms the anchor stops a 1/255-per-frame drift at frame 5 for threshold 0.02. Fixed-coordinate copying remains unsuitable for appreciable motion; later ROI metrics, optical flow or tracking can replace the analysis/propagation internals without removing preview and verification.
+
+A constructed motion diagnostic demonstrates the remaining failure: a 20×20 white target moves 32 pixels on a 640×360 black image. The exact client metric is **0.0029296875 < 0.02**, accepting the pair, while the unchanged copied box has **IoU 0** with the moved target. Reproduce with `tests/benchmarks/godot/batch_motion_diagnostic.gd`; recorded output is `tests/benchmarks/results/part3_2_motion_diagnostic.json`. This is a counterexample, not a surgical-video benchmark. The current threshold and batch cap have not been calibrated on real surgical video. Complex scenes require local object/motion and occlusion checks plus motion-aware propagation, evaluated on representative clips; lowering the global threshold alone does not establish reliability.
+
+### Batch panel interaction refinement
+
+The sidebar uses three compact Chinese sections: select a corrected reference frame, preview/apply its regions, then inspect/confirm. Only first/last navigation remains; the existing player handles the keyframe and adjacent/outside frames. Range fields show original annotation frame IDs and can only shrink the candidate while retaining the reference frame. Threshold, stopping details and the auto-advance preference are collapsed under advanced settings. Proposed preview has an explicit unsaved indicator and disables verification; save failure reveals a retry action. At 1280×800 the normal review actions fit without scrolling. The real mounted UI test checks these controls and saves the screenshot shown in README.
+
+The current batch UI requires opening a **workspace folder**, then selecting its clip. Direct-source opening retains its existing viewer/export behavior and visibly explains how to enter the persistent workflow. Undo history itself is session-local; saved records, accepted digests and applied markers survive restart. The earlier PDF is a historical design report; implemented behavior and current limitations are described here.
+
+Validation closeout: `bash tests/run_tests.sh` completed with exit 0; **224 Python tests passed**, the complete Godot suite and all focused editing/batch suites passed. Scoped client and persistence reviews were resolved, including preview-verification rejection and failed-ingestion recovery. Known corrupt-image fixture warnings and sandbox log/socket warnings are not counted as feature failures.
+
+Publication recheck after the subsequent README rewrite: **221 Python tests passed and 3 documentation tests failed** (`test_readme_is_a_complete_part1_runbook`, `test_part22_documents_are_truthful_during_rebuild`, `test_source_pipeline_and_sparse_identity_are_documented`). The current README omits required runbook/source documentation and explicitly prohibits automatic edits, so it is preserved as supplied. The earlier 224-pass result above describes the preceding document revision; the current full test gate is not green. The batch UI screenshot remains available at `docs/part3-batch.png` even though the rewritten README no longer embeds it.
