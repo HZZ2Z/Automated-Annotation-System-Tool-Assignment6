@@ -61,3 +61,8 @@ id_ed25519
 # Local AI workflow artifacts are not submission deliverables.
 .superpowers/
 docs/superpowers/
+
+# Output artifacts and tests are kept locally, outside the published repository.
+/output/
+/test/
+/tests/
