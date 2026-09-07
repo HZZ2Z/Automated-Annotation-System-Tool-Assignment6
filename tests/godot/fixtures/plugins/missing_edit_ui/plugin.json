@@ -1,9 +1,0 @@
-{
-  "id": "missing_edit_ui",
-  "version": "1.0.0",
-  "api_version": 1,
-  "stage": "edit",
-  "entry": "plugin.gd",
-  "priority": 10,
-  "capabilities": ["select"]
-}
