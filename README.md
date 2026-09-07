@@ -6,9 +6,9 @@
 
 ## 项目架构
 Project/
-
+|
 ├── client/                       # Godot客户端
-
+|
 │   ├── app/                      应用入口、主界面组装与流程协调
 |   ├── domain/                   标注数据、数据校验、几何处理、撤销与重做等业务逻辑                     
 │   ├── pipeline/                 插件接口、发现注册与数据源装配
@@ -17,22 +17,22 @@ Project/
 |   ├── ui/                       界面组件：标注画布、时间轴、工具面板、侧边栏等
 │   └── workspace/                工作区与媒体管理、标注文件读写及自动保存
 |
-
+|
 ├── core/                         # JSON Schema
-
-    ├── frame_sourse/              规定数据集说明文件需要包含哪些信息
-    ├── schemas/                   定义单张图像或单帧的模型标注合同
-    ├── taxonomy/                  默认类别，可以为空
-    └── workspace/                 规定一个媒体对应的标注存档文件怎么组织，包括媒体 ID、媒体类型、来源路径，以及按帧编号保存的标注。
-
+|
+|   ├── frame_sourse/              规定数据集说明文件需要包含哪些信息
+|   ├── schemas/                   定义单张图像或单帧的模型标注合同
+|   ├── taxonomy/                  默认类别，可以为空
+|   └── workspace/                 规定一个媒体对应的标注存档文件怎么组织，包括媒体 ID、媒体类型、来源路径，以及按帧编号保存的标注。
+|
 ├── python/                       # python脚本
-
+|
 |   ├── frame_source.py           帧源脚本，负责解析视频源至图像
 │   ├── make_batch.py(demo)       相似度与标注修正脚本
 |   ├── make_sample_input.py      实例生成脚本
 │   └── validate_model_output.pu  模型输出验证脚本
 |   └──annotation_data/           上述脚本的函数脚本文件夹
-
+|
 ├── pyproject.toml                # Python依赖
              
 ├── tests/                        # 测试文件夹
