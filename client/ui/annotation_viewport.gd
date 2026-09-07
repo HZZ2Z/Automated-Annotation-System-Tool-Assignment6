@@ -1,3 +1,4 @@
+#显示与鼠标交互
 class_name AnnotationViewport
 extends Control
 
@@ -48,7 +49,7 @@ func set_renderer(renderer: Variant) -> void:
 	_sync_hover_to_renderer()
 	queue_redraw()
 
-
+#接收当前图片
 func set_texture(texture: Texture2D) -> void:
 	var texture_identity_changed := _texture != texture
 	_refresh_current_image(texture)
@@ -63,7 +64,7 @@ func set_texture(texture: Texture2D) -> void:
 	if transform_did_change:
 		transform_changed.emit()
 
-
+#接收当前标注
 func set_record(record: Dictionary) -> void:
 	if _record == record:
 		return
@@ -175,11 +176,11 @@ func reset_view_to_fit() -> bool:
 	notify_transform_changed()
 	return true
 
-
+#调用渲染器执行绘制
 func _draw() -> void:
 	_renderer.draw(self)
 
-
+#画布尺寸变化时重新计算显示变换
 func _notification(what: int) -> void:
 	match what:
 		NOTIFICATION_WM_WINDOW_FOCUS_OUT:
@@ -204,7 +205,7 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		_handle_mouse_motion(event)
 
-
+#处理滚轮缩放、鼠标按键
 func _handle_mouse_button(event: InputEventMouseButton) -> void:
 	if event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 		if event.pressed and _viewport_transform.is_configured():
@@ -250,7 +251,7 @@ func _handle_mouse_button(event: InputEventMouseButton) -> void:
 		region_selected.emit(str(hit.get("id", "")))
 	image_pointer_event.emit(event, image_position)
 
-
+#处理拖动画面以及传递编辑鼠标事件
 func _handle_mouse_motion(event: InputEventMouseMotion) -> void:
 	if _pan_button == MOUSE_BUTTON_NONE:
 		if event.button_mask & MOUSE_BUTTON_MASK_LEFT:
@@ -321,7 +322,7 @@ func _refresh_current_image(texture: Texture2D) -> void:
 		return
 	_current_image = texture_image.duplicate() as Image
 
-
+#把图片、标注、变换、选中状态和透明度交给渲染器
 func _sync_renderer() -> void:
 	_renderer.set_state(_texture, _record, _viewport_transform, _selected_id, _opacity)
 	_last_transform_signature = _transform_signature()
