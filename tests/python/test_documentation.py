@@ -323,7 +323,9 @@ def test_traceability_covers_completed_parts_and_blocks_unfinished_scope() -> No
     )
     for part in ("Part 2.2", "Part 2.3"):
         assert any(part in row and "| BLOCKED |" in row for row in table_rows)
-    for part in ("Part 3.2", "Part 3.3", "Part 4", "Part 5"):
+    for part in ("Part 3.2", "Part 3.3"):
+        assert any(part in row and "| PASS |" in row for row in table_rows)
+    for part in ("Part 4", "Part 5"):
         assert any(part in row and "| BLOCKED |" in row for row in table_rows)
 
 

@@ -7,6 +7,8 @@ signal frame_requested(index: int)
 
 @onready var _scroll_bar: HScrollBar = $ScrollBar
 
+var _candidate := Vector3i(-1, -1, -1)
+
 var _frame_count := 0
 var _current_frame := -1
 var _verified := PackedByteArray()
@@ -20,6 +22,7 @@ func _ready() -> void:
 
 
 func configure(frame_count: int) -> void:
+	_candidate = Vector3i(-1, -1, -1)
 	_frame_count = maxi(0, frame_count)
 	_current_frame = 0 if _frame_count > 0 else -1
 	_verified = PackedByteArray()
@@ -77,6 +80,11 @@ func set_batch_ranges(ranges: Array) -> void:
 	queue_redraw()
 
 
+func set_candidate(first: int, last: int, key: int) -> void:
+	_candidate = Vector3i(first, last, key)
+	queue_redraw()
+
+
 func get_frame_state(index: int) -> Dictionary:
 	if index < 0 or index >= _frame_count:
 		return {}
@@ -109,6 +117,15 @@ func _draw() -> void:
 		var rect := Rect2(x + 1.0, 1.0, maxf(1.0, cell_width - 2.0), maxf(1.0, strip_height - 2.0))
 		var fill := Color("#3f8f65") if _verified[index] != 0 else Color("#75565d")
 		draw_rect(rect, fill, true)
+		if _verified[index] == 0:
+			draw_line(rect.position + Vector2(3, rect.size.y - 3), rect.position + Vector2(rect.size.x - 3, 3), Color("#ddd4d6"), 1.0)
+		else:
+			draw_line(rect.position + Vector2(3, 8), rect.position + Vector2(6, 11), Color.WHITE, 1.5)
+			draw_line(rect.position + Vector2(6, 11), rect.position + Vector2(12, 4), Color.WHITE, 1.5)
+		if index >= _candidate.x and index <= _candidate.y:
+			draw_line(rect.position + Vector2(0, 1), rect.position + Vector2(rect.size.x, 1), Color("#65bfff"), 3.0)
+		if index == _candidate.z:
+			draw_circle(rect.get_center(), 3.0, Color("#65bfff"))
 		if _in_batch[index] != 0:
 			draw_rect(rect.grow(-1.0), Color("#e0a84b"), false, 2.0)
 		if index == _current_frame:

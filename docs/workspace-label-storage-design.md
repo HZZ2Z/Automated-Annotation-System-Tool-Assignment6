@@ -63,7 +63,7 @@ label/<media_id>.json
 
 ## Native media-label JSON
 
-The authoritative schema is `core/workspace/media-label-v1.schema.json`. A native file contains:
+The original V1 schema is `core/workspace/media-label-v1.schema.json`; it remains readable. Part 3.2 writes `core/workspace/media-label-v2.schema.json`, adding `review_state` (content-bound acceptance) and `batch_operations` to the same atomic media file. The following example describes the legacy V1 envelope:
 
 ```json
 {

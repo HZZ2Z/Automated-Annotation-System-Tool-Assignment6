@@ -125,6 +125,12 @@ func _validate_context(context: Dictionary) -> PackedStringArray:
 		for index in range(batch_operations.size()):
 			if not batch_operations[index] is Dictionary:
 				errors.append("batch_operations.%d: expected a Dictionary" % index)
+	var frame_map := {}
+	if records is Array:
+		for record: Variant in records:
+			if record is Dictionary and record.has("frame"):
+				frame_map[int(record.frame)] = record
+	errors.append_array(preload("res://client/domain/annotation_store.gd").validate_workflow_state(context.get("review_state", {}), batch_operations, frame_map))
 	return errors
 
 
@@ -148,6 +154,7 @@ func _build_manifest(context: Dictionary, corrected_sha256: String, corrected_by
 		"corrected_frame_count": context["records"].size(),
 		"dirty_frames": context.get("dirty_frames", []).duplicate(),
 		"batch_operations": context.get("batch_operations", []).duplicate(true),
+		"review_state": context.get("review_state", {}).duplicate(true),
 		"artifacts": [{"role": "corrected_annotations", "path": CORRECTED_PATH, "bytes": corrected_bytes, "sha256": corrected_sha256}],
 	}
 

@@ -5,6 +5,7 @@ extends RefCounted
 signal saved(path: String)
 signal save_failed(frame_ids: PackedInt64Array, path: String, message: String)
 
+const ANNOTATION_STORE_SCRIPT := preload("res://client/domain/annotation_store.gd")
 const PATHS_SCRIPT := preload("res://client/workspace/workspace_paths.gd")
 const VALIDATOR_SCRIPT := preload("res://client/domain/model_output_validator.gd")
 const MEDIA_TYPES := {"image": true, "video": true, "image_sequence": true}
@@ -19,6 +20,9 @@ const TOP_LEVEL_FIELDS := {
 }
 
 
+var _review_state: Dictionary = {}
+var _batch_operations: Array = []
+var _workflow_dirty := false
 var _validator = VALIDATOR_SCRIPT.new()
 var _workspace_root := ""
 var _media_entry: Dictionary = {}
@@ -92,6 +96,8 @@ func prepare(
 
 	var candidate_label_path := PATHS_SCRIPT.label_path(label_root, media_id_value)
 	var explicit := {}
+	var next_reviews := {}
+	var next_operations: Array = []
 	var label_exists := FileAccess.file_exists(candidate_label_path)
 	if label_exists:
 		if _path_is_link(candidate_label_path):
@@ -103,6 +109,8 @@ func prepare(
 		errors = _validate_payload(payload, media_entry, frame_map)
 		if not errors.is_empty():
 			return _prefix_errors(candidate_label_path, errors)
+		next_reviews = payload.get("review_state", {}).duplicate(true)
+		next_operations = payload.get("batch_operations", []).duplicate(true)
 		for key: Variant in payload["frames"]:
 			explicit[int(key)] = (payload["frames"][key] as Dictionary).duplicate(true)
 	else:
@@ -119,6 +127,9 @@ func prepare(
 			display[frame_id] = _empty_record(
 				media_id_value, frame_id, float(entry.get("time_s", frame_id)))
 
+	_review_state = next_reviews
+	_batch_operations = next_operations
+	_workflow_dirty = false
 	_workspace_root = root
 	_media_entry = media_entry.duplicate(true)
 	_frame_entries_by_id = frame_map
@@ -146,6 +157,7 @@ func all_display_records() -> Array[Dictionary]:
 
 
 func replace_record(frame_id: int, record: Variant) -> PackedStringArray:
+	record = _persistent_record(record)
 	var errors := _validate_record_for_frame(frame_id, record)
 	if not errors.is_empty():
 		return errors
@@ -161,7 +173,7 @@ func is_explicit(frame_id: int) -> bool:
 
 
 func has_pending_changes() -> bool:
-	return not _dirty_frames.is_empty()
+	return _workflow_dirty or not _dirty_frames.is_empty()
 
 
 func dirty_frame_ids() -> PackedInt64Array:
@@ -218,11 +230,15 @@ func flush() -> PackedStringArray:
 			"Cannot publish media label %s (%s)" % [
 				_label_path, error_string(rename_error)])
 	_dirty_frames.clear()
+	_workflow_dirty = false
 	saved.emit(_label_path)
 	return PackedStringArray()
 
 
 func clear() -> void:
+	_review_state.clear()
+	_batch_operations.clear()
+	_workflow_dirty = false
 	_workspace_root = ""
 	_media_entry.clear()
 	_frame_entries_by_id.clear()
@@ -240,7 +256,9 @@ func _payload() -> Dictionary:
 	for frame_id: int in keys:
 		frames[str(frame_id)] = (_explicit_records[frame_id] as Dictionary).duplicate(true)
 	return {
-		"schema_version": 1,
+		"schema_version": 2,
+		"review_state": _review_state.duplicate(true),
+		"batch_operations": _batch_operations.duplicate(true),
 		"media_id": _media_entry["media_id"],
 		"media_type": _media_entry["media_type"],
 		"source_relative_path": _source_relative_path(_media_entry),
@@ -258,16 +276,22 @@ func _validate_payload(
 	var errors := PackedStringArray()
 	if not payload is Dictionary:
 		return PackedStringArray(["$: media label must be a JSON object"])
+	var allowed := TOP_LEVEL_FIELDS.duplicate()
+	if payload.get("schema_version") == 2:
+		allowed["review_state"] = true
+		allowed["batch_operations"] = true
 	for key: Variant in payload:
-		if typeof(key) != TYPE_STRING or not TOP_LEVEL_FIELDS.has(key):
+		if typeof(key) != TYPE_STRING or not allowed.has(key):
 			errors.append("%s: additional field is not allowed" % str(key))
-	for field: String in TOP_LEVEL_FIELDS:
+	for field: String in allowed:
 		if not payload.has(field):
 			errors.append("%s: required field is missing" % field)
 	if not errors.is_empty():
 		return errors
-	if payload.get("schema_version") != 1:
-		errors.append("schema_version: expected 1")
+	if typeof(payload.get("schema_version")) not in [TYPE_INT, TYPE_FLOAT] or (payload.get("schema_version") != 1 and payload.get("schema_version") != 2):
+		errors.append("schema_version: expected 1 or 2")
+	if payload.get("schema_version") == 2:
+		errors.append_array(ANNOTATION_STORE_SCRIPT.validate_workflow_state(payload.get("review_state"), payload.get("batch_operations"), frame_map))
 	if payload.get("frame_digits") != 6:
 		errors.append("frame_digits: expected 6")
 	for field: String in ["media_id", "media_type", "source_relative_path"]:
@@ -434,3 +458,30 @@ func _is_decimal(value: String) -> bool:
 		if code < 48 or code > 57:
 			return false
 	return true
+
+
+func workflow_state() -> Dictionary:
+	return {"review_state": _review_state.duplicate(true), "batch_operations": _batch_operations.duplicate(true)}
+
+
+func replace_workflow_state(review_state: Variant, batch_operations: Variant) -> PackedStringArray:
+	var errors: PackedStringArray = ANNOTATION_STORE_SCRIPT.validate_workflow_state(review_state, batch_operations, _frame_entries_by_id)
+	if not errors.is_empty():
+		return errors
+	if _review_state != review_state or _batch_operations != batch_operations:
+		_review_state = review_state.duplicate(true)
+		_batch_operations = batch_operations.duplicate(true)
+		_workflow_dirty = true
+	return errors
+
+
+func _persistent_record(record: Variant) -> Variant:
+	if not record is Dictionary:
+		return record
+	var result: Dictionary = record.duplicate(true)
+	var regions: Variant = result.get("regions")
+	if regions is Array:
+		for region: Variant in regions:
+			if region is Dictionary:
+				region.erase("filled")
+	return result

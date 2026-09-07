@@ -118,7 +118,7 @@ Fill 由纯函数 `FillRegionSolver.solve` 先严格求包含种子的封闭空�
 
 - `export(context: Dictionary) -> PackedStringArray`
 
-context 包含 `records`、`output_path`、`source_manifest`、`model_digest`、`dirty_frames` 和 `batch_operations`。`file_training_handoff` 发出 `export_finished(success, path_or_error)`，在目标同级建立 staging 目录，验证内容与校验和后重命名发布；目标已存在时拒绝覆盖。
+context 包含 `records`、`output_path`、`source_manifest`、`model_digest`、`dirty_frames`、`batch_operations` 和可选的 `review_state`（原始帧 ID → 已接受内容摘要）。`file_training_handoff` 发出 `export_finished(success, path_or_error)`，在目标同级建立 staging 目录，验证内容与校验和后重命名发布；目标已存在时拒绝覆盖。
 
 ```text
 training_update_v1/

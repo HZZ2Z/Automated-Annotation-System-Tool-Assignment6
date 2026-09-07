@@ -350,3 +350,14 @@ tests/run_tests.sh
 ```
 
 成功标准是独立验证器输出 `Validation errors: 0`、Python 测试无失败、Godot 完整套件最终输出 `PASS: complete Godot test suite`，以及 `tests/run_tests.sh` 中每个 focused script 状态为 0。Part 2.1 额外要求可见窗口基准平均 `≥30 fps`、p95 帧间隔 `≤40 ms`、图像坐标误差 `≤1e-5`。Part 2.2 还要求拒绝不修改 Store/history、每次成功手势只一条 command，并完整保留 Model Output V1 投影。Part 3.1 额外要求实际交付的帧索引连续、零跳帧，10,000 帧源的纹理缓存 `≤12`，Explorer/Timeline 不逐帧创建 UI 节点。性能数字只能对实测设备声明。验证前后原始模型输出文件的 SHA-256 必须一致。
+
+
+## Part 3.2 batch workflow
+
+`FrameSimilarityService` reads source textures one at a time and outputs a bounded range plus distances and stop reasons. `BatchController` pins the corrected keyframe, builds disposable overwrite/merge previews and rejects stale/no-op application. The algorithm is identified by `godot-rgb64-bilinear-mad-v1`; no model or tracking dependency is involved.
+
+`BatchWorkflow` mounts the right-side Batch tab and coordinates existing navigation guards, preview rendering, command history and persistence. Main only wires this coordinator when a source session is committed. Timeline receives playback indices; controller/persistence records use original frame IDs. Sparse IDs stop contiguous expansion before the gap.
+
+`AnnotationStore` owns content-bound review acceptance and batch operation history. `ReviewFramesCommand` changes acceptance through normal undo/redo; `PropagateRangeCommand` performs atomic multi-frame replacements and marker restoration. `WorkspaceSession` synchronizes record and review changes into `MediaLabelStore`, whose V2 envelope atomically persists `frames`, `review_state` and `batch_operations`. Existing V1 files remain readable. Transient editing display properties are projected out of persisted Model Output V1 geometry. Review hashes describe acceptance of one exact content version, independently of model confidence.
+
+Algorithm extensions should preserve the plan → preview → validated command → human verification boundary. Replace the similarity service/metric ID or the proposed-region generator; do not bypass store transactions or infer verification from low image difference. Current direct-source mode has no batch auto-save and directs users to the parent workspace path.

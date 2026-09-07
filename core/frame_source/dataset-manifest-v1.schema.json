@@ -1,4 +1,5 @@
 {
+  "$comment": "规定数据集说明文件需要包含哪些信息，比如图片宽高、总帧数、帧率，以及每帧的编号、时间戳和图片路径。",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "dataset-manifest-v1.schema.json",
   "type": "object",
