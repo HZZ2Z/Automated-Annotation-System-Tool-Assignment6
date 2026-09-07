@@ -1,3 +1,4 @@
+#等比例变化与显示
 class_name ViewportTransform
 extends RefCounted
 
@@ -14,7 +15,7 @@ var _configured := false
 var _image_to_viewport_transform := Transform2D.IDENTITY
 var _viewport_to_image_transform := Transform2D.IDENTITY
 
-
+"""根据图片尺寸和画布尺寸，计算适配比例与居中位置"""
 func configure(new_image_size: Vector2, new_viewport_rect: Rect2) -> bool:
 	var dimensions_are_valid := _valid_size(new_image_size) and _valid_size(new_viewport_rect.size)
 	var preserve_user_view := dimensions_are_valid and _configured and image_size.is_equal_approx(new_image_size)
@@ -25,10 +26,15 @@ func configure(new_image_size: Vector2, new_viewport_rect: Rect2) -> bool:
 		return false
 	image_size = new_image_size
 	viewport_rect = new_viewport_rect
-	fit_scale = minf(viewport_rect.size.x / image_size.x, viewport_rect.size.y / image_size.y)
+	#保持宽高比,横纵使用同一个缩放比例
+	fit_scale = minf(
+		viewport_rect.size.x / image_size.x,
+		viewport_rect.size.y / image_size.y
+	)
 	if not is_finite(fit_scale) or fit_scale <= 0.0:
 		_reset()
 		return false
+	#把剩余空间平均分到两边，让图片居中。
 	letterbox_offset = (viewport_rect.size - image_size * fit_scale) * 0.5
 	if preserve_user_view:
 		user_zoom = preserved_zoom
@@ -41,13 +47,14 @@ func configure(new_image_size: Vector2, new_viewport_rect: Rect2) -> bool:
 func is_configured() -> bool:
 	return _configured
 
-
+"""把图片坐标转换为画布坐标"""
 func image_to_viewport(point: Vector2) -> Vector2:
 	if not _configured:
 		return Vector2.ZERO
 	return _image_to_viewport_transform * point
 
 
+"""把鼠标的画布坐标转换回图片坐标"""
 func viewport_to_image(point: Vector2) -> Vector2:
 	if not _configured:
 		return Vector2.ZERO
@@ -73,7 +80,7 @@ func contains_viewport_point(point: Vector2) -> bool:
 		and image_point.y <= image_size.y
 	)
 
-
+"""恢复到适配画布的显示状态"""
 func reset_to_fit() -> bool:
 	if not _configured or (is_equal_approx(user_zoom, 1.0) and pan.is_zero_approx()):
 		return false
@@ -83,6 +90,7 @@ func reset_to_fit() -> bool:
 	return true
 
 
+"""以鼠标所在位置为中心缩放"""
 func zoom_at(viewport_point: Vector2, factor: float) -> void:
 	if not _configured or not is_finite(factor) or factor <= 0.0:
 		return
@@ -95,6 +103,7 @@ func zoom_at(viewport_point: Vector2, factor: float) -> void:
 	_update_matrices()
 
 
+"""平移画面"""
 func pan_by(delta: Vector2) -> void:
 	if not _configured or not delta.is_finite():
 		return

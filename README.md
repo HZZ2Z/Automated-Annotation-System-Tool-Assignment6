@@ -71,7 +71,6 @@ source project_env.sh
 
 `project_env.sh` 只校验项目 Python、Godot 4.7.2-stable 以及 FFmpeg/FFprobe 6.1+，并为当前终端设置路径；它不安装 Python 包，也不修改系统环境。
 
-
 ## Part 2.1 流畅渲染实现
 
 `AnnotationViewport` 只使用一个共享的 image↔viewport `Transform2D`，让等比显示、zoom/pan、overlay 绘制与鼠标 picking 遵守同一套坐标契约。Part 2.1 已验证的 **Overlay opacity** 与 **Fit** 保持在该显示路径中。视口实行 dirty redraw：只在 texture、record、selection、opacity 或变换真正改变后调用 `queue_redraw()`，重复设置同一状态不会再次入队。
@@ -95,10 +94,13 @@ Renderer 仅在 annotation record 改变时解析并缓存 image-space primitive
 1.当前流程：修正关键帧 → 查找相似段 → 预览、必要时缩小范围 → 应用标注 → 人工检查并确认
 
 2.判断流程：
-   原始图片
- → 双线性缩小到64×64
- → 转换为灰度数值，并归一化到0～1
- → 计算两张图对应像素的平均绝对差（把两张图对应位置的灰度值相减、取绝对值，再计算平均值。）
+        原始图片
+          ↓
+    双线性缩小到 64×64
+          ↓
+转换为灰度数值，并归一化到 0～1
+          ↓
+计算两张图对应像素的平均绝对差（把两张图对应位置的灰度值相减、取绝对值，再计算平均值。）
 
 3.标注传播方式：复制关键帧的 regions，坐标保持不变
 

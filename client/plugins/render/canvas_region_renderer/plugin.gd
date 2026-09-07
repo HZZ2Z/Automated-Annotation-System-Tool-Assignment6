@@ -1,3 +1,5 @@
+#绘制
+#原图、矩形框和多边形顶点都使用同一个：_transform.image_to_viewport(...)
 extends "res://client/pipeline/stages/render_stage.gd"
 
 const REGION_GEOMETRY := preload("res://client/domain/region_geometry.gd")
@@ -31,7 +33,7 @@ var _screen_rebuilds := 0
 func _init() -> void:
 	_color_resolver = CLASS_COLOR_RESOLVER.new(_read_taxonomy())
 
-
+#接收当前显示数据，更新缓存
 func set_state(texture: Texture2D, record: Dictionary, transform, selected_id: String, opacity: float) -> void:
 	_texture = texture
 	_transform = transform
@@ -69,7 +71,7 @@ func set_suppressed_region_ids(region_ids: PackedStringArray) -> void:
 	_suppressed_region_ids = region_ids.duplicate()
 	_rebuild_screen_commands()
 
-
+#绘制原图，再绘制标注
 func draw(canvas: CanvasItem) -> void:
 	if canvas == null or _transform == null or not _transform.is_configured():
 		return
@@ -80,7 +82,7 @@ func draw(canvas: CanvasItem) -> void:
 	for command: Dictionary in _overlay_commands:
 		_draw_overlay(canvas, command)
 
-
+#判断鼠标点击的图片位置属于哪个区域
 func hit_test(image_point: Vector2) -> Dictionary:
 	for index in range(_primitives.size() - 1, -1, -1):
 		var primitive: Dictionary = _primitives[index]
@@ -152,7 +154,7 @@ func _primitive_is_visible(primitive: Dictionary) -> bool:
 	var viewport_bounds := Rect2(top_left, bottom_right - top_left).abs()
 	return _transform.viewport_rect.intersects(viewport_bounds, true)
 
-
+#把框和多边形的图片坐标转换到画布坐标
 func _screen_command(primitive: Dictionary) -> Dictionary:
 	var region: Dictionary = primitive["region"]
 	var selected := str(region.get("id", "")) == _selected_id
@@ -214,7 +216,7 @@ func _add_label_layout(command: Dictionary, anchor: Vector2) -> void:
 	command["label_background"] = Rect2(background_position, background_size)
 	command["label_position"] = background_position + Vector2(LABEL_PADDING.x, LABEL_PADDING.y + font.get_ascent(LABEL_FONT_SIZE))
 
-
+#实际画框、多边形填充、边线、文字和缩放手柄
 func _draw_overlay(canvas: CanvasItem, command: Dictionary) -> void:
 	var color: Color = command["color"]
 	var fill_color: Color = command["fill_color"]

@@ -1,3 +1,5 @@
+#负责尚未提交的编辑效果，例如正在画的轮廓、候选多边形、遮罩预览、顶点和笔刷半径圆。
+#重点函数是 _draw()、_draw_candidate()、_draw_path()、_draw_mask_preview() 和 _draw_brush_cursor()。它也使用同一套坐标变换，让预览跟随图片缩放和平移
 class_name EditOverlay
 extends Control
 
