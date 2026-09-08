@@ -1,5 +1,5 @@
 {
-  "$comment": "本文件定义单张图像或单帧的模型标注合同；JSONL 文件的每一行分别按此合同校验。$comment 是开发者注释，description 是数据含义说明，二者均不新增校验限制，也无需写入实际标注数据。$schema 指定 JSON Schema 标准版本；$id 标识本合同；title 是便于阅读的标题。数值类型均不接受布尔值或数字字符串；integer 按数学整数值判断，例如 1.0 也属于整数。标准 JSON 不允许 NaN 或 Infinity，项目校验器也显式拒绝非有限数。",
+  "$comment": "本文件定义单张图像或单帧的模型标注合同；不能随意增加合同没有声明的字段。",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "model_output_v1.schema.json",
   "title": "Model Output V1 Per-Image Annotation Record",

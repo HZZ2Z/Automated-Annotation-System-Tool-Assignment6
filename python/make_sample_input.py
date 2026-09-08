@@ -1,9 +1,8 @@
-"""Part 1.2 CLI for the deterministic synthetic annotation sample.
+"""生成确定性合成标注样例的命令行入口。
 
-The no-argument invocation uses the canonical output and fixed seed required by
-the reviewer workflow. Reusable rendering and defect planting remain in
-:mod:`annotation_data.sample`; this adapter owns only arguments, exit codes, and
-human-readable process output.
+不传参时使用评审流程要求的标准输出目录和固定随机种子。图像渲染、
+错误注入等可复用逻辑由 ``annotation_data.sample`` 负责；本文件只负责
+解析命令行参数、返回退出码和输出可读的运行结果。
 """
 
 import argparse
@@ -14,15 +13,16 @@ from typing import Sequence
 from annotation_data.sample import generate_sample
 
 
+# 无参调用时使用的标准输出位置和随机种子。
 DEFAULT_OUTPUT = Path("sample/assignment_v1")
 DEFAULT_SEED = 6006
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """Parse optional output and seed overrides for deterministic generation.
+    """解析可选的输出目录和随机种子参数。
 
-    Defaults intentionally provide the canonical fixed-seed reviewer invocation;
-    callers can pass ``argv`` to reuse the same contract in tests or automation.
+    默认值对应固定种子的标准评审调用；测试或自动化代码可传入
+    ``argv`` 复用同一套参数规则。
     """
     parser = argparse.ArgumentParser(
         description="Generate the deterministic synthetic annotation sample."
@@ -43,19 +43,26 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Generate the requested sample, returning ``0`` or a handled error ``1``.
+    """执行样例生成流程，成功返回 ``0``，已处理的错误返回 ``1``。
 
-    The supplied seed controls deterministic bytes. Existing output directories
-    are refused rather than overwritten, preserving a previous reproducible run
-    until a caller deliberately selects a new destination.
+    Args:
+        argv: 可选的命令行参数序列；为 ``None`` 时读取实际命令行。
+
+    Returns:
+        ``0`` 表示生成和校验成功，``1`` 表示输出目录冲突或生成失败。
+
+    输出目录已存在时会拒绝覆盖，从而保留上一次可重复的生成结果。
     """
     args = parse_args(argv)
     try:
+        # 具体生成逻辑由专用模块实现，本入口只管理调用和错误映射。
         generate_sample(args.output, seed=args.seed)
     except FileExistsError:
+        # 已有目录不是可覆盖状态，统一转换为可预期的失败退出码。
         print(f"error: output directory already exists: {args.output}", file=sys.stderr)
         return 1
     except (OSError, ValueError) as error:
+        # 将写盘失败和数据校验失败作为可读的命令行错误输出。
         print(f"error: {error}", file=sys.stderr)
         return 1
 
@@ -65,4 +72,5 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # 将 main() 的整数结果交给操作系统作为进程退出码。
     raise SystemExit(main())

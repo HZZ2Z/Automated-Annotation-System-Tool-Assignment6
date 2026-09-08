@@ -1,4 +1,8 @@
-"""Deterministic synthetic annotation sample generation."""
+"""生成可重复的合成标注样例。
+
+样例同时包含干净的图像内容和预先设计的模型错误，用于演示、测试与回归验证。
+相同的随机种子必须生成字节级一致的输出。
+"""
 
 from copy import deepcopy
 import hashlib
@@ -17,10 +21,12 @@ from annotation_data.jsonl import write_jsonl_atomic
 from annotation_data.similarity import normalized_mad
 
 
+# 样例数据集的固定规格。
 FRAME_COUNT = 120
 WIDTH = 640
 HEIGHT = 360
 FPS = 30.0
+# 该区间故意生成高度相似的连续帧，供相似度功能测试。
 SIMILAR_START = 40
 SIMILAR_END = 59
 
@@ -29,6 +35,7 @@ SOURCE_ID = "sample_v1"
 MODEL_VERSION = "model_output_v1"
 TAXONOMY_VERSION = "sample-taxonomy-v1"
 
+# 20 个稳定区域的类别、类型和渲染颜色。
 _REGION_CLASSES = (
     "grasper",
     "scissors",
@@ -68,12 +75,21 @@ _CLASS_COLORS_BGR = {
 
 
 def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
-    """Generate the sample and return content hashes keyed by relative path."""
+    """生成完整的合成样例，返回按相对路径索引的 SHA-256 摘要。
+
+    Args:
+        output_dir: 新样例的输出目录；为防止覆盖数据，该目录不能已经存在。
+        seed: 控制颜色微扰和可重复输出的随机种子。
+
+    Returns:
+        键为输出目录内相对路径、值为文件 SHA-256 摘要的字典。
+    """
     rng = np.random.default_rng(seed)
     output_dir.mkdir(parents=True, exist_ok=False)
     frames_dir = output_dir / "frames"
     frames_dir.mkdir()
 
+    # 每个区域只抽样一次颜色微扰，保持其跨帧外观一致。
     color_jitter = rng.integers(-5, 6, size=(len(_REGION_CLASSES), 3))
     ground_truth: list[dict[str, Any]] = []
     frame_paths: list[Path] = []
@@ -81,6 +97,7 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
     similarity_scores: list[float] = []
     previous_image: np.ndarray | None = None
 
+    # 第一阶段：生成干净标注、对应图像和相邻帧相似度。
     for frame in range(FRAME_COUNT):
         regions = _clean_regions(frame, seed)
         image = _render_frame(frame, seed, regions, color_jitter)
@@ -103,8 +120,11 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
             }
         )
 
+    # 第二阶段：在真值的深拷贝上注入错误，避免修改干净参照数据。
     model_output = deepcopy(ground_truth)
     expected_defects = _plant_defects(model_output, ground_truth, seed)
+
+    # 清单描述帧索引、时间轴、来源摘要与版本信息。
     manifest = {
         "schema_version": 1,
         "dataset_id": DATASET_ID,
@@ -127,6 +147,7 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
         "taxonomy_version": TAXONOMY_VERSION,
     }
 
+    # 第三阶段：先校验内存中的数据，再发布为 JSON/JSONL 文件。
     _validate_outputs(manifest, model_output)
     manifest_path = output_dir / "manifest.json"
     annotation_path = output_dir / f"{MODEL_VERSION}.jsonl"
@@ -135,6 +156,7 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
     write_jsonl_atomic(annotation_path, model_output)
     _write_json(defects_path, expected_defects)
 
+    # 第四阶段：为所有内容文件建立确定性摘要，供完整性和回归测试使用。
     hashed_paths = [*frame_paths, manifest_path, annotation_path, defects_path]
     hashes = {
         path.relative_to(output_dir).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -146,6 +168,8 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
 
 
 def _clean_regions(frame: int, seed: int) -> list[dict[str, Any]]:
+    """构造指定帧的干净区域标注，包含边界框和多边形两种几何。"""
+    # 相似帧区间共用同一个运动位置，仅保留极轻微的画面变化。
     motion_frame = SIMILAR_START if SIMILAR_START <= frame <= SIMILAR_END else frame
     regions: list[dict[str, Any]] = []
     for index, class_id in enumerate(_REGION_CLASSES):
@@ -160,6 +184,7 @@ def _clean_regions(frame: int, seed: int) -> list[dict[str, Any]]:
             "conf": round(0.72 + (index % 7) * 0.035, 3),
             "track_id": f"sample-t{index + 1:02d}",
         }
+        # 前 16 个区域使用边界框，其余区域用不同复杂度的多边形覆盖几何分支。
         if index < 16:
             region["box"] = [x, y, width, height]
         elif index == 16:
@@ -198,6 +223,8 @@ def _render_frame(
     regions: list[dict[str, Any]],
     color_jitter: np.ndarray,
 ) -> np.ndarray:
+    """将区域标注渲染为 BGR 图像，用于生成与标注一致的测试帧。"""
+    # 相似帧只在背景上交替 1 个像素值；其他帧保留明显的时间变化。
     if SIMILAR_START <= frame <= SIMILAR_END:
         variation = (frame + seed) % 2
         background = np.array([24 + variation, 28 + variation, 32 + variation], dtype=np.uint8)
@@ -214,6 +241,7 @@ def _render_frame(
     image[:, :] = background
 
     for index, region in enumerate(regions):
+        # 在有符号整数中应用微扰，再截断回合法的 8 位颜色范围。
         base_color = np.asarray(_CLASS_COLORS_BGR[region["class"]], dtype=np.int16)
         color = tuple(int(value) for value in np.clip(base_color + color_jitter[index], 0, 255))
         if "box" in region:
@@ -245,7 +273,10 @@ def _plant_defects(
     ground_truth: list[dict[str, Any]],
     seed: int,
 ) -> dict[str, Any]:
+    """向模型输出注入已知错误，并生成可供测试对照的错误清单。"""
     defects: list[dict[str, Any]] = []
+
+    # 位置漂移：区域尺寸不变，仅平移边界框。
     for frame, region_id in ((12, "sample-r03"), (13, "sample-r04")):
         expected_region = _region_by_id(ground_truth[frame], region_id)
         model_region = _region_by_id(model_output[frame], region_id)
@@ -262,6 +293,7 @@ def _plant_defects(
             }
         )
 
+    # 类别错误。
     wrong_class_region = _region_by_id(model_output[24], "sample-r05")
     expected_class = wrong_class_region["class"]
     wrong_class_region["class"] = "gallbladder"
@@ -275,11 +307,13 @@ def _plant_defects(
         }
     )
 
+    # 漏检：删除一个本应存在的区域。
     model_output[36]["regions"] = [
         region for region in model_output[36]["regions"] if region["id"] != "sample-r07"
     ]
     defects.append({"type": "missed_region", "frame": 36, "region_id": "sample-r07"})
 
+    # 幻觉：增加一个真值中不存在的区域。
     hallucinated_region = {
         "id": "hallucinated-f072",
         "class": "unknown",
@@ -298,6 +332,7 @@ def _plant_defects(
         }
     )
 
+    # 跟踪错误：交换两个真实区域的跨帧身份。
     first = _region_by_id(model_output[90], "sample-r01")
     second = _region_by_id(model_output[90], "sample-r02")
     expected_track_ids = {
@@ -335,10 +370,12 @@ def _plant_defects(
 
 
 def _region_by_id(record: dict[str, Any], region_id: str) -> dict[str, Any]:
+    """按稳定区域 ID 取得标注记录；样例内容缺失时直接抛出异常。"""
     return next(region for region in record["regions"] if region["id"] == region_id)
 
 
 def _validate_outputs(manifest: dict[str, Any], records: list[dict[str, Any]]) -> None:
+    """发布前使用共享 Schema 和跨字段语义规则校验生成内容。"""
     manifest_errors = validate_instance(manifest, "dataset-manifest-v1.schema.json")
     manifest_errors.extend(validate_manifest_semantics(manifest))
     if manifest_errors:
@@ -354,6 +391,7 @@ def _validate_outputs(manifest: dict[str, Any], records: list[dict[str, Any]]) -
 
 
 def _write_json(path: Path, payload: Any) -> None:
+    """以固定键顺序和末尾换行写入 JSON，保持输出字节稳定。"""
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",

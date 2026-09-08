@@ -2,7 +2,8 @@
 
 ## 前端 0.0.1
 
-![Automated Annotation Tool frontend](docs/image.png)
+![Automated Annotation Tool frontend](docs/前端标注.png)
+![Automated Annotation Tool frontend](docs/批量.png)
 
 ## 项目架构
 Project/
@@ -45,7 +46,7 @@ Project/
 
 本项目使用 Godot 客户端和 Python 工具链，实现版本化、插件化的图像与视频标注工作流。
 
-## 开发环境
+
 
 本项目已经在以下环境中完成验证：
 
@@ -59,7 +60,7 @@ Project/
 
 Python 包支持 `>=3.12,<3.15`，`pyproject.toml` 是唯一的 Python 依赖配置，运行与开发依赖均固定为已验证版本。视频解码要求可执行的 `ffmpeg` 和 `ffprobe`：程序优先使用项目内 `.tools/ffmpeg/bin/`，缺失时才查找系统 `PATH`。
 
-## Python 环境配置
+
 
 以下命令均从仓库根目录运行：
 
@@ -70,14 +71,34 @@ source project_env.sh
 ```
 
 `project_env.sh` 只校验项目 Python、Godot 4.7.2-stable 以及 FFmpeg/FFprobe 6.1+，并为当前终端设置路径；它不安装 Python 包，也不修改系统环境。
+# 正在开发和优化的功能
 
-## Part 2.1 流畅渲染实现
+1.Part 4 开发
+2.frub可行性测试与自动标注算法优化，提高对于复杂目标的验证和标注传播能力
+3.fill逻辑优化、
+4.Part 5 --qwen万物分割插件引入
+5.自动标注与放映交互优化
 
-`AnnotationViewport` 只使用一个共享的 image↔viewport `Transform2D`，让等比显示、zoom/pan、overlay 绘制与鼠标 picking 遵守同一套坐标契约。Part 2.1 已验证的 **Overlay opacity** 与 **Fit** 保持在该显示路径中。视口实行 dirty redraw：只在 texture、record、selection、opacity 或变换真正改变后调用 `queue_redraw()`，重复设置同一状态不会再次入队。
 
-Renderer 仅在 annotation record 改变时解析并缓存 image-space primitives，包括 geometry、class color、label 和 bounds。zoom、pan、selection 与 opacity 只重建 screen-space draw commands，不重新解析原始字典；变换后的 AABB 完全离开视口时，该 region 不会生成绘制指令。拖动预览会修改当前 record snapshot，因此需要重建 geometry，但预览不写入 Store，释放鼠标后才通过单个 command 提交。
+# 已经完成的工作
+# Part 1
 
-可见 1280×800 基准在 20 个 box/polygon regions 上执行 2 s 预热和 10 s pan、zoom、真实 Selection region drag，记录为平均 `175.27 fps`、p95 帧间隔 `9.572 ms`、拖动坐标误差 `0.0` image px。该次 X11 / Godot 4.7.2 GL Compatibility 会话使用 `llvmpipe`软件适配器；这是当前实测配置的证据，不是对所有笔记本或硬件 GPU 的性能承诺。原始数据见 `benchmarks/part2_1_display.json`，完整限制见 [RESULTS.md](RESULTS.md)。当前路径未使用 shader、texture atlas、mesh batching 或 polygon 预三角化；只有后续 profiler 证明高顶点 polygon 成为瓶颈时才应升级该局部路径。
+## Part 2.1 显示
+
+一、等比例适配_update_matrices()
+设原图尺寸为 W_i,H_i，视口尺寸为 W_v,H_v。
+代码采用：
+s_fit=min(W_v/W_i,H_v/H_i)
+这样横纵使用同一个比例，不会把图像拉伸变形。
+
+二、渲染
+1.状态没有变化，就不要求重绘。
+    func set_record(record: Dictionary) -> void:
+        if _record == record:
+            return
+2.分开缓存图像空间几何和屏幕绘制指令。
+3.不绘制完全离开视口的区域。
+    _primitive_is_visible() 把区域包围盒变换到视口坐标，再判断与视口是否相交。完全不可见的区域不生成绘制指令。
 
 ## Part 2.3 交互设计说明
 
@@ -109,7 +130,18 @@ Renderer 仅在 annotation record 改变时解析并缓存 image-space primitive
 !停止条件：已达到 30 帧、原始帧号不连续、遇到已经人工确认的目标帧、图像尺寸发生变化、图片加载失败，或帧信息与打开时的快照不一致
 
 5.后续计划：参考卡尔曼滤波的方式进行预测，同时也可以借鉴比较成熟的卡尔曼滤波处理累积漂移的方法
+-> 卡尔曼滤波需要输入x和y方向加速度，所以在帧连续性低的时候，计算误差大
+-> 可以考虑测试nvidia的FRUC 插帧库
 
+适用于卡尔曼滤波预测，防止累积漂移方法有：
+持续校正：用真实帧中重新定位的目标位置修正预测；不能把自己的预测反复当成新观测。
+排除错误匹配：检查目标身份和预测—观测偏差，异常时重新检测，避免跟到另一个器械。
+管理不确定性：通过过程噪声 \(Q\)、观测噪声 \(R\) 调整信任程度；遮挡或长时间无可靠观测时停止传播。
+设置可靠锚点：定期重新检测或人工修正关键帧，纠正持续偏差。
+
+# 其他
+
+## 开发环境
 
 ## Plugin API 概览
 
@@ -149,3 +181,161 @@ ffmpeg -hide_banner -loglevel error -f lavfi \
 ```
 
 基准的 `/tmp` 源目录、视频和输出目录都必须预先不存在；如需重跑，请换用新的临时名称。Python 测试必须没有 failure，也不能因为缺少 FFmpeg/FFprobe 而跳过视频集成测试。Godot 测试可能因故意打开损坏图片 fixture 而打印解码警告，但最后必须输出 `PASS: complete Godot test suite`，并以状态 `0` 退出。Part 3.1 可见播放基准要求索引严格连续且零跳帧；性能不足时允许实际播放率低于 nominal FPS，但必须在 `RESULTS.md` 如实记录。
+
+## Python 环境配置
+
+## 快捷键
+
+一、工具选择与启动
+快捷键	对应工具	实际作用
+V	Select / Selection	切换到选择工具，用于选择、移动、缩放区域
+A	Add Box	开始键盘新建矩形框，出现待调整的框
+L	Lasso	没有选中 polygon 时，开始键盘绘制多边形；选中了已有 polygon 时，进入其顶点编辑
+S	Subtract	开始键盘绘制扣除轮廓
+F	Fill	进入键盘填充模式，使用方向键移动填充种子点
+P	Paint	开始键盘画笔绘制
+Shift + P	Eraser	开始键盘橡皮擦操作
+
+
+这些绑定来自编辑插件的 handle_key()。其中 A / S / L / F / P / Shift+P 不只是选中工具按钮，还会进入对应的键盘操作流程。若你准备使用鼠标绘制，可以直接点击工具按钮。
+正在绘制时，草稿会优先接管按键。切换操作前，应先完成当前绘制，或者按 Esc 取消。
+二、选择、移动、缩放与删除
+1. 选择和删除对象
+快捷键	功能	生效条件
+[	选择上一个区域	普通空闲编辑状态，不处于绘制或顶点编辑中
+]	选择下一个区域	同上，按当前帧的区域列表循环选择
+Delete 或 Backspace	删除整个选中区域	Select 工具处于空闲状态
+Esc	清除当前选择	Select 工具处于空闲状态
+R	打开选中区域的类别修改窗口	已选中区域，且没有正在进行的拖动或绘制
+
+
+R 由 main.gd 处理，其他操作主要由编辑插件处理。正在拖动区域时，R 不会中断拖动去打开重分类窗口。
+2. 移动与缩放
+下表的像素单位都是原图像素，不是缩放后屏幕上的像素。
+快捷键	功能
+↑ / ↓ / ← / →	沿对应方向移动 1 px
+Shift + 方向键	沿对应方向移动 5 px
+Ctrl + Shift + 方向键	沿对应方向移动 10 px
+Alt + 方向键	调整区域大小，步长 1 px
+Alt + Shift + 方向键	调整区域大小，步长 5 px
+Ctrl + Alt + Shift + 方向键	调整区域大小，步长 10 px
+
+
+这些移动、缩放操作适用于 Select 中的已选中对象，也适用于 A 创建的待确认矩形框。对于矩形，Alt+←/→ 减小/增大宽度，Alt+↑/↓ 减小/增大高度；对于 Select 中的 polygon，会通过包围盒调整其几何大小。
+你的步长判断明确是：
+10.0 if event.ctrl_pressed and event.shift_pressed \
+else (5.0 if event.shift_pressed else 1.0)
+所以，10 px 是 Ctrl+Shift+方向键，不是单独的 Ctrl+方向键。
+三、键盘绘制过程中怎么操作
+当前操作	调整方式	完成方式	回退或取消
+A：新建矩形框	方向键移动；Alt+方向键 调整宽高	Enter 确认几何，进入类别确认窗口	Esc 取消
+L：新建多边形	方向键移动光标并追加路径点	Space 空格闭合轮廓，合法后进入类别确认	Backspace 删除最后一点；Esc 取消
+S：扣除轮廓	方向键绘制扣除路径	Space 空格闭合并尝试执行扣除	Backspace 删除最后一点；Esc 取消
+P / Shift+P：画笔或擦除	方向键移动并形成笔画	Enter 结束笔画并尝试提交	Esc 取消
+F：填充	方向键移动填充种子点	Enter 在当前种子位置执行填充	Esc 取消当前操作
+Fill 缺口修补预览	检查候选填充和修补位置	Enter 接受修补候选	Esc 拒绝候选，返回之前的草稿
+
+
+绘制中的方向键同样支持 1 / 5 / 10 px 步长。Lasso 和 Subtract 的完成键是空格；代码会接收 Enter，但不会用它完成轮廓。
+新建对象的几何完成后，还需要确认类别，才会形成正式标注；不能把第一次 Enter 或空格理解为已经完成全部保存流程。
+四、多边形顶点编辑
+已保存的 polygon
+先选中已有多边形，再按 L 进入顶点编辑。
+快捷键或操作	功能
+[ / ]	切换到上一个 / 下一个顶点
+方向键	移动当前顶点 1 px
+Shift + 方向键	移动当前顶点 5 px
+Ctrl + Shift + 方向键	移动当前顶点 10 px
+Insert	在“当前顶点与下一个顶点”的边中点插入新顶点
+Delete / Backspace	删除当前顶点，至少保留三个顶点
+Esc	退出当前顶点编辑并清除选择
+鼠标拖动顶点	直接移动该顶点
+双击多边形边	在点击位置对应的边上插入顶点
+
+
+这部分由 polygon_vertex_editor.gd 实现。删除或移动后如果产生自交、越界、零面积等非法几何，操作会被拒绝。
+鼠标逐点绘制、尚未完成的 Lasso
+这一状态与“编辑已保存 polygon”还有一个区别：
+按键	作用
+Backspace	删除最后添加的点
+Delete	删除当前选中的草稿顶点
+[ / ]	切换当前草稿顶点
+方向键及步长组合	微调当前草稿顶点
+空格或鼠标双击	尝试闭合轮廓
+
+
+因此，Backspace 在不同状态下可能删除整个区域、删除当前顶点，也可能删除最后一个绘制点。
+五、撤销、重做与类别窗口
+1. 撤销与重做
+快捷键	功能
+Ctrl + Z	撤销
+Ctrl + Shift + Z	重做
+Ctrl + Y	重做，与上一项作用相同
+
+
+你的代码按照文本输入 → 活动草稿 → 已提交标注命令分配撤销操作：
+在文本框中，快捷键留给文本编辑；存在 WorkingMask 等活动草稿时，先操作草稿历史；没有这些局部状态时，才操作正式标注历史。因此，修改类别文字时按 Ctrl+Z，不应该撤销画布上的标注。
+2. 类别修改窗口
+快捷键或操作	功能与条件
+R	对当前选中区域打开重分类窗口
+右侧标注列表中的 Enter	列表获得焦点且选中区域行时，打开该区域的重分类窗口
+↑ / ↓	类别建议列表获得焦点时，选择上一项 / 下一项
+Enter	确认类别修改；Class 和 Kind 不能为空
+Esc	取消类别修改或新对象的类别确认
+建议列表上的鼠标滚轮	切换上一项 / 下一项建议，同步更新 Class 和 Kind
+双击类别建议	选择并确认该建议
+
+
+注意：上下方向键选择建议要求焦点位于建议列表，不是只要窗口打开就必然生效。
+Tab / Shift+Tab 用于前后切换界面焦点；项目文档也明确保留了从键盘空间工具进入 Fill 确认、取消控件的焦点路径。
+
+
+##  -
+
+
+ **Endoscapes2023** — images, bounding boxes and segmentation masks. You can download on [https://github.com/CAMMA-public/Endoscapes](https://github.com/CAMMA-public/Endoscapes). This is the technical report of this dataset, maybe you will find this useful: [The Endoscapes Dataset for Surgical Scene Segmentation, Object Detection, and Critical View of Safety Assessment: Official Splits and Benchmark](https://arxiv.org/abs/2312.12429).
+  - **Endoscapes-SG201** — the aligned structured-annotation extension that adds `⟨instrument, verb, target⟩` **triplet** labels, 6 instrument sub-classes and hand-identity labels on top of the Endoscapes2023 images. Download it from the official SSG-Com **project page** (which hosts the Dataset Download): [https://ailab-kyunghee.github.io/SSG-Com/](https://ailab-kyunghee.github.io/SSG-Com/) (code repo: [https://github.com/ailab-kyunghee/SSG-Com](https://github.com/ailab-kyunghee/SSG-Com), MICCAI 2025). Note: SG201 provides only the annotations; you still need the Endoscapes2023 images above.
+
+  https://cirl.lcsr.jhu.edu/research/hmm/datasets/jigsaws_release/
+
+## 开发原则
+
+项目参考 MITK 将界面、数据和算法职责分开的思路，为每个模块规定明确的所有权和清晰接口，以保持可维护性。Part 1 边界包括版本化数据合同、数据源适配、标注渲染、编辑与训练交接；各模块只通过公开契约协作。
+
+## 快速开始
+
+已验证环境为 Godot 4.7.2-stable、Python 3.14.7 和 FFmpeg 6.1+。从仓库根目录依次执行：
+
+```bash
+ffmpeg -version
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python python/make_sample_input.py --output sample/assignment_v1 --seed 6006
+.venv/bin/python python/validate_model_output.py sample/assignment_v1/model_output_v1.jsonl
+tests/run_tests.sh
+```
+
+测试与基准入口包括 `tests/benchmarks/godot/display_benchmark.gd`、`tests/benchmarks/godot/playback_benchmark.gd`、`tests/benchmarks/godot/long_source_benchmark.gd`、`tests/benchmarks/godot/video_import_benchmark.gd` 和 `tests/benchmarks/make_part3_sources.py`。
+
+### 数据源与插件边界
+
+`single_image_source` 负责单张图像，`image_sequence_source` 负责带清单的归一化目录，`numeric_image_sequence_source` 负责保留原始帧号的数字图像序列。SourceFactory 选择数据源插件，SourceSessionBuilder 校验并生成会话快照；`playback_index` 表示连续播放位置，`frame_id` 保留数据集原始帧号。
+
+其他公开插件包括 `canvas_region_renderer`、`basic_edit_tools` 和 `file_training_handoff`。当前编辑器保留 7 个工具；Close Gaps、Region Growing 和 Live Wire 不在这 7 个工具中。Eraser 使用 Shift+P，Lasso/Subtract 使用 Space 闭合，画布使用鼠标中键平移；预览保持实时，未人工复核的路径标记为待验证。
+
+| 操作 | 快捷键 |
+|---|---|
+| 撤销 / 重做 | Ctrl+Z / Ctrl+Shift+Z |
+| 缩放区域 | Alt+Arrow |
+| 强制闭合轮廓 | Space |
+| 取消当前操作 | Escape |
+| 切换区域或顶点 | `[` / `]` |
+
+### 显示实现摘要
+
+`AnnotationViewport` 保留 Overlay opacity 和 Fit，通过 dirty redraw 避免状态未变时重复入队。Renderer 缓存 image-space primitives，并用 AABB 过滤离开视口的区域；complex polygon 只在记录改变时重新解析。实测会话在 llvmpipe 上记录平均 175.27 fps 和 p95 9.572 ms，原始结果见 RESULTS.md。
+
+### Part 3.1 导入与播放
+
+Part 3.1 整体为 **PASS**。用户从 Start import 导入视频；速度控件提供 Custom、3 s/frame、1 s/frame 和 Max，运行条显示 actual FPS 与 Time HH:MM:SS.mmm。Previous、Play、Pause 和 Next 均按连续索引工作；10,000 帧压测使用有界 LRU 缓存和虚拟时间轴，不为每帧创建界面节点。
