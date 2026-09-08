@@ -171,8 +171,13 @@ func publish() -> void:
 	var result: Dictionary = await _job.finished
 	_exporting = false
 	_host._export_button.text = "Export"
-	if generation != _generation: return
 	last_result = result
+	if generation != _generation:
+		if result.get("success",false):
+			_host._set_status("文件包已发布，结果保留在："+String(result.output_path))
+		else:
+			_host._set_status("导出已取消。")
+		return
 	_kind.disabled = false
 	_publish.disabled = false
 	_dialog.popup_centered(Vector2i(720,450))
@@ -187,6 +192,7 @@ func publish() -> void:
 func cancel() -> void:
 	_generation += 1
 	_job.cancel()
+	if _exporting: _host._set_status("正在取消导出，等待当前后台步骤结束…")
 	_preparing = false
 	_dialog.hide()
 

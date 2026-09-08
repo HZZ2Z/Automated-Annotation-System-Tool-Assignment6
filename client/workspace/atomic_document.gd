@@ -29,9 +29,6 @@ func write_document(payload: Dictionary, options: Dictionary, token: Variant = n
 	var validator: Callable = options.get("validate", Callable())
 	if not validator.is_valid():
 		return _failure("A document validator is required")
-	var validation: Variant = validator.call(payload)
-	if not validation is PackedStringArray or not validation.is_empty():
-		return _failure("Document validation failed: %s" % str(validation))
 	if _cancelled(token):
 		return _cancel_result()
 	var expected := String(options.get("expected_sha256", ""))
@@ -64,7 +61,13 @@ func write_document(payload: Dictionary, options: Dictionary, token: Variant = n
 	if not round_trip.get("success", false):
 		_remove_owned_temp(temporary)
 		return round_trip
-	validation = validator.call(round_trip.payload)
+	# Validate the exact document that will be published once. Equality with the
+	# frozen input also rejects JSON coercion (for example NaN becoming null).
+	# A second full V3 decode before serialization adds another entire Store.
+	if not _json_equivalent(round_trip.payload,payload):
+		_remove_owned_temp(temporary)
+		return _failure("Temporary document differs from the frozen input")
+	var validation: Variant = validator.call(round_trip.payload)
 	if not validation is PackedStringArray or not validation.is_empty() or round_trip.sha256 != _digest(bytes):
 		_remove_owned_temp(temporary)
 		return _failure("Temporary document failed round-trip validation: %s" % str(validation))
@@ -78,6 +81,25 @@ func write_document(payload: Dictionary, options: Dictionary, token: Variant = n
 		return _failure("Cannot atomically publish %s: %s" % [path, error_string(error)])
 	# Once published, cancellation cannot undo a completed save.
 	return {"success": true, "errors": [], "path": path, "sha256": round_trip.sha256, "backup_path": backup}
+
+func _json_equivalent(left: Variant,right: Variant) -> bool:
+	if left is Dictionary and right is Dictionary:
+		if left.size() != right.size(): return false
+		for key: Variant in left:
+			if not key is String or not right.has(key) or not _json_equivalent(left[key],right[key]): return false
+		return true
+	if left is Array and right is Array:
+		if left.size() != right.size(): return false
+		for index in range(left.size()):
+			if not _json_equivalent(left[index],right[index]): return false
+		return true
+	# Godot's container equality distinguishes JSON 12 from 12.0. Compare those
+	# numerically, while refusing an integer rounded during double conversion.
+	if typeof(left) == TYPE_INT and typeof(right) == TYPE_FLOAT:
+		return is_finite(right) and right >= -9223372036854775808.0 and right < 9223372036854775808.0 and int(right) == left and right == floorf(right)
+	if typeof(right) == TYPE_INT and typeof(left) == TYPE_FLOAT:
+		return _json_equivalent(right,left)
+	return typeof(left) == typeof(right) and typeof(left) in [TYPE_NIL,TYPE_STRING,TYPE_INT,TYPE_FLOAT,TYPE_BOOL] and left == right
 
 func _check_expected(path: String, expected: String) -> String:
 	if _is_link(path) or DirAccess.dir_exists_absolute(path):
