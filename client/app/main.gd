@@ -44,6 +44,7 @@ class StagedEditContextBridge:
 	var _main_ref: WeakRef
 	var _viewport_ref: WeakRef
 	var _live := false
+	var _staged_frame := 0
 	var _staged_selection := ""
 	var _staged_record: Dictionary = {}
 	var _staged_viewport_selection := ""
@@ -57,7 +58,8 @@ class StagedEditContextBridge:
 		"message": "",
 	}
 
-	func _init(main: AnnotationMain, viewport: Variant, staged_texture: Texture2D) -> void:
+	func _init(main: AnnotationMain, viewport: Variant, staged_texture: Texture2D, frame_id: int = 0) -> void:
+		_staged_frame = frame_id
 		_main_ref = weakref(main)
 		_viewport_ref = weakref(viewport)
 		var source_transform: Variant = viewport.get_image_transform() if viewport != null else null
@@ -69,7 +71,7 @@ class StagedEditContextBridge:
 
 	func get_current_frame() -> int:
 		var main := _main_ref.get_ref() as AnnotationMain
-		return main._current_record_frame() if _live and main != null else 0
+		return main._current_record_frame() if _live and main != null else _staged_frame
 
 	func get_selected_region() -> String:
 		var main := _main_ref.get_ref() as AnnotationMain
@@ -344,6 +346,8 @@ func get_discovered_plugin(stage: String, plugin_id: String) -> RefCounted:
 
 
 func open_workspace(path: String) -> PackedStringArray:
+	if _review_workflow != null and _review_workflow.rounds.is_busy():
+		return PackedStringArray(["Finish the active model round operation first"])
 	if _is_class_dialog_active():
 		return _modal_refusal("Workspace replacement")
 	if _workspace_media_controller != null and _workspace_media_controller.is_busy():
@@ -616,6 +620,8 @@ func _on_workspace_import_cancelled() -> void:
 
 
 func open_source(path: String) -> PackedStringArray:
+	if _review_workflow != null and _review_workflow.rounds.is_busy():
+		return PackedStringArray(["Finish the active model round operation first"])
 	if _is_class_dialog_active():
 		return _modal_refusal("Source replacement")
 	var candidate_errors := PackedStringArray()
@@ -1757,6 +1763,60 @@ func _flush_workspace_changes() -> PackedStringArray:
 	if _review_workflow != null and _review_workflow.has_discard_authorization():
 		return PackedStringArray()
 	return await _workspace_session.flush_before_context_change()
+
+
+## Validate a new edit context before the round transaction changes active bytes.
+func stage_review_replacement(candidate_store: Variant) -> Dictionary:
+	var errors := PackedStringArray()
+	var candidate_edit = _plugin_registry.create_plugin("edit",edit_plugin_id)
+	if candidate_edit == null: return {"success":false,"errors":["Edit plugin unavailable"]}
+	var tools := _read_tool_descriptors(candidate_edit,errors)
+	if errors.is_empty(): errors = _tool_panel.validate_tools(tools)
+	var catalog = PROJECT_CLASS_CATALOG_SCRIPT.new()
+	if errors.is_empty(): errors = catalog.rebuild(candidate_store.snapshot_corrected())
+	if not errors.is_empty(): return {"success":false,"errors":errors}
+	var history = HISTORY_SCRIPT.new(200)
+	var bridge := StagedEditContextBridge.new(self,_viewport,_viewport.get("_texture"),_current_record_frame())
+	var activated: Variant = candidate_edit.activate(_edit_context(candidate_store,history,bridge))
+	if not activated is PackedStringArray or not activated.is_empty():
+		_deactivate_edit(candidate_edit)
+		bridge.detach()
+		return {"success":false,"errors":activated if activated is PackedStringArray else ["Invalid Edit activation result"]}
+	return {"success":true,"errors":[],"store":candidate_store,"history":history,"catalog":catalog,"edit":candidate_edit,"bridge":bridge,"tools":tools}
+
+
+func discard_review_replacement(staged: Dictionary) -> void:
+	if staged.get("success",false):
+		_deactivate_edit(staged.edit)
+		staged.bridge.detach()
+
+
+## Called synchronously only after a successful worker commit. Staged UI owns Store.
+func adopt_review_replacement(result: Dictionary, staged: Dictionary) -> void:
+	pause()
+	_unbind_workspace_session()
+	_deactivate_edit(_edit_plugin)
+	_detach_edit_context_bridge(_edit_context_bridge)
+	_store = staged.store
+	_history = staged.history
+	_class_catalog = staged.catalog
+	_edit_plugin = staged.edit
+	_edit_context_bridge = staged.bridge
+	var adopted := result.duplicate()
+	adopted.store = _store
+	_workspace_label_store.adopt_session(adopted)
+	_selected_region_id = ""
+	_tool_panel.configure_tools(staged.tools)
+	_edit_context_bridge.switch_to_live()
+	_viewport.set_record(_store.get_corrected_record(_current_record_frame()))
+	_viewport.set_selected_region_id("")
+	_clear_annotation_hover()
+	_refresh_annotation_sidebar()
+	_workspace_session.bind(_store,_workspace_label_store,Callable(self,"pause"),Callable(self,"_set_status"))
+	_batch_workflow.bind_source()
+	_refresh_labels()
+	_review_workflow.finish_transition()
+	_refresh_toolbar()
 
 
 func _unbind_workspace_session() -> void:

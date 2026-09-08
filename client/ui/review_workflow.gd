@@ -19,6 +19,7 @@ var _leaving := false
 var _opening := false
 var _base_canvas_size := Vector2i.ZERO
 var exports: Variant
+var rounds: Variant
 
 func setup(host: Variant) -> void:
 	_host = host
@@ -62,6 +63,10 @@ func setup(host: Variant) -> void:
 	exports = preload("res://client/ui/training_export_dialog.gd").new()
 	add_child(exports)
 	exports.setup(_host)
+	rounds = preload("res://client/ui/model_round_dialog.gd").new()
+	add_child(rounds)
+	rounds.setup(_host)
+	_round_button.pressed.connect(rounds.open)
 	get_tree().auto_accept_quit = false
 	_host.get_window().close_requested.connect(request_close)
 	_base_canvas_size = _host.get_window().content_scale_size
@@ -77,8 +82,8 @@ func _fit_canvas() -> void:
 		maxi(_base_canvas_size.y,ceili(minimum.y)))
 
 func refresh() -> void:
-	_save_button.disabled = _host._source == null or _opening or _leaving
-	_round_button.disabled = _host._source == null or _opening or _leaving
+	_save_button.disabled = _host._source == null or is_busy()
+	_round_button.disabled = _host._source == null or is_busy()
 	if _host._source != null:
 		var snapshot: Dictionary = _host._store.freeze_snapshot()
 		_round_button.text = "轮次：" + String(snapshot.get("round_id","initial"))
@@ -124,6 +129,7 @@ func confirm_leave() -> bool:
 	if _leaving or _opening: return false
 	_leaving = true
 	await exports.cancel_and_drain()
+	await rounds.cancel_and_drain()
 	_host.pause()
 	var session = _host._workspace_session
 	session.suspend_autosave(true)
@@ -167,4 +173,4 @@ func request_close() -> void:
 		while _open_job.is_running(): await get_tree().process_frame
 	if await confirm_leave(): get_tree().quit()
 
-func is_busy() -> bool: return _opening or _leaving
+func is_busy() -> bool: return _opening or _leaving or (rounds != null and rounds.is_busy())
