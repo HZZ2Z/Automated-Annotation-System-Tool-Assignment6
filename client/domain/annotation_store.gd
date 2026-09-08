@@ -32,6 +32,13 @@ func load_model_records(records: Variant) -> PackedStringArray:
 	for index in range(records.size()):
 		var record: Variant = records[index]
 		var record_errors: PackedStringArray = _validator.validate_record(record)
+		if record_errors.is_empty():
+			var region_ids := {}
+			for region_index in range(record.regions.size()):
+				var region_id: String = record.regions[region_index].id
+				if region_ids.has(region_id):
+					record_errors.append("regions.%d.id: duplicate region ID %s" % [region_index, region_id])
+				region_ids[region_id] = true
 		for error: String in record_errors:
 			errors.append(_prefix_record_error(index, error))
 		if not record is Dictionary:
