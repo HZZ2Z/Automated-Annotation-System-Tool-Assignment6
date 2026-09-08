@@ -39,6 +39,8 @@ func decode(payload: Variant) -> Dictionary:
 	for field: Variant in payload:
 		if field not in FIELDS: errors.append("%s: unexpected field" % str(field))
 	if not errors.is_empty(): return {"snapshot": {}, "errors": errors}
+	if not payload.source is String or payload.source.is_empty():
+		return _failure("source: expected nonempty internal source text")
 	if not STORE._valid_frame_number(payload.schema_version) or payload.schema_version != 3 or not STORE._valid_frame_number(payload.frame_digits) or payload.frame_digits != 6:
 		return _failure("schema_version/frame_digits: expected 3/6")
 	if not payload.baseline_records is Array or not payload.frame_entries is Array or not payload.explicit_frames is Array or not payload.frames is Dictionary:
