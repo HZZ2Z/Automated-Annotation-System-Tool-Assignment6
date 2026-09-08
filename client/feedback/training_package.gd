@@ -281,8 +281,42 @@ static func prepare_output_parent(path: String) -> PackedStringArray:
 		if directory != null and directory.is_link(component): return PackedStringArray(["output_parent symlink ancestors refused"])
 		cursor = cursor.path_join(component)
 		if FileAccess.file_exists(cursor): return PackedStringArray(["output_parent conflicts with a file"])
+	var import_errors = _guard_project_output(path.simplify_path().trim_suffix("/"))
+	if not import_errors.is_empty(): return import_errors
 	if DirAccess.make_dir_recursive_absolute(path) != OK: return PackedStringArray(["cannot create output_parent"])
 	return PackedStringArray()
+
+static func _guard_project_output(path: String) -> PackedStringArray:
+	# Worker-only: CSV reports are data, but Godot otherwise imports them as
+	# translation resources and can pollute or crash on a published package.
+	var project_root = ProjectSettings.globalize_path("res://").simplify_path().trim_suffix("/")
+	if path != project_root and not path.begins_with(project_root + "/"):
+		return PackedStringArray()
+	var output_root = project_root.path_join("output")
+	if path == output_root or path.begins_with(output_root + "/"):
+		var state = _ignore_marker_state(output_root)
+		if state < 0: return PackedStringArray(["project output .gdignore conflicts with a directory or symlink"])
+		if state == 1: return PackedStringArray()
+		if DirAccess.make_dir_recursive_absolute(output_root) != OK:
+			return PackedStringArray(["cannot create project output import guard directory"])
+		# The sentinel belongs outside all package directories. Preserve any
+		# existing marker bytes; never mark arbitrary project asset roots.
+		return write_text(output_root.path_join(".gdignore"),"")
+	var ancestor = path
+	while true:
+		var state = _ignore_marker_state(ancestor)
+		if state < 0: return PackedStringArray(["output ancestor .gdignore conflicts with a directory or symlink"])
+		if state == 1: return PackedStringArray()
+		if ancestor == project_root: break
+		ancestor = ancestor.get_base_dir()
+	return PackedStringArray(["output_parent is an imported project asset path; choose res://output, an existing .gdignore-protected data directory, or an external directory"])
+
+static func _ignore_marker_state(directory_path: String) -> int:
+	var directory = DirAccess.open(directory_path)
+	if directory == null: return 0
+	var marker = directory_path.path_join(".gdignore")
+	if directory.is_link(".gdignore") or DirAccess.dir_exists_absolute(marker): return -1
+	return 1 if FileAccess.file_exists(marker) else 0
 
 # Evaluate only the keywords used by our local manifest contract. Unknown keywords
 # fail closed so a future schema extension cannot silently bypass reuse validation.
