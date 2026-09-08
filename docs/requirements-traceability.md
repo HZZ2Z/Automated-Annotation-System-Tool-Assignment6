@@ -59,7 +59,7 @@
 | Part 3.3 Measurement | batch coverage、manual comparison、threshold 和边界质检 | 派生合成样本一批覆盖20帧，实际写入19帧 | `tests/benchmarks/results/part3_2_batch.json`；RESULTS | 首尾真值一致、外邻帧排除、阈值0.02 | PASS | 重复修正次数对比，未声称人工时间收益 |
 | Part 4.1 Persistence / export | 不可变基线、原子自动保存、未保存提示、精确帧映射和修正 JSONL | AnnotationStore / ReviewSessionCodec / SessionRepository / WorkspaceSession / ReviewWorkflow | repository、autosave、failure、lifecycle、4 个崩溃阶段；120 帧保存 p95 0.868 s | 真实挂载 Main 自动驱动；CLI/UI 复跑步骤已交付 | PASS | 10,000 帧内存和尾延迟仍可优化，见 RESULTS |
 | Part 4.2 Diff / audit | 逐帧 added/deleted/label/geometry、属性补充及类别汇总，保存重开一致 | AnnotationDiff；JSON / event CSV / class CSV | demo：6 变化帧、7 变化对象；diff edges、reorder/undo/numeric 边界；12,230 精确数值比较 | 报告可由 Export 结果打开；来源与统计口径已文档化 | PASS | 完成 |
-| Part 4.3 Training update package | 已验证训练包、全帧评审快照、版本 manifest、摘要、原子发布与重复交接 | TrainingPackage / PackageSemantics；Feedback 可选 training_update_v2；Python 独立验证 | 6/120 训练、114 排除、120 全帧；损坏/语义篡改拒绝；UI/CLI 包 ID 与产物字节一致 | 真实 Export 预览、后台编辑及取消通过自动交互检查 | PASS | 文件交接完成；真实训练不在范围 |
+| Part 4.3 Training update package | 已验证训练包、全帧评审快照、版本 manifest、摘要、原子发布与重复交接 | TrainingPackage / PackageSemantics；Feedback 可选 training_update_v2；Python 独立验证 | 6/120 训练、114 排除、120 全帧；损坏/语义篡改拒绝；UI/CLI 包 ID 与产物字节一致；编辑器重扫后清单和摘要不变 | 真实 Export 预览、后台编辑及取消通过自动交互检查 | PASS | 文件交接完成；真实训练不在范围 |
 | Part 4.4 Collaboration interface | 一页协作协议、模型返回清单、完整覆盖校验、旧轮次归档与新轮次导入 | part4-protocol.md；ModelRoundController / ModelRoundDialog；part4.py 四个 CLI 入口 | 实际命令 demo；round backend/UI 校验失败保留原状态、成功重置 review/batch/history | UI 校验预览与导入可操作；人工 reviewer 步骤已交付 | PASS | 模型组实际训练和权重质量后续对接 |
 | Part 5 | 完整稳健性、smoke session、测量和失败分析 | 超出 Part 1 范围 | 未评估 | 未评估 | BLOCKED | 后续阶段 |
 

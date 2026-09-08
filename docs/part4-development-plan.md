@@ -69,5 +69,8 @@ Evidence and measured limitations are recorded in `RESULTS.md`. The implementati
 and review-fix waves have independent code review; one integrated review also
 caught legal Unicode JSONL separators being split incorrectly by Python. The
 LF-specific reader and actual Godot→Python regression close that discrepancy.
+Post-integration editor checks additionally isolate generated CSV reports from
+Godot resource imports; strict package bytes survive editor rescans, and JSON-only
+round archives remain supported inside project datasets.
 Large-session memory and latency tails remain explicit performance follow-up
 items. Real training and real-video annotation accuracy are outside Part4 scope.

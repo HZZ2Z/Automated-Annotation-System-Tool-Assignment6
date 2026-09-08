@@ -60,6 +60,11 @@ media per package, concurrent writers, or automatic carry-over of old correction
   All artifacts derive from one snapshot. Deterministic package ID excludes path,
   timestamp and transient revision; same content reuses only a validated existing
   package. Never overwrite a conflicting destination. Publish atomically.
+- Keep generated CSV reports outside Godot's resource import scan. Package workers
+  create or preserve `res://output/.gdignore` outside the six-file package. Other
+  in-project destinations need an existing regular `.gdignore` ancestor; external
+  directories remain supported. Never mark arbitrary asset roots or weaken package
+  inventory validation. JSON-only session/round archival does not require this guard.
 - Model round return includes round manifest, complete model_output_v1.jsonl,
   parent package ID, round ID/model revision, media/frame identity, taxonomy,
   file bytes/hash; weights ref optional. A second model round is NOT schema V2.

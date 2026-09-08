@@ -22,6 +22,10 @@ source project_env.sh
 
 用 `evidence.json` 的 `archive_path` 重复导出，package ID 应与第一轮训练包相同；`active_session` 已是第二轮，尚无已验证帧，直接导出正式训练包应被拒绝。若要重演第二轮导入，先将归档复制到新的会话文件，避免重复导入同一轮次。
 
+包输出到仓库 `output/` 时，后台任务会创建或保留 `output/.gdignore`，防止 Godot 将 CSV 报告当作翻译资源导入。标记位于包外，包内仍严格保留六个文件。其他项目内目标需要已有的普通 `.gdignore` 祖先文件；也可选择项目外目录。现有标记为目录或符号链接时会拒绝输出。原始 PNG 仍通过 Source 读取；仅含 JSON 的标签和轮次归档不受这项包输出限制。
+
+若旧包已被编辑器加入 `.translation` 或 `.import` 文件，保留原目录并从对应归档 V3 导出到新的受保护目标，然后重新校验。不要将含额外文件的旧包当作有效交接包。Godot 的目录排除机制见[官方说明](https://docs.godotengine.org/en/stable/tutorials/best_practices/project_organization.html#ignoring-specific-folders)。
+
 ## Godot 界面
 
 1. 执行 `"$GODOT_BIN" --path .`。Open 打开演示输出中的 `workspace`，从左栏选择 `demo`。直接打开 Source 也会获得确定的用户会话目录。

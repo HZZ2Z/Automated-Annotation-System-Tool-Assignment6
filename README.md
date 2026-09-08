@@ -152,6 +152,8 @@ source project_env.sh
 
 演示使用真实编辑与验证命令，等待自动保存，重开并导出 6 帧训练包和 120 帧评审快照，再导入模拟的新模型轮次；不依赖本地 `tests/` 或已有 `sample/`，不执行训练。`evidence.json` 记录文件路径和结果。CLI 另提供 `export`、`validate-package`、`import-round`。
 
+输出到仓库 `output/` 时会自动保留或创建 `.gdignore`，使 CSV 报告避开 Godot 资源导入。也可输出到项目外目录；其他项目内目标需要已有 `.gdignore` 祖先文件，详见评审步骤。
+
 [设计规范](docs/part4-design.md) · [任务清单](docs/part4-development-plan.md) · [协作协议](docs/part4-protocol.md) · [CLI/UI 评审步骤](docs/part4-review.md) · [测量与故障证据](RESULTS.md)
 
 # 其他

@@ -371,19 +371,22 @@ while the production demo does not depend on `tests/` or an existing `sample/`.
 |---|---|---|
 | 4.1 immutable baseline and restoration | Original baseline digest, final diff and accepted content survive save/reopen; V3 corrected records use `human_corrected`; legacy migration preserves exact prior bytes | `test_part4_repository.gd`, `test_part4_store_regression.gd`, `test_part4_optional_timestamps.gd`; demo `reopen_stable` |
 | 4.1 autosave and lifecycle | 300 ms idle scheduling, request before 2 s during continuous edits; one writer, queued latest revision, external-write refusal, failure/retry, session guards, Save/Discard/Cancel | `test_part4_autosave.gd`, `test_part4_save_deadline.gd`, `test_part4_save_wait_races.gd`, `test_part4_save_failures.gd`, `test_part4_lifecycle.gd` |
-| 4.2 exact final audit | Frames 12/13 geometry=2; frame24 label=1; frame36 added=1; frame72 deleted=1; frame90 track attributes=2; total6 changed frames/7 changed regions | `output/part4-demo-final-20260908/evidence.json`, JSON/CSV reports in its training package |
+| 4.2 exact final audit | Frames 12/13 geometry=2; frame24 label=1; frame36 added=1; frame72 deleted=1; frame90 track attributes=2; total6 changed frames/7 changed regions | `output/part4-protected-demo-20260908/evidence.json`, JSON/CSV reports in its training package |
 | 4.2 audit boundaries | ID reorder and numeric12/12.0 are equivalent; undo restores no diff; ID replacement becomes delete+add; simultaneous label/geometry events and class transfers counted; source/filled ignored | `test_part4_diff_edges.gd`, `test_part4_package_numbers.gd` |
 | 4.3 coverage | Verified training includes6/120 and excludes114; review export contains120 with actual explicit/verified status; verified unchanged/empty frames are eligible, unverified empties are excluded | Production demo; `test_part4_package.gd`, `test_part4_package_review_fixes.gd` |
 | 4.3 publication and interoperability | Hash/bytes/schema/coverage/review/audit/CSV validation; conflicting or damaged destination rejected; repeat content reuses package; UI and CLI artifacts byte-identical with the same package ID | `test_part4_parent_semantics.gd`; `output/part4-ui-cli-parity.json` |
+| 4.3 editor isolation | After a real editor rescan, training/review packages retain exactly six files and identical SHA values; independent validation, repeated export and raw PNG Source loading still pass | `output/part4-editor-isolation.json`, `test_output_import_guard.py` |
 | 4.4 new model round | Complete120-frame return validated before archival and active replacement; exact old V3 retained; new baseline/current predictions activated; verification/batch/undo reset | Production demo; `test_part4_rounds.gd`, `test_part4_round_ui.gd` |
 | 4.4 failed preparation/commit | Wrong coverage, time, parent semantics, SHA or changed input leaves the old active file and UI intact; legacy binding preserves explicit coverage | Round backend/UI and parent semantic tests |
 | Part3 regression | 40–59 propagation, preview,19 changed targets/20 covered frames, undo/redo, persistence, verification and successful-save-only auto-advance | `test_batch_workflow.gd`, `test_batch_ui.gd`; boundary truth check passed |
 
-Fresh full Python regression: **325 passed**, no skips. The complete Godot test
+Fresh full Python regression: **337 passed**, no skips. The complete Godot test
 entry and independent polygon, image-region, advanced-edit, keyboard, brush,
 fill, checked-history, assignment-editing, vertex and batch entries pass. The
 additional **27 Part 4 behavioral suites** are recorded in
-`output/part4-gate-1788851006351109517/results.json`. Numeric oracle tests compare
+`output/part4-gate-1788853027511915310/results.json`. The final integrated main
+run and logs are in `output/part4-main-acceptance-1788852895156475325/results.json`
+(runtime commit `9c24ea8`). Numeric oracle tests compare
 **12,230 IEEE binary64 values** with Python, including subnormals, midpoint ties,
 long decimals,30fps timestamps and independent content/package digests. Nesting256
 is accepted and257/510/511/512/600/10000 are rejected without VM stack errors.
@@ -474,6 +477,22 @@ bound, not a large-file completion deadline.
    parent-package semantic validation also closes the earlier UI/CLI discrepancy.
    Legal Unicode U+0085/U+2028/U+2029 inside JSON strings now survive LF-only
    JSONL parsing in Python;9 real Godot exports and33 boundary cases cover it.
+4. A post-integration Godot editor scan interpreted generated CSV reports as
+   translation resources, added `.translation`/`.import` sidecars to old packages,
+   and hit a native importer crash. The artifact bytes remained intact, but strict
+   inventory validation correctly refused those directories. Package workers now
+   create/preserve `output/.gdignore` outside each package, require an existing
+   regular ignore ancestor for other in-project package destinations, and retain
+   support for external output. JSON-only session/round storage stays independent
+   of this report guard. No old files were removed and no package allowlist was
+   relaxed. A fresh protected demo, actual editor rescan, exact inventory/hash
+   comparison, independent validation, repeat reuse and Source texture reads pass
+   in `output/part4-editor-isolation.json`. That rescan used the local marker added
+   during diagnosis; twelve isolated-project tests separately verify automatic
+   marker creation, refusal boundaries and in-project JSON round archival.
+   The engine's native fault was not
+   symbolicated; the reproducible import trigger is isolated using Godot's
+   [documented directory exclusion](https://docs.godotengine.org/en/stable/tutorials/best_practices/project_organization.html#ignoring-specific-folders).
 
 The separate Part2.2/2.3 human-review boundary is unchanged. Part4 establishes file
 handoff and independent round ingestion; model-team training, actual weight
