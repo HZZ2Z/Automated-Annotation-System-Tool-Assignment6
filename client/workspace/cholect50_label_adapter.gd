@@ -1,6 +1,8 @@
 class_name CholecT50LabelAdapter
 extends RefCounted
 
+const EXACT_JSON := preload("res://client/domain/exact_json.gd")
+
 
 const VALIDATOR_SCRIPT := preload("res://client/domain/model_output_validator.gd")
 
@@ -30,7 +32,7 @@ func read(
 			"records": {},
 			"errors": PackedStringArray(["Cannot read CholecT50 label: %s" % path]),
 		}
-	var parser := JSON.new()
+	var parser := EXACT_JSON.new()
 	if parser.parse(file.get_as_text()) != OK:
 		return {
 			"records": {},

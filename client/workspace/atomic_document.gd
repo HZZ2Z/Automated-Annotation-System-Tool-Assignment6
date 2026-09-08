@@ -2,6 +2,8 @@
 ## A caller supplies its last observed file digest and a semantic validator.
 extends RefCounted
 
+const EXACT_JSON := preload("res://client/domain/exact_json.gd")
+
 const CHUNK_BYTES := 65536
 
 func read_document(path: String) -> Dictionary:
@@ -15,7 +17,7 @@ func read_document(path: String) -> Dictionary:
 	file.close()
 	if error != OK:
 		return _failure("Cannot read complete document %s: %s" % [path, error_string(error)])
-	var parser := JSON.new()
+	var parser := EXACT_JSON.new()
 	if parser.parse(bytes.get_string_from_utf8()) != OK or not parser.data is Dictionary:
 		return _failure("Invalid JSON object in %s at line %d: %s" % [path, parser.get_error_line(), parser.get_error_message()])
 	return {"success": true, "errors": [], "payload": parser.data, "sha256": _digest(bytes)}

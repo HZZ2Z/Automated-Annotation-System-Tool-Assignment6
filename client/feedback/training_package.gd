@@ -1,4 +1,6 @@
 extends RefCounted
+
+const EXACT_JSON := preload("res://client/domain/exact_json.gd")
 ## Worker-only package service. It owns no live Store, SceneTree or mutable UI state.
 const DIFF = preload("res://client/feedback/annotation_diff.gd")
 const CODEC = preload("res://client/workspace/review_session_codec.gd")
@@ -182,9 +184,9 @@ static func validate_package(directory: String, expected: Dictionary = {}) -> Pa
 		var expected_files = ["corrected_annotations.jsonl","frame_map.jsonl"] if sub == "data" else ["diff.csv","diff.json","summary_by_class.csv"]
 		if child == null or not child.get_directories().is_empty() or Array(child.get_files()) != expected_files: return PackedStringArray(["artifact directory contains missing or foreign entries"])
 	if root.is_link("manifest.json"): return PackedStringArray(["manifest link refused"])
-	var manifest = JSON.parse_string(FileAccess.get_file_as_string(directory.path_join("manifest.json")))
+	var manifest = EXACT_JSON.parse_string(FileAccess.get_file_as_string(directory.path_join("manifest.json")))
 	if not manifest is Dictionary: return PackedStringArray(["invalid package manifest"])
-	var schema = JSON.parse_string(FileAccess.get_file_as_string("res://core/feedback/training-package-v2.schema.json"))
+	var schema = EXACT_JSON.parse_string(FileAccess.get_file_as_string("res://core/feedback/training-package-v2.schema.json"))
 	if not schema is Dictionary: return PackedStringArray(["package manifest schema unavailable"])
 	errors.append_array(_manifest_schema_errors(manifest,schema,"manifest"))
 	if not errors.is_empty(): return errors

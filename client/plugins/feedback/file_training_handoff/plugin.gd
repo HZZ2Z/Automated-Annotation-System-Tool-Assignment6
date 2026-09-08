@@ -1,5 +1,7 @@
 extends "res://client/pipeline/stages/feedback_stage.gd"
 
+const EXACT_JSON := preload("res://client/domain/exact_json.gd")
+
 
 signal export_finished(success: bool, path_or_error: String)
 
@@ -185,7 +187,7 @@ func _write_json(path: String, value: Dictionary) -> PackedStringArray:
 func _validate_staged_package(staging: String, expected_manifest: Dictionary) -> PackedStringArray:
 	var manifest_path := staging.path_join("manifest.json")
 	var corrected_path := staging.path_join(CORRECTED_PATH)
-	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(manifest_path))
+	var parsed: Variant = EXACT_JSON.parse_string(FileAccess.get_file_as_string(manifest_path))
 	if not parsed is Dictionary:
 		return PackedStringArray(["staged handoff manifest failed round-trip validation"])
 	if parsed.get("schema_version") != 1 or parsed.get("package_type") != PACKAGE_TYPE or parsed.get("package_id") != expected_manifest["package_id"]:

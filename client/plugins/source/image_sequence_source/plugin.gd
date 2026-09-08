@@ -1,5 +1,7 @@
 extends "res://client/pipeline/stages/source_stage.gd"
 
+const EXACT_JSON := preload("res://client/domain/exact_json.gd")
+
 const CACHE_SCRIPT := preload("res://client/services/frame_cache.gd")
 const STORE_SCRIPT := preload("res://client/domain/annotation_store.gd")
 const MANIFEST_FIELDS := {
@@ -291,7 +293,7 @@ func _read_model_records(root: String, manifest: Dictionary, errors: PackedStrin
 			line_number += 1
 			if line.strip_edges().is_empty():
 				continue
-			var parser := JSON.new()
+			var parser := EXACT_JSON.new()
 			if parser.parse(line) != OK:
 				errors.append(
 					"%s:%d: invalid JSON: %s"
@@ -345,7 +347,7 @@ func _read_json_object(path: String, label: String, errors: PackedStringArray) -
 	if file == null:
 		errors.append("%s file is missing or unreadable: %s" % [label, path.get_file()])
 		return {}
-	var parser := JSON.new()
+	var parser := EXACT_JSON.new()
 	if parser.parse(file.get_as_text()) != OK:
 		errors.append("%s: invalid JSON at line %d: %s" % [label, parser.get_error_line(), parser.get_error_message()])
 		return {}

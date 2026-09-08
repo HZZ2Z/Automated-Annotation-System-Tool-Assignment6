@@ -1,6 +1,8 @@
 class_name VideoImportController
 extends Node
 
+const EXACT_JSON := preload("res://client/domain/exact_json.gd")
+
 signal progress(payload: Dictionary)
 signal completed(output_path: String)
 signal failed(message: String)
@@ -191,7 +193,7 @@ func _read_json(path: String) -> Variant:
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		return null
-	return JSON.parse_string(file.get_as_text())
+	return EXACT_JSON.parse_string(file.get_as_text())
 
 
 func _with_recovery_hint(message: String) -> String:

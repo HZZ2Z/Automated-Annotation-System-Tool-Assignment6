@@ -1,4 +1,6 @@
 extends RefCounted
+
+const EXACT_JSON := preload("res://client/domain/exact_json.gd")
 ## Worker-only two-phase round/baseline transaction. Never reads a live UI Store.
 const REPO = preload("res://client/workspace/session_repository.gd")
 const CODEC = preload("res://client/workspace/review_session_codec.gd")
@@ -47,7 +49,7 @@ static func _prepare(context: Dictionary, input_path: String, binding: bool, tok
 		if not input.success: return input
 		manifest = input.payload
 		input_sha = input.sha256
-		var schema = JSON.parse_string(FileAccess.get_file_as_string("res://core/feedback/model-round-v1.schema.json"))
+		var schema = EXACT_JSON.parse_string(FileAccess.get_file_as_string("res://core/feedback/model-round-v1.schema.json"))
 		if not schema is Dictionary: return _failure("Model round schema unavailable")
 		errors = PACKAGE._manifest_schema_errors(manifest,schema,"model_round")
 		if not errors.is_empty(): return _failure("; ".join(errors))
@@ -142,7 +144,7 @@ static func _read_records(path: String) -> Dictionary:
 	for line in bytes.get_string_from_utf8().split("\n"):
 		line_number += 1
 		if line.strip_edges().is_empty(): continue
-		var parser = JSON.new()
+		var parser = EXACT_JSON.new()
 		if parser.parse(line) != OK: return _failure("Invalid model JSON at line %d" % line_number)
 		var errors = validator.validate_record(parser.data)
 		if not errors.is_empty(): return _failure("Model line %d: %s" % [line_number,"; ".join(errors)])

@@ -1,4 +1,6 @@
 extends SceneTree
+
+const EXACT_JSON := preload("res://client/domain/exact_json.gd")
 ## Headless production adapter. IO runs on BackgroundJob; demo edits use real commands.
 const WORKER = preload("res://client/cli/part4_worker.gd")
 const JOB = preload("res://client/services/background_job.gd")
@@ -22,7 +24,7 @@ func run():
 		quit(2)
 		return
 	result_path = args[1]
-	var options = JSON.parse_string(FileAccess.get_file_as_string(args[0]))
+	var options = EXACT_JSON.parse_string(FileAccess.get_file_as_string(args[0]))
 	if not options is Dictionary:
 		finish(worker.failure("Invalid runner request"))
 		return

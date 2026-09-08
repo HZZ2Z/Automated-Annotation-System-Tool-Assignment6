@@ -44,7 +44,7 @@ func create_demo(options: Dictionary, token) -> Dictionary:
 	for frame in 120:
 		if PACKAGE.cancelled(token): return failure("Demo generation cancelled")
 		var image_path = "frames/%06d.png" % frame
-		var timestamp = frame / 32.0
+		var timestamp = frame / 30.0
 		frames.append({"frame":frame,"time_s":timestamp,"image_path":image_path})
 		entries.append({"frame":frame,"frame_id":frame,"time_s":timestamp,"image_path":image_path})
 		var record = {"schema_version":1,"source":"demo","frame":frame,"time_s":timestamp,"regions":[{"id":"tool1","class":"grasper","kind":"instrument","box":[40,60,100,50],"track_id":"track1"},{"id":"tool2","class":"scissors","kind":"instrument","box":[220,120,70,90],"track_id":"track2"}]}
@@ -55,7 +55,7 @@ func create_demo(options: Dictionary, token) -> Dictionary:
 		image.fill_rect(Rect2i(220,120,70,90),Color(0.2,0.7,0.85))
 		if image.save_png(source.path_join(image_path)) != OK: return failure("Cannot write synthetic demo PNG")
 		PACKAGE.progress(token,float(frame+1)/120.0,"Generating synthetic source")
-	var manifest = {"schema_version":1,"dataset_id":"demo","source_name":"demo","source_sha256":"Project6 deterministic synthetic demo, 120 frames".sha256_text(),"width":400,"height":240,"frame_count":120,"nominal_fps":32.0,"frames":frames,"model_version":"model_output_v1","taxonomy_version":"sample-taxonomy-v1"}
+	var manifest = {"schema_version":1,"dataset_id":"demo","source_name":"demo","source_sha256":"Project6 deterministic synthetic demo, 120 frames".sha256_text(),"width":400,"height":240,"frame_count":120,"nominal_fps":30.0,"frames":frames,"model_version":"model_output_v1","taxonomy_version":"sample-taxonomy-v1"}
 	errors = PACKAGE.write_text(source.path_join("manifest.json"),JSON.stringify(manifest,"",true,true)+"\n")
 	errors.append_array(PACKAGE.write_text(source.path_join("model_output_v1.jsonl"),PACKAGE.jsonl(records)))
 	if not errors.is_empty(): return failure("; ".join(errors))
