@@ -46,7 +46,7 @@ static func export_package(snapshot: Dictionary, options: Dictionary, token = nu
 	var result = {"success":false,"errors":prepared.errors,"output_path":"","package_id":"","revision":snapshot.get("revision",0),"cancelled":prepared.cancelled,"reused":false,"summary":prepared.summary,"timings_ms":timings}
 	if not prepared.success: return result
 	var parent = String(options.get("output_parent", ""))
-	result.errors.append_array(prepare_output_parent(parent))
+	result.errors.append_array(prepare_output_parent(parent,true))
 	if not result.errors.is_empty(): return result
 	var kind = options.get("kind", "training_update_v2")
 	var selected = prepared.selected_frame_ids
@@ -272,7 +272,9 @@ static func remove_own_staging(path: String) -> void:
 		else: remove_own_staging(path.path_join(name))
 	DirAccess.remove_absolute(path)
 
-static func prepare_output_parent(path: String) -> PackedStringArray:
+# JSON-only storage callers use the generic safe directory checks. CSV package
+# producers explicitly opt into project resource-import isolation.
+static func prepare_output_parent(path: String, protect_package_reports: bool = false) -> PackedStringArray:
 	if not path.is_absolute_path() or path.contains("\\") or ".." in path.split("/"):
 		return PackedStringArray(["output_parent must be an absolute path without traversal"])
 	var cursor = "/"
@@ -281,8 +283,9 @@ static func prepare_output_parent(path: String) -> PackedStringArray:
 		if directory != null and directory.is_link(component): return PackedStringArray(["output_parent symlink ancestors refused"])
 		cursor = cursor.path_join(component)
 		if FileAccess.file_exists(cursor): return PackedStringArray(["output_parent conflicts with a file"])
-	var import_errors = _guard_project_output(path.simplify_path().trim_suffix("/"))
-	if not import_errors.is_empty(): return import_errors
+	if protect_package_reports:
+		var import_errors = _guard_project_output(path.simplify_path().trim_suffix("/"))
+		if not import_errors.is_empty(): return import_errors
 	if DirAccess.make_dir_recursive_absolute(path) != OK: return PackedStringArray(["cannot create output_parent"])
 	return PackedStringArray()
 

@@ -32,7 +32,7 @@ func open_v3(path: String, token) -> Dictionary:
 func create_demo(options: Dictionary, token) -> Dictionary:
 	var output = String(options.output)
 	if FileAccess.file_exists(output) or DirAccess.dir_exists_absolute(output): return failure("Demo output already exists; choose a new directory")
-	var errors = PACKAGE.prepare_output_parent(output)
+	var errors = PACKAGE.prepare_output_parent(output,true)
 	if not errors.is_empty(): return failure("; ".join(errors))
 	var workspace = output.path_join("workspace")
 	var source = workspace.path_join("demo")
