@@ -1,0 +1,351 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "media-label-v3.schema.json",
+  "title": "Review Session Media Label V3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "media_id",
+    "media_type",
+    "source_relative_path",
+    "source_sha256",
+    "frame_digits",
+    "frames",
+    "review_state",
+    "batch_operations",
+    "session_id",
+    "source",
+    "round_id",
+    "model_revision",
+    "taxonomy_version",
+    "revision",
+    "baseline_kind",
+    "baseline_digest",
+    "baseline_records",
+    "explicit_frames",
+    "frame_entries"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 3
+    },
+    "media_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9_]{0,62}[A-Za-z0-9])?$"
+    },
+    "media_type": {
+      "enum": [
+        "image",
+        "video",
+        "image_sequence"
+      ]
+    },
+    "source_relative_path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "source_sha256": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "frame_digits": {
+      "const": 6
+    },
+    "frames": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(0|[1-9][0-9]{0,5})$"
+      },
+      "additionalProperties": {
+        "allOf": [
+          {
+            "$ref": "model_output_v1.schema.json"
+          },
+          {
+            "properties": {
+              "source": {
+                "const": "human_corrected"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "review_state": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(0|[1-9][0-9]{0,5})$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "accepted_digest"
+        ],
+        "properties": {
+          "accepted_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "batch_operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "type",
+          "keyframe",
+          "start_frame",
+          "end_frame",
+          "mode",
+          "affected_frames"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": 1
+          },
+          "type": {
+            "const": "range_propagate"
+          },
+          "mode": {
+            "enum": [
+              "overwrite",
+              "merge"
+            ]
+          },
+          "keyframe": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 999999
+          },
+          "start_frame": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 999999
+          },
+          "end_frame": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 999999
+          },
+          "affected_frames": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999999
+            }
+          },
+          "metric_id": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "threshold": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 1
+          },
+          "keyframe_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "created_at": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](Z)?$"
+          },
+          "max_frames": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "start_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "end_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "changed_count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "covered_count": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "left_stop": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "right_stop": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          },
+          "metric": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S"
+          }
+        },
+        "dependentRequired": {
+          "metric_id": [
+            "threshold",
+            "max_frames",
+            "keyframe_digest",
+            "created_at",
+            "start_index",
+            "end_index",
+            "left_stop",
+            "right_stop",
+            "changed_count",
+            "covered_count"
+          ]
+        },
+        "additionalProperties": false
+      }
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "round_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "taxonomy_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "baseline_kind": {
+      "enum": [
+        "model",
+        "imported_labels",
+        "empty",
+        "unknown"
+      ]
+    },
+    "baseline_digest": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "baseline_records": {
+      "type": "array",
+      "items": {
+        "$ref": "model_output_v1.schema.json"
+      }
+    },
+    "explicit_frames": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 999999
+      }
+    },
+    "frame_entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "frame",
+          "frame_id"
+        ],
+        "properties": {
+          "frame": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "frame_id": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 999999
+          },
+          "time_s": {
+            "type": "number",
+            "minimum": 0
+          },
+          "image_path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "baseline_kind": {
+            "enum": [
+              "model",
+              "imported_labels"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "baseline_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "baseline_records": {
+            "minItems": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "baseline_digest": {
+            "type": "null"
+          },
+          "baseline_records": {
+            "maxItems": 0
+          }
+        }
+      }
+    }
+  ]
+}

@@ -39,6 +39,9 @@ def validate_media_label_semantics(value: object) -> list[str]:
     """Validate Model Output V1 records against their media and frame keys."""
     if not isinstance(value, dict):
         return ["$: expected object"]
+    if value.get("schema_version") == 3:
+        from annotation_data.review_session import validate_review_session
+        return validate_review_session(value)
     errors: list[str] = []
     media_id_value = value.get("media_id")
     frames = value.get("frames")

@@ -14,6 +14,12 @@ var _corrected_records: Dictionary = {}
 var _dirty_frames: Dictionary = {}
 var _batch_operations: Array[Dictionary] = []
 var _validator = VALIDATOR_SCRIPT.new()
+var _session: Dictionary = {}
+var _revision := 0
+var _explicit_frames: Dictionary = {}
+var _baseline_digest := ""
+var _snapshot_baseline_digest := ""
+var _frame_order: Array = []
 
 
 func load_model_records(records: Variant) -> PackedStringArray:
@@ -38,11 +44,20 @@ func load_model_records(records: Variant) -> PackedStringArray:
 			else:
 				seen_frames[frame] = true
 			if record_errors.is_empty() and not next_model.has(frame):
-				next_model[frame] = record.duplicate(true)
+				next_model[frame] = _immutable_copy(record)
 	if not errors.is_empty():
 		return errors
 	_model_records = next_model
-	_corrected_records = next_model.duplicate(true)
+	_corrected_records = next_model.duplicate()
+	_frame_order = next_model.keys()
+	_frame_order.sort()
+	_session = {}
+	_revision = 0
+	_explicit_frames = {}
+	for frame: int in _frame_order:
+		_explicit_frames[frame] = true
+	_baseline_digest = JSON.stringify(_canonicalize(_sorted_record_copies(_model_records))).sha256_text()
+	_snapshot_baseline_digest = JSON.stringify(_canonicalize(_sorted_record_copies(_model_records)), "", true, true).sha256_text()
 	_dirty_frames.clear()
 	_batch_operations.clear()
 	_review_state.clear()
@@ -79,8 +94,10 @@ func replace_corrected_record(frame: int, record: Variant) -> PackedStringArray:
 	var errors := _validate_replacement(frame, record)
 	if not errors.is_empty():
 		return errors
-	_corrected_records[frame] = record.duplicate(true)
+	_corrected_records[frame] = _immutable_copy(record)
 	_dirty_frames[frame] = true
+	_explicit_frames[frame] = true
+	_revision += 1
 	corrected_records_replaced.emit(PackedInt64Array([frame]))
 	return errors
 
@@ -116,12 +133,14 @@ func _replace_corrected_records(replacements: Dictionary, operation: Dictionary,
 		if not errors.is_empty():
 			return errors
 	for frame: int in frames:
-		_corrected_records[frame] = (replacements[frame] as Dictionary).duplicate(true)
+		_corrected_records[frame] = _immutable_copy(replacements[frame])
 		_dirty_frames[frame] = true
+		_explicit_frames[frame] = true
 	if not operation.is_empty():
 		_batch_operations.append(operation.duplicate(true))
 	if restore_operation_count >= 0:
 		_batch_operations.resize(restore_operation_count)
+	_revision += 1
 	# 帧数据和传播日志都更新后再通知订阅者。
 	corrected_records_replaced.emit(PackedInt64Array(frames))
 	return errors
@@ -156,8 +175,7 @@ func snapshot_corrected() -> Array:
 
 
 func model_digest() -> String:
-	var canonical_records: Array = _canonicalize(_sorted_record_copies(_model_records))
-	return JSON.stringify(canonical_records).sha256_text()
+	return _baseline_digest
 
 
 func _validate_replacement(frame: int, record: Variant) -> PackedStringArray:
@@ -165,11 +183,19 @@ func _validate_replacement(frame: int, record: Variant) -> PackedStringArray:
 	if not _corrected_records.has(frame):
 		errors.append("frame: frame %d does not exist" % frame)
 	if record is Dictionary:
+		if not _session.is_empty():
+			if record.get("source") != _session.source:
+				errors.append("source: must match session source")
+			var original: Dictionary = _model_records.get(frame, {})
+			if record.has("time_s") != original.has("time_s") or record.get("time_s") != original.get("time_s"):
+				errors.append("time_s: must preserve source timestamp including absence")
 		var seen_ids := {}
 		var regions: Variant = record.get("regions")
 		if regions is Array:
 			for region: Variant in regions:
 				if region is Dictionary:
+					if region.has("filled") and not region.filled is bool:
+						errors.append("regions.filled: expected boolean internal display flag")
 					var region_id: Variant = region.get("id")
 					if seen_ids.has(region_id):
 						errors.append("regions: duplicate region ID %s" % str(region_id))
@@ -221,6 +247,11 @@ func _is_logical_integer(value: Variant) -> bool:
 
 func record_digest(frame: int) -> String:
 	# Normalize numeric JSON values so saved/reopened geometry hashes identically.
+	return JSON.stringify(_canonicalize(_model_output_projection(get_corrected_record(frame))), "", true, true).sha256_text()
+
+
+func legacy_record_digest(frame: int) -> String:
+	# V1/V2 migration must validate the old digest before rebinding verification.
 	return JSON.stringify(_canonicalize(_model_output_projection(get_corrected_record(frame)))).sha256_text()
 
 
@@ -236,8 +267,12 @@ func load_workflow_state(review_state: Variant, batch_operations: Variant) -> Pa
 	var errors := validate_workflow_state(review_state, batch_operations, _corrected_records)
 	if not errors.is_empty():
 		return errors
+	if _review_state != review_state or _batch_operations != batch_operations:
+		_revision += 1
 	_review_state = review_state.duplicate(true)
 	_batch_operations.assign(batch_operations.duplicate(true))
+	for key: String in _review_state:
+		_explicit_frames[int(key)] = true
 	review_state_changed.emit()
 	return errors
 
@@ -270,6 +305,9 @@ static func _validate_batch_operation(operation: Variant, frames: Dictionary, di
 	var errors := PackedStringArray()
 	if not operation is Dictionary:
 		return PackedStringArray(["batch_operations: expected objects"])
+	for field: Variant in operation:
+		if field not in ["schema_version", "type", "mode", "keyframe", "start_frame", "end_frame", "affected_frames", "metric", "metric_id", "threshold", "max_frames", "keyframe_digest", "created_at", "start_index", "end_index", "left_stop", "right_stop", "changed_count", "covered_count"]:
+			errors.append("batch_operations: unexpected field %s" % str(field))
 	if operation.get("type") != "range_propagate" or operation.get("mode") not in ["overwrite", "merge"] or not _valid_frame_number(operation.get("schema_version")) or operation.get("schema_version") != 1:
 		errors.append("batch_operations: invalid operation type, mode or version")
 	var range_valid := true
@@ -298,7 +336,7 @@ static func _validate_batch_operation(operation: Variant, frames: Dictionary, di
 				errors.append("batch_operations.%s: required for metric audit" % field)
 		if range_valid and (operation.keyframe < operation.start_frame or operation.keyframe > operation.end_frame):
 			errors.append("batch_operations: metric range must contain keyframe")
-	for field: String in ["metric_id", "left_stop", "right_stop"]:
+	for field: String in ["metric", "metric_id", "left_stop", "right_stop"]:
 		if operation.has(field) and (not operation[field] is String or operation[field].strip_edges().is_empty()):
 			errors.append("batch_operations.%s: expected nonempty text" % field)
 	if operation.has("threshold"):
@@ -321,3 +359,163 @@ static func _validate_batch_operation(operation: Variant, frames: Dictionary, di
 		if operation.changed_count != affected.size() or operation.changed_count >= operation.covered_count:
 			errors.append("batch_operations: inconsistent changed count")
 	return errors
+
+
+# These session APIs contain no IO. Load/validation belongs to the worker that
+# constructs the store; freeze only publishes already immutable record values.
+func configure_session(context: Dictionary) -> PackedStringArray:
+	var errors := PackedStringArray()
+	for field: String in ["session_id", "media_id", "media_type", "source_relative_path", "source", "round_id", "model_revision", "taxonomy_version"]:
+		if not context.get(field) is String or context[field].is_empty():
+			errors.append("%s: expected nonempty session text" % field)
+	if context.get("media_type") not in ["image", "video", "image_sequence"]:
+		errors.append("media_type: invalid type")
+	var id_pattern := RegEx.new()
+	id_pattern.compile("^[A-Za-z0-9](?:[A-Za-z0-9_]{0,62}[A-Za-z0-9])?$")
+	if context.get("media_id") is String and id_pattern.search(context.media_id) == null:
+		errors.append("media_id: invalid portable identity")
+	if context.get("source_relative_path") is String:
+		var path: String = context.source_relative_path
+		if path.is_absolute_path() or path.contains("\\") or ".." in path.split("/") or path.contains(":"):
+			errors.append("source_relative_path: expected contained POSIX path")
+	var digest_pattern := RegEx.new()
+	digest_pattern.compile("^[0-9a-f]{64}$")
+	if context.get("source_sha256") != null and (not context.source_sha256 is String or digest_pattern.search(context.source_sha256) == null):
+		errors.append("source_sha256: expected SHA256 or null")
+	if context.has("source_root") and not context.source_root is String:
+		errors.append("source_root: expected local path string")
+	if context.get("baseline_kind") not in ["model", "imported_labels", "empty", "unknown"]:
+		errors.append("baseline_kind: invalid origin")
+	if not _valid_frame_number(context.get("revision", 0)):
+		errors.append("revision: expected nonnegative integer")
+	var entries: Variant = context.get("frame_entries")
+	var explicit: Variant = context.get("explicit_frames", _frame_order)
+	var frame_map := {}
+	var previous_time := -1.0
+	if not entries is Array or entries.is_empty() or entries.size() != _corrected_records.size():
+		errors.append("frame_entries: expected exact source frame set")
+	else:
+		for index in range(entries.size()):
+			var entry: Variant = entries[index]
+			if not entry is Dictionary or not _valid_frame_number(entry.get("frame_id")) or not _valid_frame_number(entry.get("frame")) or entry.frame != index:
+				errors.append("frame_entries: invalid playback/original identity")
+				continue
+			for field: Variant in entry:
+				if field not in ["frame", "frame_id", "time_s", "image_path"]:
+					errors.append("frame_entries: unexpected field %s" % str(field))
+			if entry.has("image_path") and (not entry.image_path is String or not _contained_path(entry.image_path)):
+				errors.append("frame_entries.image_path: expected contained POSIX path")
+			if entry.has("time_s"):
+				var time: Variant = entry.time_s
+				if typeof(time) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(time)) or float(time) < previous_time or float(time) < 0:
+					errors.append("frame_entries.time_s: expected ordered finite timestamp")
+				else:
+					previous_time = float(time)
+			var frame := int(entry.frame_id)
+			if frame > 999999:
+				errors.append("frame_entries: original frame ID exceeds six digits")
+			if frame_map.has(frame) or not _corrected_records.has(frame):
+				errors.append("frame_entries: duplicate or unknown frame")
+			else:
+				frame_map[frame] = true
+				var record: Dictionary = _model_records[frame]
+				if record.source != context.get("source") or record.has("time_s") != entry.has("time_s") or record.get("time_s") != entry.get("time_s"):
+					errors.append("frame_entries: source or timestamp differs from loaded record")
+	var next_explicit := {}
+	if not explicit is Array:
+		errors.append("explicit_frames: expected array")
+	else:
+		for frame: Variant in explicit:
+			if not _valid_frame_number(frame) or not frame_map.has(int(frame)) or next_explicit.has(int(frame)):
+				errors.append("explicit_frames: duplicate or unknown frame")
+			else:
+				next_explicit[int(frame)] = true
+	if not errors.is_empty():
+		return errors
+	_session = {}
+	for field: String in ["session_id", "media_id", "media_type", "source_relative_path", "source", "source_sha256", "round_id", "model_revision", "taxonomy_version", "baseline_kind", "source_root"]:
+		if context.has(field):
+			_session[field] = context[field]
+	_session["source_sha256"] = context.get("source_sha256")
+	_session["frame_entries"] = _immutable_copy(entries)
+	_revision = int(context.get("revision", 0))
+	_explicit_frames = next_explicit
+	return errors
+
+
+func current_revision() -> int:
+	return _revision
+
+
+func restore_corrected(records: Variant, review_state: Variant, batch_operations: Variant) -> PackedStringArray:
+	if not records is Array or records.size() != _corrected_records.size():
+		return PackedStringArray(["records: expected exact complete frame set"])
+	var errors := PackedStringArray()
+	var next := {}
+	for record: Variant in records:
+		if not record is Dictionary or not _valid_frame_number(record.get("frame")):
+			errors.append("records: invalid frame")
+			continue
+		var frame := int(record.frame)
+		if next.has(frame):
+			errors.append("records: duplicate frame")
+		errors.append_array(_validate_replacement(frame, record))
+		next[frame] = record
+	errors.append_array(validate_workflow_state(review_state, batch_operations, next))
+	if not errors.is_empty():
+		return errors
+	for frame: int in next:
+		next[frame] = _immutable_copy(next[frame])
+	_corrected_records = next
+	_review_state = review_state.duplicate(true)
+	_batch_operations.assign(batch_operations.duplicate(true))
+	_dirty_frames.clear()
+	corrected_records_replaced.emit(PackedInt64Array(_frame_order))
+	review_state_changed.emit()
+	return errors
+
+
+func freeze_snapshot() -> Dictionary:
+	var snapshot := _session.duplicate()
+	snapshot["schema_version"] = 1
+	snapshot["revision"] = _revision
+	snapshot["baseline_kind"] = _session.get("baseline_kind", "model")
+	snapshot["baseline_digest"] = _snapshot_baseline_digest if snapshot.baseline_kind in ["model", "imported_labels"] else null
+	var baseline: Array = []
+	var corrected: Array = []
+	for frame: int in _frame_order:
+		if snapshot.baseline_kind in ["model", "imported_labels"]:
+			baseline.append(_model_records[frame])
+		corrected.append(_corrected_records[frame])
+	baseline.make_read_only()
+	corrected.make_read_only()
+	snapshot["baseline_records"] = baseline
+	snapshot["records"] = corrected
+	var explicit: Array = _explicit_frames.keys()
+	explicit.sort()
+	explicit.make_read_only()
+	snapshot["explicit_frames"] = explicit
+	snapshot["review_state"] = _immutable_copy(_review_state)
+	snapshot["batch_operations"] = _immutable_copy(_batch_operations)
+	snapshot.make_read_only()
+	return snapshot
+
+
+static func _immutable_copy(value: Variant) -> Variant:
+	if value is Dictionary:
+		var result := {}
+		for key: Variant in value:
+			result[key] = _immutable_copy(value[key])
+		result.make_read_only()
+		return result
+	if value is Array:
+		var result: Array = []
+		for item: Variant in value:
+			result.append(_immutable_copy(item))
+		result.make_read_only()
+		return result
+	return value
+
+
+static func _contained_path(path: String) -> bool:
+	return not path.is_empty() and not path.is_absolute_path() and not path.contains("\\") and ".." not in path.split("/") and not path.contains(":")

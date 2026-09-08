@@ -8,6 +8,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 from jsonschema.validators import extend
+from referencing import Registry, Resource
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +18,7 @@ SCHEMA_PATHS = {
     / "core/frame_source/dataset-manifest-v1.schema.json",
     "media-label-v1.schema.json": ROOT / "core/workspace/media-label-v1.schema.json",
     "media-label-v2.schema.json": ROOT / "core/workspace/media-label-v2.schema.json",
+    "media-label-v3.schema.json": ROOT / "core/workspace/media-label-v3.schema.json",
 }
 
 
@@ -57,10 +59,18 @@ def load_schema(name: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@lru_cache(maxsize=1)
+def _schema_registry() -> Registry:
+    return Registry().with_resources(
+        (name, Resource.from_contents(load_schema(name))) for name in SCHEMA_PATHS
+    )
+
+
 def validate_instance(data: object, schema_name: str) -> list[str]:
 
     """返回确定的、针对具体字段的 JSON Schema 验证错误。"""
-    validator = StrictDraft202012Validator(load_schema(schema_name))
+    # Resolve versioned record references from the local contract registry only.
+    validator = StrictDraft202012Validator(load_schema(schema_name), registry=_schema_registry())
     errors = sorted(validator.iter_errors(data), key=lambda item: list(item.path))
     return [
         f"{_validation_error_path(error)}: "
