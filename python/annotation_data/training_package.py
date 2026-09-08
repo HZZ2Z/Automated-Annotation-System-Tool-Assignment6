@@ -56,6 +56,17 @@ def _json(text: str) -> Any:
     return json.loads(text, object_pairs_hook=pairs, parse_constant=constant)
 
 
+def _jsonl(text: str) -> list[Any]:
+    """Match Godot JSONL: LF boundaries, optional terminal LF, no blank rows.
+
+    CR in CRLF remains valid JSON whitespace. Unicode line separators inside
+    strings are content, so str.splitlines() must not be used here.
+    """
+    if not text:
+        return []
+    return [_json(line) for line in text.removesuffix("\n").split("\n")]
+
+
 def validate_training_package(directory: str | Path) -> list[str]:
     """Return checked errors for either training_update_v2 or review_export_v1."""
     try:
@@ -107,8 +118,8 @@ def _validate(root: Path) -> list[str]:
         texts[artifact["path"]] = raw.decode("utf-8")
     if errors:
         return errors
-    records = [_json(line) for line in texts[PATHS[0]].splitlines()]
-    mapping = [_json(line) for line in texts[PATHS[1]].splitlines()]
+    records = _jsonl(texts[PATHS[0]])
+    mapping = _jsonl(texts[PATHS[1]])
     diff = _json(texts[PATHS[2]])
     errors.extend(_schema_errors(diff, "annotation-diff-v1.schema.json"))
     for record in records:
