@@ -44,6 +44,7 @@ func setup(host: Variant) -> void:
 	_leave_dialog.title = "尚有未保存的修改"
 	_leave_dialog.dialog_text = "保存已提交的修改后继续，或放弃尚未保存的修改。草稿不会自动提交。"
 	_leave_dialog.get_ok_button().text = "保存并继续"
+	_leave_dialog.dialog_hide_on_ok = false
 	_leave_dialog.get_cancel_button().text = "取消"
 	_leave_dialog.add_button("放弃尚未保存的修改",false,"discard")
 	_leave_dialog.confirmed.connect(func(): leave_decided.emit("save"))
@@ -134,19 +135,31 @@ func confirm_leave() -> bool:
 		return true
 	_leave_dialog.popup_centered(Vector2i(610,180))
 	var choice: String = await leave_decided
-	_leave_dialog.hide()
 	var allowed := false
 	if choice == "save":
-		var errors: PackedStringArray = await session.flush_before_context_change()
-		allowed = errors.is_empty()
+		_set_leave_buttons_disabled(true)
+		var identity: String = session.status().session_id
+		var errors := PackedStringArray()
+		# The modal stays up, and even programmatic edits arriving during a save
+		# must be acknowledged before departure can destroy the session.
+		while session.has_unsaved_changes() and identity == session.status().session_id:
+			errors = await session.flush_before_context_change()
+			if not errors.is_empty(): break
+		allowed = errors.is_empty() and identity == session.status().session_id and not session.has_unsaved_changes()
+		_set_leave_buttons_disabled(false)
 		if not allowed: _host._show_errors("保存失败，当前会话已保留",errors)
 	elif choice == "discard":
 		_discard_session = session.status().session_id
 		allowed = true
+	_leave_dialog.hide()
 	_leaving = false
 	if not allowed: session.suspend_autosave(false)
 	refresh()
 	return allowed
+
+func _set_leave_buttons_disabled(value: bool) -> void:
+	for button: Node in _leave_dialog.find_children("*","Button",true,false):
+		button.disabled = value
 
 func request_close() -> void:
 	if _opening:

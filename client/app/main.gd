@@ -1113,6 +1113,7 @@ func _on_video_import_cancel_pressed() -> void:
 		_video_import_status.text = "Cancelling safely; the current dataset is unchanged…"
 		return
 	_video_import_dialog.hide()
+	_review_workflow.finish_transition()
 
 
 func _on_video_import_progress(payload: Dictionary) -> void:
@@ -1136,6 +1137,7 @@ func _on_video_import_completed(output_path: String) -> void:
 	else:
 		_video_import_status.text = "Import completed, but the new source could not be opened. Output kept at: %s" % output_path
 		_video_import_start.disabled = true
+	_review_workflow.finish_transition()
 	_refresh_toolbar()
 
 
@@ -1145,6 +1147,7 @@ func _on_video_import_failed(message: String) -> void:
 	_set_video_import_running_ui(false)
 	_video_import_status.text = _bounded(message)
 	_set_status("Video import failed: %s" % message)
+	_review_workflow.finish_transition()
 	_update_video_import_start_button()
 	_refresh_toolbar()
 
@@ -1155,6 +1158,7 @@ func _on_video_import_cancelled() -> void:
 	_set_video_import_running_ui(false)
 	_video_import_dialog.hide()
 	_set_status("Video import cancelled; current dataset unchanged")
+	_review_workflow.finish_transition()
 	_refresh_toolbar()
 
 
