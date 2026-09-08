@@ -117,6 +117,7 @@ func _decode_legacy(payload: Variant, options: Dictionary) -> Dictionary:
 			corrected.append(record)
 	for key: Variant in payload.frames:
 		if not key is String or not frame_ids.has(key): return _decode_failure("Legacy frame key is not in source: %s" % str(key))
+	empty = CODEC.baseline_display_records({"baseline_kind":"unknown","source":context.source,"frame_entries":context.frame_entries,"records":payload.frames.values()})
 	var store = STORE.new()
 	var errors: PackedStringArray = store.load_model_records(empty)
 	if errors.is_empty(): errors = store.configure_session(context)

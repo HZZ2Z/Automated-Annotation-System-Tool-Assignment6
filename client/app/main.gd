@@ -1,6 +1,8 @@
 class_name AnnotationMain
 extends Control
 
+signal media_activation_finished(errors: PackedStringArray)
+
 const PLUGIN_REGISTRY_SCRIPT := preload("res://client/pipeline/plugin_registry.gd")
 const SOURCE_FACTORY_SCRIPT := preload("res://client/pipeline/source_factory.gd")
 const SOURCE_SESSION_BUILDER_SCRIPT := preload(
@@ -189,6 +191,7 @@ class StagedEditContextBridge:
 @export var render_plugin_id := "canvas_region_renderer"
 @export var edit_plugin_id := "basic_edit_tools"
 @export var feedback_plugin_id := "file_training_handoff"
+@export var review_session_root := "user://review_sessions"
 
 @onready var _open_button: Button = $MainVBox/TopToolbar/Open
 @onready var _export_button: Button = $MainVBox/TopToolbar/Export
@@ -255,6 +258,7 @@ var _selected_video_output_parent := ""
 var _workspace_catalog = WORKSPACE_CATALOG_SCRIPT.new()
 var _workspace_root := ""
 var _workspace_media_id := ""
+var _review_workflow: Variant
 var _workspace_label_store: Variant
 var _workspace_media_controller: Variant
 var _workspace_session: Variant
@@ -272,6 +276,9 @@ func _ready() -> void:
 	_batch_workflow = preload("res://client/ui/batch_workflow.gd").new()
 	add_child(_batch_workflow)
 	_batch_workflow.setup(self, _tool_panel.get_parent())
+	_review_workflow = preload("res://client/ui/review_workflow.gd").new()
+	add_child(_review_workflow)
+	_review_workflow.setup(self)
 	_taxonomy = _read_taxonomy()
 	_color_resolver = CLASS_COLOR_RESOLVER_SCRIPT.new(_taxonomy)
 	var plugin_errors: PackedStringArray = _plugin_registry.discover_roots(plugin_roots)
@@ -299,6 +306,10 @@ func _ready() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.ctrl_pressed and event.keycode == KEY_S:
+		_review_workflow.save_now()
+		get_viewport().set_input_as_handled()
+		return
 	if not event is InputEventKey or not event.pressed or event.echo:
 		return
 	if _is_class_dialog_active():
@@ -346,7 +357,7 @@ func open_workspace(path: String) -> PackedStringArray:
 	if not errors.is_empty():
 		_show_errors("Cannot open workspace", errors)
 		return errors
-	errors = _flush_workspace_changes()
+	errors = await _flush_workspace_changes()
 	if not errors.is_empty():
 		_show_errors("Cannot replace workspace", errors)
 		return errors
@@ -391,14 +402,25 @@ func _on_workspace_media_requested(media_id_value: String) -> void:
 	if entry.is_empty():
 		_set_status("Workspace media is no longer available: %s" % media_id_value)
 		return
-	var persistence_errors := _flush_workspace_changes()
+	if not await _review_workflow.confirm_leave(): return
+	var persistence_errors: PackedStringArray = await _flush_workspace_changes()
 	if not persistence_errors.is_empty():
 		_show_errors("Cannot change media", persistence_errors)
 		return
 	pause()
+	# Source preparation can fail synchronously. Subscribe before dispatch so
+	# those completion signals cannot be missed by the asynchronous caller.
+	var activation_done := [false]
+	var on_activation := func(_errors: PackedStringArray): activation_done[0] = true
+	media_activation_finished.connect(on_activation)
 	var errors: PackedStringArray = _workspace_media_controller.select_media(entry)
 	if not errors.is_empty():
+		media_activation_finished.disconnect(on_activation)
 		_show_errors("Cannot open media", errors)
+		_review_workflow.finish_transition()
+		return
+	while not activation_done[0]: await get_tree().process_frame
+	media_activation_finished.disconnect(on_activation)
 
 
 func _on_workspace_media_ready(payload: Dictionary) -> void:
@@ -410,11 +432,14 @@ func _on_workspace_media_ready(payload: Dictionary) -> void:
 			source.close()
 		_set_status("Cannot open media: workspace controller returned invalid data")
 		_refresh_toolbar()
+		media_activation_finished.emit(PackedStringArray(["Invalid media data"]))
 		return
-	var errors := _activate_workspace_media(source, media_value as Dictionary)
+	var errors: PackedStringArray = await _activate_workspace_media(source, media_value as Dictionary)
 	if not errors.is_empty():
 		_show_errors("Cannot open media", errors)
+		_review_workflow.finish_transition()
 	_refresh_toolbar()
+	media_activation_finished.emit(errors)
 
 
 func _activate_workspace_media(
@@ -451,46 +476,17 @@ func _activate_workspace_media(
 	candidate_manifest["dataset_id"] = media_entry["media_id"]
 	candidate_manifest["source_name"] = media_entry["display_name"]
 	candidate_manifest["source_sha256"] = media_entry.get("source_sha256")
-	var seed_result := _workspace_seed_records(
-		source_records,
-		candidate_manifest,
-		media_entry,
-		frame_entries,
-		first_texture,
-	)
-	var seed_errors: PackedStringArray = seed_result.get("errors", PackedStringArray())
-	if not seed_errors.is_empty():
+	var opened: Dictionary = await _review_workflow.open_session("workspace", {
+		"root":_workspace_root,"media":media_entry.duplicate(true),"records":source_records,
+		"manifest":candidate_manifest,"frame_entries":frame_entries,
+		"image_size":Vector2(first_texture.get_width(),first_texture.get_height()),
+		"taxonomy_version":_taxonomy.get("taxonomy_version","unknown"),
+	})
+	if not opened.success:
 		candidate.close()
-		return seed_errors
-
-	var candidate_label_store = MEDIA_LABEL_STORE_SCRIPT.new()
-	errors = candidate_label_store.prepare(
-		_workspace_root,
-		media_entry,
-		frame_entries,
-		seed_result.get("records", []),
-	)
-	if not errors.is_empty():
-		candidate.close()
-		return errors
-	if candidate_label_store.has_pending_changes():
-		errors = candidate_label_store.flush()
-		if not errors.is_empty():
-			candidate.close()
-			return errors
-
-	var candidate_store = STORE_SCRIPT.new()
-	errors = candidate_store.load_model_records(
-		candidate_label_store.all_display_records())
-	if not errors.is_empty() or candidate_store.get_frame_count() != frame_count:
-		candidate.close()
-		return errors if not errors.is_empty() else PackedStringArray([
-			"Workspace label frame count does not match selected media"])
-	var workflow_state: Dictionary = candidate_label_store.workflow_state()
-	errors = candidate_store.load_workflow_state(workflow_state.review_state, workflow_state.batch_operations)
-	if not errors.is_empty():
-		candidate.close()
-		return errors
+		return PackedStringArray(opened.errors)
+	var candidate_label_store = opened.label_store
+	var candidate_store = opened.store
 	var first_frame_id: int = frame_entries[0]["frame_id"]
 	var first_record: Dictionary = candidate_store.get_corrected_record(first_frame_id)
 	if first_record.is_empty():
@@ -537,7 +533,7 @@ func _activate_workspace_media(
 		context_bridge.detach()
 		candidate.close()
 		return PackedStringArray([_edit_navigation_message()])
-	errors = _flush_workspace_changes()
+	errors = await _flush_workspace_changes()
 	if not errors.is_empty():
 		_deactivate_edit(edit_candidate)
 		context_bridge.detach()
@@ -585,64 +581,17 @@ func _activate_workspace_media(
 	)
 	_batch_workflow.bind_source()
 	_dataset_explorer.select_media(_workspace_media_id)
+	_review_workflow.finish_transition()
 	_set_status("Loaded %s (%d frames)" % [_workspace_media_id, frame_count])
 	return PackedStringArray()
-
-
-func _workspace_seed_records(
-	source_records: Array,
-	source_manifest: Dictionary,
-	media_entry: Dictionary,
-	frame_entries: Array,
-	first_texture: Texture2D
-) -> Dictionary:
-	var label_root := String(media_entry.get("label_root", _workspace_root))
-	var native_path := WORKSPACE_PATHS_SCRIPT.label_path(
-		label_root, media_entry["media_id"])
-	if FileAccess.file_exists(native_path):
-		return {"records": [], "errors": PackedStringArray()}
-	var source_label_path := label_root.path_join(
-		"labels/%s.json" % media_entry["media_id"])
-	if FileAccess.file_exists(source_label_path):
-		var frame_ids := PackedInt64Array()
-		for entry_value: Variant in frame_entries:
-			frame_ids.append(int((entry_value as Dictionary)["frame_id"]))
-		var adapter = CHOLECT50_LABEL_ADAPTER_SCRIPT.new()
-		return adapter.read(
-			source_label_path,
-			media_entry["media_id"],
-			frame_ids,
-			Vector2(first_texture.get_width(), first_texture.get_height()),
-		)
-	if source_manifest.get("model_version", "none") == "none":
-		return {"records": [], "errors": PackedStringArray()}
-	if source_records.size() != frame_entries.size():
-		return {
-			"records": [],
-			"errors": PackedStringArray([
-				"Workspace model output does not match selected media frames"]),
-		}
-	var records: Array[Dictionary] = []
-	for index in range(source_records.size()):
-		if not source_records[index] is Dictionary:
-			return {
-				"records": [],
-				"errors": PackedStringArray([
-					"Workspace model output record %d is invalid" % index]),
-			}
-		var record := (source_records[index] as Dictionary).duplicate(true)
-		var frame_entry := frame_entries[index] as Dictionary
-		record["source"] = media_entry["media_id"]
-		record["frame"] = frame_entry["frame_id"]
-		record["time_s"] = frame_entry["time_s"]
-		records.append(record)
-	return {"records": records, "errors": PackedStringArray()}
 
 
 func _on_workspace_media_failed(message: String) -> void:
 	_workspace_import_active = false
 	_set_status("Cannot open media: %s" % message)
 	_refresh_toolbar()
+	_review_workflow.finish_transition()
+	media_activation_finished.emit(PackedStringArray([message]))
 
 
 func _on_workspace_import_started(_input_path: String, _output_path: String) -> void:
@@ -662,6 +611,8 @@ func _on_workspace_import_cancelled() -> void:
 	_workspace_import_active = false
 	_set_status("Video preparation cancelled; current media unchanged")
 	_refresh_toolbar()
+	_review_workflow.finish_transition()
+	media_activation_finished.emit(PackedStringArray(["Media preparation cancelled"]))
 
 
 func open_source(path: String) -> PackedStringArray:
@@ -728,17 +679,17 @@ func open_source(path: String) -> PackedStringArray:
 		(snapshot["presentation"] as Dictionary).duplicate(true))
 	var candidate_frame_count := frame_entries.size()
 
-	var candidate_store = STORE_SCRIPT.new()
-	var store_errors: PackedStringArray = candidate_store.load_model_records(records_value)
-	if not store_errors.is_empty():
+	var opened: Dictionary = await _review_workflow.open_session("direct", {
+		"locator":ProjectSettings.globalize_path(path).simplify_path(),"records":records_value,
+		"manifest":candidate_manifest,"frame_entries":frame_entries,
+		"session_root":ProjectSettings.globalize_path(review_session_root),
+		"taxonomy_version":_taxonomy.get("taxonomy_version","unknown"),
+	})
+	if not opened.success:
 		candidate.close()
-		_show_errors("Cannot open source", store_errors)
-		return store_errors
-	if candidate_store.get_frame_count() != candidate_frame_count:
-		candidate_errors.append("Source model record count must match the manifest frame count")
-		candidate.close()
-		_show_errors("Cannot open source", candidate_errors)
-		return candidate_errors
+		return PackedStringArray(opened.errors)
+	var candidate_store = opened.store
+	var candidate_label_store = opened.label_store
 	var first_entry := (frame_entries[0] as Dictionary).duplicate(true)
 	var first_frame_id := int(first_entry["frame_id"])
 	var first_record: Dictionary = candidate_store.get_corrected_record(first_frame_id)
@@ -787,7 +738,7 @@ func open_source(path: String) -> PackedStringArray:
 		candidate.close()
 		candidate_errors.append(_edit_navigation_message())
 		return candidate_errors
-	var persistence_errors := _flush_workspace_changes()
+	var persistence_errors: PackedStringArray = await _flush_workspace_changes()
 	if not persistence_errors.is_empty():
 		_deactivate_edit(candidate_edit)
 		candidate_context_bridge.detach()
@@ -820,7 +771,7 @@ func open_source(path: String) -> PackedStringArray:
 	_frame_entries = _copy_frame_entries(frame_entries)
 	_workspace_root = ""
 	_workspace_media_id = ""
-	_workspace_label_store = null
+	_workspace_label_store = candidate_label_store
 	_current_frame = 0
 	_selected_region_id = ""
 	candidate_context_bridge.switch_to_live()
@@ -829,9 +780,11 @@ func open_source(path: String) -> PackedStringArray:
 	_clear_annotation_hover()
 	_refresh_annotation_sidebar()
 	_refresh_labels(first_entry)
+	_workspace_session.bind(_store,_workspace_label_store,Callable(self,"pause"),Callable(self,"_set_status"))
+	_batch_workflow.bind_source()
+	_review_workflow.finish_transition()
 	_refresh_toolbar()
 	_set_status("Loaded %s (%d frames)" % [str(_manifest.get("dataset_id", "dataset")), candidate_frame_count])
-	_batch_workflow.bind_source()
 	_dataset_explorer.populate(candidate_explorer_view_model)
 	_dataset_explorer.select_frame(0)
 	return PackedStringArray()
@@ -1067,23 +1020,29 @@ func _on_file_selected(path: String) -> void:
 	if _is_class_dialog_active():
 		_modal_refusal("Source selection")
 		return
+	if not await _review_workflow.confirm_leave(): return
 	var extension := path.get_extension().to_lower()
 	if _source_factory.resolve_plugin_id(path, source_plugin_id) != "":
-		open_source(path)
+		await open_source(path)
+		_review_workflow.finish_transition()
 	elif VIDEO_EXTENSIONS.has(extension) or not IMAGE_EXTENSIONS.has(extension):
 		_begin_video_import(path)
 	else:
-		open_source(path)
+		await open_source(path)
+		_review_workflow.finish_transition()
 
 
 func _on_directory_selected(path: String) -> void:
 	if _is_class_dialog_active():
 		_modal_refusal("Source selection")
 		return
+	if not await _review_workflow.confirm_leave(): return
 	if _source_factory.resolve_plugin_id(path, source_plugin_id) != "":
-		open_source(path)
+		await open_source(path)
+		_review_workflow.finish_transition()
 	else:
-		open_workspace(path)
+		await open_workspace(path)
+		_review_workflow.finish_transition()
 
 
 func _on_export_parent_selected(path: String) -> void:
@@ -1170,7 +1129,7 @@ func _on_video_import_completed(output_path: String) -> void:
 		return
 	_set_video_import_running_ui(false)
 	_video_import_progress.value = 1.0
-	var errors := open_source(output_path)
+	var errors: PackedStringArray = await open_source(output_path)
 	if errors.is_empty():
 		_video_import_dialog.hide()
 		_set_status("Imported and loaded video source: %s" % output_path)
@@ -1288,9 +1247,9 @@ func _on_image_pointer_event(event: InputEvent, image_position: Vector2) -> void
 	if mouse_button != null and mouse_button.button_index == MOUSE_BUTTON_LEFT and mouse_button.pressed:
 		pause()
 	var compare_committed_record := _pointer_event_may_commit(event)
-	var before_record := _store.get_corrected_record(_current_record_frame()) if compare_committed_record and _current_frame >= 0 else {}
+	var before_record: Dictionary = _store.get_corrected_record(_current_record_frame()) if compare_committed_record and _current_frame >= 0 else {}
 	_edit_plugin.handle_pointer(event, image_position)
-	var after_record := _store.get_corrected_record(_current_record_frame()) if compare_committed_record and _current_frame >= 0 else {}
+	var after_record: Dictionary = _store.get_corrected_record(_current_record_frame()) if compare_committed_record and _current_frame >= 0 else {}
 	if compare_committed_record and before_record != after_record:
 		_refresh_after_edit(true)
 
@@ -1460,13 +1419,13 @@ func _route_edit_key(event: InputEvent) -> bool:
 		if not state.get("gesture_active", false) and state.get("phase", &"idle") in [&"idle", &"brush_cursor"]:
 			_open_reclassification_dialog(_selected_region_id)
 			return true
-	var before_record := _store.get_corrected_record(_current_record_frame()) if _current_frame >= 0 else {}
+	var before_record: Dictionary = _store.get_corrected_record(_current_record_frame()) if _current_frame >= 0 else {}
 	if _edit_plugin.handle_key(event):
 		# A keyboard edit owns one explicit frame just like pointer edits.
 		# Stop playback in the same input turn before the next process tick can seek.
 		pause()
 		_sync_tool_panel()
-		var after_record := _store.get_corrected_record(_current_record_frame()) if _current_frame >= 0 else {}
+		var after_record: Dictionary = _store.get_corrected_record(_current_record_frame()) if _current_frame >= 0 else {}
 		if before_record != after_record:
 			_refresh_after_edit(true)
 		else:
@@ -1791,7 +1750,9 @@ func _detach_edit_context_bridge(bridge: Variant) -> void:
 func _flush_workspace_changes() -> PackedStringArray:
 	if _workspace_session == null:
 		return PackedStringArray()
-	return _workspace_session.flush_before_context_change()
+	if _review_workflow != null and _review_workflow.has_discard_authorization():
+		return PackedStringArray()
+	return await _workspace_session.flush_before_context_change()
 
 
 func _unbind_workspace_session() -> void:
@@ -1911,10 +1872,14 @@ func _on_open_pressed() -> void:
 
 
 func _on_export_pressed() -> void:
+	if _review_workflow.exports.is_busy():
+		_review_workflow.exports.cancel()
+		_set_status("已请求取消导出。")
+		return
 	if _is_class_dialog_active():
 		_modal_refusal("export")
 		return
-	_export_dialog.popup_centered_ratio(0.7)
+	await _review_workflow.exports.open()
 
 
 func _refresh_labels(entry: Dictionary = {}) -> void:
@@ -1965,12 +1930,15 @@ func _refresh_toolbar() -> void:
 	_redo_button.disabled = import_running or class_modal or not _history.can_redo()
 	if bool(_edit_state.get("draft_active", false)):
 		_redo_button.disabled = import_running or class_modal or int(_edit_state.get("draft_history", {}).get("redo", 0)) == 0
+	_export_button.text = "取消导出" if _review_workflow != null and _review_workflow.exports.is_busy() else "Export"
 	_export_button.disabled = import_running or class_modal or not has_source or _feedback_plugin == null
 	_zoom_out_button.disabled = import_running
 	_zoom_in_button.disabled = import_running
 	_fit_button.disabled = import_running
 	_opacity_slider.editable = not import_running
 	_sync_tool_panel()
+	if _review_workflow != null:
+		_review_workflow.refresh()
 	if _batch_workflow != null:
 		_batch_workflow.refresh_current()
 
@@ -2059,7 +2027,7 @@ func _logical_positive_integer(value: Variant) -> bool:
 
 
 func _exit_tree() -> void:
-	_flush_workspace_changes()
+	# Window close is handled before destruction by ReviewWorkflow.
 	_unbind_workspace_session()
 	_playback_controller.pause()
 	if is_instance_valid(_viewport):

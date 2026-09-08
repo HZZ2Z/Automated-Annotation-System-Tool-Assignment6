@@ -16,6 +16,9 @@ media per package, concurrent writers, or automatic carry-over of old correction
 
 - Preserve Model Output V1, original input files, sparse original frame IDs, source
   timestamps (including absence), and sample IDs `<media_id>_<frame_id:06d>`.
+  The source frame map may provide a timestamp even when a V1 annotation omits
+  its optional `time_s`. Keep that annotation omission; when an annotation does
+  provide a timestamp, it must exactly match its source frame.
 - Persist and export corrected records with `source: human_corrected`; restore the
   internal source identity through one codec so content verification survives reopen.
 - Baseline, corrected data, persisted revision, and content verification are separate.

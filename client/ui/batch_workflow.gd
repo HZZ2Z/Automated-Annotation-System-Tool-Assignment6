@@ -316,20 +316,20 @@ func apply() -> void:
 	_show_preview.set_pressed_no_signal(false)
 	_preview = false
 	_host._refresh_after_edit(false)
-	if _save():
+	if await _save():
 		_summary.text = "已应用并保存，请检查后确认。"
 		_status("已保存，目标帧仍待检查。")
 		_host.seek(first)
 	refresh_current()
 
 func verify_current() -> void:
-	_verify(Vector2i(_host.get_current_frame(), _host.get_current_frame()), true)
+	await _verify(Vector2i(_host.get_current_frame(), _host.get_current_frame()), true)
 
 func verify_range() -> void:
-	_verify(_range, true)
+	await _verify(_range, true)
 
 func unverify_current() -> void:
-	_verify(Vector2i(_host.get_current_frame(), _host.get_current_frame()), false)
+	await _verify(Vector2i(_host.get_current_frame(), _host.get_current_frame()), false)
 
 func _verify(selected: Vector2i, verified: bool) -> void:
 	if _preview:
@@ -345,14 +345,14 @@ func _verify(selected: Vector2i, verified: bool) -> void:
 		_status(errors[0])
 		return
 	_host._refresh_after_edit(false)
-	if _save():
+	if await _save():
 		_status("确认已保存。" if verified else "已取消确认，重新标为待检查。")
 		if verified and _auto.button_pressed:
 			_next_after(selected.y)
 	refresh_current()
 
 func next_unverified() -> void:
-	if _ready_for_action() and _save():
+	if _ready_for_action() and await _save():
 		_next_after(_host.get_current_frame())
 
 func _next_after(index: int) -> void:
@@ -368,12 +368,17 @@ func _next_after(index: int) -> void:
 	_status("全部 %d 帧已确认。" % count)
 
 func retry_save() -> void:
-	if available() and _save():
+	if available() and await _save():
 		_retry.visible = false
 		_status("已保存。")
 
 func _save() -> bool:
-	var errors: PackedStringArray = _host._flush_workspace_changes()
+	var expected_store = _store
+	var expected_revision: int = _store.current_revision()
+	var expected_frame: int = _host.get_current_frame()
+	var errors: PackedStringArray = await _host._flush_workspace_changes()
+	if _store != expected_store or _store.current_revision() != expected_revision or _host.get_current_frame() != expected_frame:
+		return false
 	if not errors.is_empty():
 		_retry.visible = true
 		_details.text = errors[0]
