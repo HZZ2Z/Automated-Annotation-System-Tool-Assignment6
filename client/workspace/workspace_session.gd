@@ -22,6 +22,7 @@ var _session_id := ""
 var _saved_revision := -1
 var _active_revision := -1
 var _pending := false
+var _pending_explicit := false
 var _blocked := false
 var _idle := 0.0
 var _age := 0.0
@@ -66,6 +67,7 @@ func unbind() -> void:
 	_label_store = null
 	_session_id = ""
 	_pending = false
+	_pending_explicit = false
 	_blocked = false
 	_idle = 0.0
 	_age = 0.0
@@ -89,7 +91,10 @@ func status() -> Dictionary:
 
 ## Request is nonblocking. A busy writer coalesces to the latest Store revision.
 func request_save() -> void:
-	if _store == null: return
+	_request_save(true)
+
+func _request_save(explicit: bool) -> void:
+	if _store == null or (not explicit and _suspended): return
 	_blocked = false
 	_last_errors = PackedStringArray()
 	_idle = 0.0
@@ -99,9 +104,11 @@ func request_save() -> void:
 		return
 	if is_saving():
 		_pending = _store.current_revision() > _active_revision
+		_pending_explicit = _pending and (_pending_explicit or explicit)
 		_emit_state()
 		return
 	_pending = false
+	_pending_explicit = false
 	var snapshot: Dictionary = _store.freeze_snapshot()
 	_active_revision = snapshot.revision
 	var work := _worker if _worker.is_valid() else Callable(_repository,"save_snapshot")
@@ -117,6 +124,7 @@ func save_through(revision: int) -> PackedStringArray:
 		if identity != _session_id: return PackedStringArray(["Session changed while awaiting save"])
 		if _blocked: return _last_errors
 		await get_tree().process_frame
+	if identity != _session_id: return PackedStringArray(["Session changed while awaiting save"])
 	return PackedStringArray()
 
 func flush_before_context_change() -> PackedStringArray:
@@ -128,9 +136,10 @@ func retry_unsaved() -> PackedStringArray:
 
 ## Discard decisions must first settle any write that has already started.
 func settle_running() -> void:
-	_pending = false
+	# Suppress automatic queued work; an explicit save waiter must still settle.
+	if not _pending_explicit: _pending = false
 	set_process(false)
-	while is_saving(): await get_tree().process_frame
+	while is_saving() or _pending_explicit: await get_tree().process_frame
 
 func suspend_autosave(value: bool) -> void:
 	_suspended = value
@@ -142,7 +151,7 @@ func _process(delta: float) -> void:
 		return
 	_idle += delta
 	_age += delta
-	if _idle >= SAVE_DELAY_SECONDS or _age >= MAX_REQUEST_SECONDS: request_save()
+	if _idle >= SAVE_DELAY_SECONDS or _age >= MAX_REQUEST_SECONDS: _request_save(false)
 
 func _on_records_replaced(_frames: PackedInt64Array) -> void: _on_changed()
 
@@ -166,15 +175,20 @@ func _on_finished(result: Dictionary) -> void:
 	_blocked = false
 	saved.emit(_session_id,_saved_revision)
 	_emit_state()
-	if _pending and has_unsaved_changes() and not _suspended:
-		_pending = false
-		call_deferred("request_save")
+	if _pending and has_unsaved_changes() and (_pending_explicit or not _suspended):
+		call_deferred("_drain_pending", _session_id)
 	elif has_unsaved_changes() and not _suspended:
 		set_process(true)
+
+func _drain_pending(identity: String) -> void:
+	# A context switch or discard can invalidate a deferred automatic request.
+	if identity != _session_id or _blocked or not _pending: return
+	_request_save(_pending_explicit)
 
 func _report_failure(revision: int, errors: PackedStringArray) -> void:
 	_blocked = true
 	_pending = false
+	_pending_explicit = false
 	_last_errors = errors
 	set_process(false)
 	if _pause_callback.is_valid(): _pause_callback.call()
