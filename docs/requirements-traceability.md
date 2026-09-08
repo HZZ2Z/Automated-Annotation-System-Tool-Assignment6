@@ -1,6 +1,6 @@
 # 要求追踪表
 
-本台账将老师要求与实现证据分开。`PASS` 表示已实际运行直接自动证据或已完成指定文档交付；`BLOCKED` 表示该 Part 尚未作为完整交付范围验收。当前仓库声明完成 Part 1、Part 2.1 和 Part 3.1。Part 2.2/2.3 的实现、键盘、原子拒绝与可见编辑性能已通过自动化验证，整体验收仅剩人工 reviewer 复跑，因此仍保留 BLOCKED 行。Part 3.1 的导入、播放、显式 frame/time、对齐和长片测试均已通过。Part 3.2/3.3 已有合成样本端到端自动证据；不代表真实手术视频精度或人工时间收益。
+本台账将老师要求与实现证据分开。`PASS` 表示已实际运行直接自动证据或已完成指定文档交付；`BLOCKED` 表示该 Part 尚未作为完整交付范围验收。当前仓库声明完成 Part 1、Part 2.1、Part 3.1 和 Part 4 文件交接闭环。Part 2.2/2.3 的实现、键盘、原子拒绝与可见编辑性能已通过自动化验证，整体验收仅剩人工 reviewer 复跑，因此仍保留 BLOCKED 行。Part 3.1 的导入、播放、显式 frame/time、对齐和长片测试均已通过。Part 3.2/3.3 已有合成样本端到端自动证据；不代表真实手术视频精度或人工时间收益。Part 4 的模拟返回不表示实际训练已运行。
 
 | 要求来源 | 要求 | 实现 | 自动化证据 | 人工证据 | 状态 | 后续任务 |
 |---|---|---|---|---|---|---|
@@ -32,7 +32,7 @@
 | Navigation safety | Explorer、timeline、previous/next、playback、seek 收敛到同一帧高亮；拒绝导航或替换时保留状态 | `AnnotationMain` 单向同步和失败原子 Source 事务 | playback、main boundary、explorer 测试 | 规范化数据集渲染显示帧与 timeline 对齐 | PASS | 完成 |
 | Sparse review playback | 稀疏原始帧号按可调展示时钟连续评审，原始时间元数据保持只读 | `PlaybackController` review/max 时钟；顶部 Custom/3 s/1 s/Max 速度条；`PlaybackFpsMeter` 实际交付统计 | `test_playback_controller.gd`; `test_playback_fps_meter.gd`; `test_playback_speed_control.gd`; `test_workspace_integration.gd` | VID68 的 16→23 默认等待 1 s；Custom 2.5 s 和 Max 连续索引均通过，时间戳未改写 | PASS | 完成 |
 | Workspace media | 递归打开外层或数据集文件夹，左树选中后才加载 Source 或解析未命中视频 | `WorkspaceCatalog`; `WorkspaceMediaController`; `SourceFactory`; `SourceSessionBuilder`; `numeric_image_sequence_source`; `DatasetExplorer` | catalog 插件 locator、media controller 路由固定、SourceFactory、session builder、workspace integration 测试 | `Dataset_test` 及 `Dataset_test/cholect50-challenge-val` 只读扫描 | PASS | 完成 |
-| Workspace labels | 每媒体仅最近数据集根的 `label/<media_id>.json`，上下文索引统一自动读写，源 `labels/` 只读，保留稀疏原始帧 ID | `WorkspaceCatalog`; `MediaLabelStore`; `WorkspaceSession`; `CholecT50LabelAdapter`; media-label-v1 Schema | Python contract、Godot nested label-root/integration 测试 | 从外层 `Dataset_test` 选择 VID68 恢复子数据集标注；`VID68_000016` 仍由媒体 ID 和原始帧 16 派生 | PASS | 完成 |
+| Workspace labels | 每媒体仅最近数据集根的 `label/<media_id>.json`，上下文索引统一自动读写，源 `labels/` 只读，保留稀疏原始帧 ID | `WorkspaceCatalog`; `MediaLabelStore`; `WorkspaceSession`; `CholecT50LabelAdapter`; Media Label V3 / V1–V2 迁移 | Python contract、Godot nested label-root/integration 测试 | 从外层 `Dataset_test` 选择 VID68 恢复子数据集标注；`VID68_000016` 仍由媒体 ID 和原始帧 16 派生 | PASS | 完成 |
 | Resize boundary | 两个侧栏可调整，不引入 docking 或文件管理行为 | 嵌套 `WorkspaceSplit` 与 `ContentSplit` | frontend structure 测试 | split offset 250/660 时中央仍可用 | PASS | 完成 |
 | Part 1 integration | 数据契约、插件 API、三栏组合和现有编辑行为共同工作 | 完整仓库 | 2026-09-06 最终回归：Python `221 passed`、完整 Godot 与 8 个独立门禁状态 0；`tests/output/editing-assignment-tests.log`；model/corrected export 独立验证均 0 errors，模型 SHA-256 不变 | 实际 Godot 4.7.2、X11/GL Compatibility 渲染 | PASS | 完成 |
 | Part 2.1 Display | 原图与 regions 在保持宽高比的统一 zoom/pan/camera 下显示，并使用同一逆变换 picking | `ViewportTransform` 唯一 `Transform2D`；`AnnotationViewport` Fit、resize 中心保持和越界输入防护 | `test_viewport_transform.gd`; `test_annotation_viewport.gd` | 1280×800 可见窗口中自动执行 pan、zoom 和选择 | PASS | 完成 |
@@ -57,7 +57,10 @@
 | Part 3.1 deliverable | 索引保证、时间策略、导入、性能和限制记录 | 根目录 `RESULTS.md`; README Reviewer test script; architecture | `tests/python/test_documentation.py` 与三份 raw Part 3.1 benchmark 一致 | 未创建额外 part3.1 report | PASS | 完成 |
 | Part 3.2 Batch labelling | similarity threshold、keyframe propagation、overwrite/merge marker、verified/unverified UX 和 auto-advance | BatchController、BatchWorkflow、MediaLabel V2 | `test_batch_workflow.gd`、`test_batch_ui.gd`、`test_batch_state.gd` | 实际 UI 预览、保存重开、验证与自动前进 | PASS | 简单帧差与固定坐标传播，算法优化后续开展 |
 | Part 3.3 Measurement | batch coverage、manual comparison、threshold 和边界质检 | 派生合成样本一批覆盖20帧，实际写入19帧 | `tests/benchmarks/results/part3_2_batch.json`；RESULTS | 首尾真值一致、外邻帧排除、阈值0.02 | PASS | 重复修正次数对比，未声称人工时间收益 |
-| Part 4 | Autosave、diff、完整 update package 工作流和协作协议 | Part 1.4 仅提供最小本地 checksummed handoff，不代表 Part 4 | 未作为 Part 4 门禁评估 | 未评估 | BLOCKED | 后续阶段 |
+| Part 4.1 Persistence / export | 不可变基线、原子自动保存、未保存提示、精确帧映射和修正 JSONL | AnnotationStore / ReviewSessionCodec / SessionRepository / WorkspaceSession / ReviewWorkflow | repository、autosave、failure、lifecycle、4 个崩溃阶段；120 帧保存 p95 0.868 s | 真实挂载 Main 自动驱动；CLI/UI 复跑步骤已交付 | PASS | 10,000 帧内存和尾延迟仍可优化，见 RESULTS |
+| Part 4.2 Diff / audit | 逐帧 added/deleted/label/geometry、属性补充及类别汇总，保存重开一致 | AnnotationDiff；JSON / event CSV / class CSV | demo：6 变化帧、7 变化对象；diff edges、reorder/undo/numeric 边界；12,230 精确数值比较 | 报告可由 Export 结果打开；来源与统计口径已文档化 | PASS | 完成 |
+| Part 4.3 Training update package | 已验证训练包、全帧评审快照、版本 manifest、摘要、原子发布与重复交接 | TrainingPackage / PackageSemantics；Feedback 可选 training_update_v2；Python 独立验证 | 6/120 训练、114 排除、120 全帧；损坏/语义篡改拒绝；UI/CLI 包 ID 与产物字节一致 | 真实 Export 预览、后台编辑及取消通过自动交互检查 | PASS | 文件交接完成；真实训练不在范围 |
+| Part 4.4 Collaboration interface | 一页协作协议、模型返回清单、完整覆盖校验、旧轮次归档与新轮次导入 | part4-protocol.md；ModelRoundController / ModelRoundDialog；part4.py 四个 CLI 入口 | 实际命令 demo；round backend/UI 校验失败保留原状态、成功重置 review/batch/history | UI 校验预览与导入可操作；人工 reviewer 步骤已交付 | PASS | 模型组实际训练和权重质量后续对接 |
 | Part 5 | 完整稳健性、smoke session、测量和失败分析 | 超出 Part 1 范围 | 未评估 | 未评估 | BLOCKED | 后续阶段 |
 
 ## 前端验收证据边界

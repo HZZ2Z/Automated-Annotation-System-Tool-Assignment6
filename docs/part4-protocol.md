@@ -21,7 +21,7 @@ cannot authenticate original predictions that the receiver does not possess.
 
 **Annotation meaning.** Every JSONL line remains Model Output V1: pixel-space
 box `[x,y,width,height]` or polygon coordinates, stable region IDs and original
-six-digit frame IDs, independent of contiguous playback indices. Sample IDs are
+integer frame IDs, independent of contiguous playback indices. Sample IDs are
 `<media_id>_<frame_id:06d>`. Optional annotation `time_s` remains absent when
 absent originally; supplied values must exactly match Source. Frame maps retain
 Source times. Exported corrected `source` is `human_corrected`; model returns

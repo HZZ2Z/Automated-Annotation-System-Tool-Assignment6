@@ -73,7 +73,7 @@ MainVBox
 - `WorkspaceCatalog` 递归遍历时先使用注入的 `SourceFactory.resolve_plugin_id` 识别插件所有的文件或目录，再为未命中项保留图片、视频和数字序列的内置发现回退；它为每个媒体建立最近数据集根的标签上下文索引，不解码视频或读取图像像素。
 - `WorkspaceMediaController` 只准备媒体 locator，并调用注入的同一个 `SourceFactory`；它不再拥有数字序列插件的私有构造路径。
 - `SourceFactory` 只负责 Registry 路由、实例创建、`open` 结果类型和失败关闭；`SourceSessionBuilder` 只负责 manifest、record、entry、首帧纹理和 presentation 的公共校验与映射。
-- `MediaLabelStore` 按该上下文拥有单个 `label/<media_id>.json`、原始帧 ID 索引和验证后原子替换；`WorkspaceSession` 只协调 300 ms 合并保存和切换前强刷新。
+- `MediaLabelStore` 按该上下文保存标签路径、磁盘摘要和已保存版本；`WorkspaceSession` 协调 300 ms 空闲防抖、连续编辑时 2 秒请求期限、单写入者和切换前异步保存。`SessionRepository` 与 `AtomicDocument` 在后台完成 V3 转换、回读校验和原子替换。
 - `ToolPanel` 消费 Edit 插件的声明式工具描述，并把可用编辑意图与不可用工具意图分开。
 - Source 插件拥有文件句柄和缓存，并返回 manifest 与模型记录的深拷贝。
 - `AnnotationStore` 分别拥有不可变模型基线和可编辑修正副本。
@@ -203,7 +203,7 @@ README 的逐项键盘/鼠标 reviewer script 尚待人在正式样本和暂停�
 
 `SourceSessionBuilder` 强制位置 `i` 的 entry 使用 `frame == i`，将可选 `frame_id` 规范为原始数据帧号（缺失时等于 `frame`），并要求位置 `i` 的 record 使用该 `frame_id`。播放器只消费连续 `playback_index`；Store、标注键、dirty frames 和 Feedback 始终消费原始 `frame_id`。
 
-每个媒体的原生文件只有其最近数据集根下的 `label/<media_id>.json`。目录扫描生成的内存索引同时驱动原生读取、只读 `labels/` 导入和自动保存，因此打开外层大目录也不会把标注写到错误层级。`frames` 字典的键是不补零的原始帧 ID；键缺席表示尚未标注，显式 `regions: []` 才表示已确认负样本。如果已有原生文件，它优先于同一数据集根下的只读 `labels/` 标注；否则 CholecT50 适配器可做一次导入。详细格式和失败策略见 `docs/workspace-label-storage-design.md`。
+每个媒体的原生文件位于其最近数据集根下的 `label/<media_id>.json`。目录扫描生成的内存索引同时驱动原生读取、只读 `labels/` 导入和自动保存，因此打开外层大目录也不会把标注写到错误层级。`frames` 字典的键是不补零的原始帧 ID；键缺席表示尚未标注，显式 `regions: []` 表示负标注，只有内容验证通过才是可交付的已审核负样本。如果已有原生文件，它优先于同一数据集根下的只读 `labels/` 标注；否则 CholecT50 适配器可做一次导入。V1/V2 旧格式背景见 `docs/workspace-label-storage-design.md`，当前 V3 与轮次规范见 `docs/part4-design.md`。
 
 数字图像序列没有一个能诚实代表整个媒体的原文件哈希，因此 manifest 显式使用 `source_sha256: null`。Feedback 导出保留该 null，并要求 corrected records 按原始 `frame_id` 严格递增、dirty frame 必须存在于 record 集合。这保证稀疏序列不被重新编号，同时不伪造 SHA-256。
 
@@ -358,6 +358,36 @@ tests/run_tests.sh
 
 `BatchWorkflow` mounts the right-side Batch tab and coordinates existing navigation guards, preview rendering, command history and persistence. Main only wires this coordinator when a source session is committed. Timeline receives playback indices; controller/persistence records use original frame IDs. Sparse IDs stop contiguous expansion before the gap.
 
-`AnnotationStore` owns content-bound review acceptance and batch operation history. `ReviewFramesCommand` changes acceptance through normal undo/redo; `PropagateRangeCommand` performs atomic multi-frame replacements and marker restoration. `WorkspaceSession` synchronizes record and review changes into `MediaLabelStore`, whose V2 envelope atomically persists `frames`, `review_state` and `batch_operations`. Existing V1 files remain readable. Transient editing display properties are projected out of persisted Model Output V1 geometry. Review hashes describe acceptance of one exact content version, independently of model confidence.
+`AnnotationStore` owns content-bound review acceptance and batch operation history. `ReviewFramesCommand` changes acceptance through normal undo/redo; `PropagateRangeCommand` performs atomic multi-frame replacements and marker restoration. `WorkspaceSession` schedules frozen revisions for `MediaLabelStore` and the background repository. Media Label V3 persists baseline, correction, explicit coverage, verification and batch provenance atomically; V1/V2 remain readable with exact migration backups. Transient editing display properties are projected out of persisted Model Output V1 geometry. Review hashes describe acceptance of one exact content version, independently of model confidence.
 
-Algorithm extensions should preserve the plan → preview → validated command → human verification boundary. Replace the similarity service/metric ID or the proposed-region generator; do not bypass store transactions or infer verification from low image difference. Current direct-source mode has no batch auto-save and directs users to the parent workspace path.
+Algorithm extensions should preserve the plan → preview → validated command → human verification boundary. Replace the similarity service/metric ID or the proposed-region generator; do not bypass store transactions or infer verification from low image difference. Workspace and direct Source sessions both support batch autosave. Auto-advance waits for the relevant session/revision to save successfully.
+
+## Part 4 persistence, audit and independent model rounds
+
+```mermaid
+flowchart LR
+    Source[Source / original model round] --> Baseline[Immutable baseline]
+    Baseline --> Store[AnnotationStore: corrections + reviews + revision]
+    Store --> Snapshot[Frozen snapshot]
+    Snapshot --> Save[BackgroundJob / SessionRepository / AtomicDocument]
+    Save --> V3[Media Label V3]
+    Snapshot --> Diff[AnnotationDiff]
+    Diff --> Package[TrainingPackage + shared semantic validator]
+    Package --> Files[Versioned file handoff]
+    Return[Model round manifest + Model Output V1] --> Rounds[ModelRoundController]
+    Files --> Rounds
+    Rounds --> Archive[Exact old V3 archive]
+    Rounds --> Source
+```
+
+`AnnotationStore` owns immutable model records and replacement-based current records. `freeze_snapshot()` shares only read-only values, keeping UI work proportional to frame references rather than copying every region. The codec projects corrected `source` to `human_corrected` on disk and reverses it on restore. It never restores corrections as a model baseline. Known model/imported-label origins, empty origin and unknown legacy baseline are distinct; explicit binding retains old correction coverage without inventing negative samples.
+
+`BackgroundJob` only reads frozen data and reports through a mutex-protected token. Main joins a thread only after it has ended. Save writes a same-directory temporary file, flushes/closes, reads and validates it, rechecks the previous disk SHA, then renames atomically. It permits one active save and coalesces a latest pending revision. Save completion is accepted only for the matching session and revision. Failed writes preserve dirty memory and the old valid file. Direct sources use a deterministic `user://review_sessions/` identity path; workspace paths retain the nearest dataset root convention.
+
+`ReviewWorkflow`, `TrainingExportDialog` and `ModelRoundDialog` own interaction state. Pre-close and media-switch prompts run before window destruction; Save/Discard waits for an in-flight write to settle. Export saves and freezes first, then resumes editing during worker execution. Cancellation cannot retract an already published package. Round preparation validates all inputs; Main stages candidate edit/controller activation before publication. Commit revalidates the same inputs, archives old bytes and atomically switches the active V3. A new round resets reviews, batch state and undo history.
+
+`AnnotationDiff` compares IDs and final values, independent of history or dirty flags. `TrainingPackage` selects verified coverage or explicit full-review semantics, serializes JSONL/CSV in linear assembly, checks bytes/SHA and artifact meaning, then atomically publishes a deterministic directory. `python/part4.py` invokes the same Godot business code and additionally uses an independent Python validator. Parent packages are semantically validated in both UI and CLI. The optional `training_update_v2` capability leaves required Plugin API V1 unchanged.
+
+`ExactJson` preserves IEEE binary64 values across Source, save, package and round reads; decimal timestamps such as `7/30` cannot be rounded differently by the native parser. Numeric normalization treats `12` and `12.0` as equal without a coordinate tolerance. A 256-container guard rejects extreme nesting with a checked error. Contracts live under `core/feedback/` and `core/workspace/`; runtime feedback schemas are explicitly included by the Godot export preset.
+
+The file protocol and reviewer commands are in [part4-protocol.md](part4-protocol.md) and [part4-review.md](part4-review.md). Measured large-session memory and latency limits are in `RESULTS.md`; no training, weights execution, images-in-package or old-correction merge is implied.

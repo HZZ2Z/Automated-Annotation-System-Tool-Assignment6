@@ -28,7 +28,7 @@
 
 Registry 在启动时扫描 Main 的 `plugin_roots`（默认只有 `client/plugins`，可追加团队插件目录）。损坏 JSON、未知字段/阶段、路径穿越、重复 ID、API 不兼容、未继承对应抽象 Stage、不可实例化脚本、缺方法或参数数量错误只会拒绝相应插件。`list_plugins(stage)` 和 `get_descriptor(stage, id)` 只返回元数据；`create_plugin(stage, id)` 每次产生独立实例，Registry 不保存有状态单例。Source 的 `resolve_source_plugin_id(locator, preferred_id)` 调用各插件的 `can_open`；默认不固定 preferred ID，而按 `priority` 降序、ID 升序确定重叠来源。应用调用方必须通过 `SourceFactory.open(locator, preferred_id)` 进入该路由，不直接实例化 Source 脚本。Main 的文件/目录选择和 `WorkspaceCatalog` 都先调用同一工厂的只读 `resolve_plugin_id`，工作区条目固定记录已选中的 Source ID；只有未被 Source 接受的视频文件才落到 FFmpeg 归一化。显式 `source_plugin_id` 在直接 Open 和 Workspace 中都覆盖默认顺序，因此新增 locator 格式不需要修改 Main 或 Workspace 的格式分支。
 
-Godot 导出包默认不会自动携带普通 JSON。仓库的 `export_presets.cfg` 明确包含 `client/plugins/**/*.json`；不得删除该规则，否则导出后的启动发现会缺少 manifest。
+Godot 导出包默认不会自动携带普通 JSON。仓库的 `export_presets.cfg` 明确包含 `client/plugins/**/*.json` 和 `core/feedback/*.json`；前者用于插件发现，后者用于 Part 4 包、差异和模型轮次的运行时校验。
 
 ## 2. Stage interfaces
 
@@ -128,6 +128,16 @@ training_update_v1/
 ```
 
 manifest 包含 schema/package 版本、确定性 package ID、源数据集 ID/SHA-256、模型基线版本/摘要、taxonomy 版本、帧覆盖、dirty frames、独立 batch operations，以及 corrected artifact 的相对路径、字节数和 SHA-256。records 的 `frame`（即原始 `frame_id`）必须严格递增，dirty frames 必须属于该 record 集合；数字图像序列无整体原文件哈希时，`source_dataset.sha256` 保留为 `null`。原始 `model_output_v1.jsonl` 永远只读。
+
+Part 4 保留上述 V1 路径，并通过插件 capability `training_update_v2` 增加可选方法：
+
+```gdscript
+export_package(snapshot: Dictionary, options: Dictionary, token: Variant = null) -> Dictionary
+```
+
+`snapshot` 来自 `AnnotationStore.freeze_snapshot()`，包含会话、轮次、revision、不可变基线、当前修正、帧映射、验证和批量来源。`options.kind` 为 `training_update_v2` 或 `review_export_v1`，`output_parent` 为目标父目录。返回 `success`、`errors`、`output_path`、`package_id`、`revision`、`reused`、`summary`，以及不进入包身份的 `timings_ms`。UI 通过 `BackgroundJob` 调用，worker 只消费冻结数据和线程安全的取消/进度 token；不要访问活动 SceneTree、纹理或 Store。
+
+业务实现位于 `client/feedback/training_package.gd` 和纯差异模块 `annotation_diff.gd`；共享 Godot 包语义校验位于 `package_semantics.gd`，Python 独立校验位于 `python/annotation_data/training_package.py`。正式包只包含当前内容验证通过的帧，评审包保留全帧审核状态；两个类型都携带帧映射和 JSON/CSV 审计。完整文件布局、模型返回和版本规则见 [Part 4 协议](part4-protocol.md)。V2 是可选包能力，必需的 Stage API 和 Model Output Schema 仍为 V1。
 
 ## 3. 新增插件（不修改 Registry 或 core）
 

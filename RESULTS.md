@@ -320,7 +320,7 @@ Raw client scores and machine timings are in `tests/benchmarks/results/part3_2_b
 
 ### Verification, persistence and drift
 
-Media Label V2 atomically saves frames, content-bound `review_state` and `batch_operations` in one file. V1 opens with no verification or batch history. A review digest is retained when content changes, so the frame becomes unverified and undo can restore the accepted version. Review-only changes also save. Failed save pauses auto-advance; Retry save remains available. Geometry, batch marker and the corresponding verification view restore on undo/redo. The handoff manifest carries review and batch metadata outside Model Output V1 records.
+The original Part 3.2 implementation used Media Label V2 to save frames, content-bound `review_state` and `batch_operations`. Part 4 upgrades new saves to V3, adds the immutable baseline and session/revision metadata, and preserves exact backups on V1/V2 migration. A review digest is retained when content changes, so the frame becomes unverified and undo can restore the accepted version. Review-only changes also save. Failed save pauses auto-advance; Retry save remains available. Geometry, batch marker and the corresponding verification view restore on undo/redo. The handoff manifest carries review and batch metadata outside Model Output V1 records.
 
 A long run can drift even when each adjacent pair looks similar. Small object motion can also be hidden by a full-image average. The implemented mitigation combines comparison against the **fixed keyframe**, a **30-frame maximum**, original-ID gap checks, protected verified targets and explicit human boundary/review controls. A synthetic brightness ramp regression confirms the anchor stops a 1/255-per-frame drift at frame 5 for threshold 0.02. Fixed-coordinate copying remains unsuitable for appreciable motion; later ROI metrics, optical flow or tracking can replace the analysis/propagation internals without removing preview and verification.
 
@@ -353,3 +353,129 @@ Reproduce with `tests/benchmarks/godot/drift_diagnostics.gd`; it writes `tests/o
 The next proposed mitigation is **object-local motion and visibility gating plus fresh human-corrected anchors**. Stop or shorten propagation when local correspondence is unreliable or displacement exceeds a task-calibrated geometry tolerance; then correct a new keyframe and start a shorter segment. Inspect interior risk frames as well as endpoints. Add a source-time duration limit alongside the frame-count cap. Forward-backward image correspondence can reject some failures ([Kalal et al., 2010](https://cmp.felk.cvut.cz/ftp/articles/matas/kalal-2010-fb_track-icpr.pdf)), but applying a cycle check to identity COPY is vacuous, and consistent correspondences can still identify the wrong object. A small registration residual with large displacement supports motion compensation, not unchanged-coordinate copying.
 
 Implementation must preserve one frozen proposal through preview and commit: today `BatchController.preview` and `PropagateRangeCommand._prepare` each construct COPY results. Changing the preview alone would not change the actual saved propagation. Future motion-aware proposals must remain compatible with V1 geometry or be explicitly rejected, retain frame/source/time identity and batch provenance, and remain unverified until human acceptance. The current production algorithm is unchanged by this research. Full analysis and source limitations: [Drift Analysis](output/pdf/Drift_Analysis.pdf).
+
+## Part 4 persistence, audit and file handoff
+
+Part 4 implements the Assignment 4.1–4.4 file-handoff path. The production entry
+`python/part4.py demo` generates images/model outputs, applies eight real edit and
+review commands, waits for autosave, reopens, exports, independently validates,
+and imports an explicitly simulated second model round. It does not train a model
+or execute weights. The CLI and actual mounted Godot UI share the same services.
+The interface agreement is `docs/part4-protocol.md`; reproducible CLI/UI steps are
+in `docs/part4-review.md`. Tests and generated evidence remain local and ignored,
+while the production demo does not depend on `tests/` or an existing `sample/`.
+
+### Functional evidence
+
+| Requirement | Observed result | Reproduction / evidence |
+|---|---|---|
+| 4.1 immutable baseline and restoration | Original baseline digest, final diff and accepted content survive save/reopen; V3 corrected records use `human_corrected`; legacy migration preserves exact prior bytes | `test_part4_repository.gd`, `test_part4_store_regression.gd`, `test_part4_optional_timestamps.gd`; demo `reopen_stable` |
+| 4.1 autosave and lifecycle | 300 ms idle scheduling, request before 2 s during continuous edits; one writer, queued latest revision, external-write refusal, failure/retry, session guards, Save/Discard/Cancel | `test_part4_autosave.gd`, `test_part4_save_deadline.gd`, `test_part4_save_wait_races.gd`, `test_part4_save_failures.gd`, `test_part4_lifecycle.gd` |
+| 4.2 exact final audit | Frames 12/13 geometry=2; frame24 label=1; frame36 added=1; frame72 deleted=1; frame90 track attributes=2; total6 changed frames/7 changed regions | `output/part4-demo-final-20260908/evidence.json`, JSON/CSV reports in its training package |
+| 4.2 audit boundaries | ID reorder and numeric12/12.0 are equivalent; undo restores no diff; ID replacement becomes delete+add; simultaneous label/geometry events and class transfers counted; source/filled ignored | `test_part4_diff_edges.gd`, `test_part4_package_numbers.gd` |
+| 4.3 coverage | Verified training includes6/120 and excludes114; review export contains120 with actual explicit/verified status; verified unchanged/empty frames are eligible, unverified empties are excluded | Production demo; `test_part4_package.gd`, `test_part4_package_review_fixes.gd` |
+| 4.3 publication and interoperability | Hash/bytes/schema/coverage/review/audit/CSV validation; conflicting or damaged destination rejected; repeat content reuses package; UI and CLI artifacts byte-identical with the same package ID | `test_part4_parent_semantics.gd`; `output/part4-ui-cli-parity.json` |
+| 4.4 new model round | Complete120-frame return validated before archival and active replacement; exact old V3 retained; new baseline/current predictions activated; verification/batch/undo reset | Production demo; `test_part4_rounds.gd`, `test_part4_round_ui.gd` |
+| 4.4 failed preparation/commit | Wrong coverage, time, parent semantics, SHA or changed input leaves the old active file and UI intact; legacy binding preserves explicit coverage | Round backend/UI and parent semantic tests |
+| Part3 regression | 40–59 propagation, preview,19 changed targets/20 covered frames, undo/redo, persistence, verification and successful-save-only auto-advance | `test_batch_workflow.gd`, `test_batch_ui.gd`; boundary truth check passed |
+
+Fresh full Python regression: **325 passed**, no skips. The complete Godot test
+entry and independent polygon, image-region, advanced-edit, keyboard, brush,
+fill, checked-history, assignment-editing, vertex and batch entries pass. The
+additional **27 Part 4 behavioral suites** are recorded in
+`output/part4-gate-1788851006351109517/results.json`. Numeric oracle tests compare
+**12,230 IEEE binary64 values** with Python, including subnormals, midpoint ties,
+long decimals,30fps timestamps and independent content/package digests. Nesting256
+is accepted and257/510/511/512/600/10000 are rejected without VM stack errors.
+Deliberately corrupt PNG fixtures produce expected decoder diagnostics; script
+errors are not accepted as a passing gate.
+
+Visible captures were inspected at `output/part4-ui/main.png`,
+`output/part4-ui/export.png` and `output/part4-ui-round-6157154.png`. The exported
+Godot resource ZIP contains all three exact runtime feedback schemas; integrity
+record: `output/part4-export-resources.json`.
+
+### Crash and failure evidence
+
+`tests/benchmarks/part4_crash.py` launches and terminates only its own Godot
+subprocess at deterministic barriers around the real atomic writer. After each
+SIGKILL, independent Python validation and exact bytes recover:
+
+| Termination point | Recovered active document |
+|---|---|
+| Temporary file partially written | Complete old V3 |
+| Temporary file read back and validated | Complete old V3 |
+| Immediately before atomic replacement | Complete old V3 |
+| Immediately after atomic replacement | Complete new V3 |
+
+Raw record: `output/part4-crash-1788848841065271365/results.json`. This is a local
+filesystem/process-crash guarantee at the latest successful save, not a power-loss
+or multiwriter durability claim. Unsuccessful edits remain in memory until saved.
+V1/V2 migration, invalid payload serialization, stale external SHA, unwritable
+paths, missing artifacts, damaged digests, semantic tampering and round mismatches
+are tested without replacing prior valid data. A malformed native JSON
+serialization such as NaN-to-null is refused before publication.
+
+`test_part4_export_cancel.gd` inserts2s I/O into the real package path: the UI
+accepts cancellation immediately and continues287 process ticks while waiting;
+no package is published. A second case cancels after actual publication and
+preserves the valid package and its displayed path. This measures responsive
+cancellation intent; an in-progress blocking filesystem call itself is not
+preempted. Slow save and background-token tests also confirm progress callbacks
+and continued event processing.
+
+### Response and resource measurements
+
+Host: AMD Ryzen9 7945HX, Ubuntu22.04, Godot4.7.2-stable. The headless input probe
+uses a producer thread every10ms, queues a timestamp, and dispatches an actual
+`InputEventKey` through the SceneTree. Reported response includes main-thread
+queueing. It does not load images or simulate GPU rendering; separately mounted
+Main/UI tests and visible X11/GL Compatibility captures check the actual controls.
+These measurements are not a human interaction study.
+
+| Metric |120 frames ×20 regions |10,000 frames ×20 regions |
+|---|---:|---:|
+| Edit→successful autosave |p95 **868.231ms**,15 edits |48,183.399ms,1 edit |
+| Save worker |p95 556.322ms,16 writes |48,112.848ms maximum,2 writes |
+| Frozen snapshot preparation |p95 0.555ms |14.650ms,1 snapshot |
+| Input response during save |p95 **13.274ms**,max13.672ms,n1234 |p95 **15.170ms**,max407.623ms,n4789 |
+| Standalone full-review preview/diff |289.279ms |27,013.952ms |
+| Full review export total |482.975ms |49,319.419ms |
+| Export preview / artifact writing |221.250 /1.762ms |24,045.861 /71.716ms |
+| Export semantic validation / atomic publication |216.389 /0.194ms |21,436.853 /0.120ms |
+| Input response during diff/export |p95 **13.297ms**,max13.662ms,n76 |p95 **13.354ms**,max535.681ms,n7583 |
+| Whole-process peak RSS |not measured |4,969.47MiB (4.85GiB) |
+
+Raw measurements: `output/part4-performance-120-206788/results.json`,
+`output/part4-performance-10000-193951/results.json` and
+`output/part4-large-1788849574176695631.monitor.json`.
+Timing subtotals omit some serialization/hash/worker-message overhead, so they
+need not sum to the total. Snapshot counts and distributions are stated explicitly;
+the single large edit is not a statistical autosave-latency claim. The required
+120-frame autosave p95≤1s and large-source input p95≤100ms targets pass. Large
+sessions still take tens of seconds to persist/export, use substantial memory,
+and show input tail spikes above100ms; lower-memory storage and tail-latency
+optimization remain follow-up work. The2s continuous-edit bound is a save-request
+bound, not a large-file completion deadline.
+
+### Defects found and resolved
+
+1. Reopening a workspace previously risked using corrections as the next model
+   baseline. V3 stores immutable baseline provenance separately and restores
+   corrections through the codec. Legacy data remains explicitly unknown until
+   raw output is bound; implicit placeholders never become negative truth.
+2. Native Godot JSON parsing changed some binary64 decimals by one ULP (including
+   7/30), invalidating exact timestamps/digests. The shared ExactJson reader uses
+   exact rounding and bounded nesting; cross-language bit/hash tests verify it.
+3. Repeated full semantic decode made120-frame autosave p95 exceed1s; repeated
+   string concatenation made large export disproportionately slow. Atomic saves
+   now validate readback once and check equality to the frozen input; JSONL/CSV
+   use one join. Fault tests preserve the original durability protections. Shared
+   parent-package semantic validation also closes the earlier UI/CLI discrepancy.
+   Legal Unicode U+0085/U+2028/U+2029 inside JSON strings now survive LF-only
+   JSONL parsing in Python;9 real Godot exports and33 boundary cases cover it.
+
+The separate Part2.2/2.3 human-review boundary is unchanged. Part4 establishes file
+handoff and independent round ingestion; model-team training, actual weight
+quality, automatic correction merging and real surgical-video accuracy are outside
+this acceptance.

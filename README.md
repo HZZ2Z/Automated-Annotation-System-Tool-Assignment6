@@ -73,7 +73,7 @@ source project_env.sh
 `project_env.sh` 只校验项目 Python、Godot 4.7.2-stable 以及 FFmpeg/FFprobe 6.1+，并为当前终端设置路径；它不安装 Python 包，也不修改系统环境。
 # 正在开发和优化的功能
 
-1.Part 4 开发
+1.大规模标注持久化的内存和尾延迟优化
 2.frub可行性测试与自动标注算法优化，提高对于复杂目标的验证和标注传播能力
 3.fill逻辑优化、
 4.Part 5 --qwen万物分割插件引入
@@ -138,6 +138,21 @@ s_fit=min(W_v/W_i,H_v/H_i)
 排除错误匹配：检查目标身份和预测—观测偏差，异常时重新检测，避免跟到另一个器械。
 管理不确定性：通过过程噪声 \(Q\)、观测噪声 \(R\) 调整信任程度；遮挡或长时间无可靠观测时停止传播。
 设置可靠锚点：定期重新检测或人工修正关键帧，纠正持续偏差。
+
+## Part 4 持久化、差异审计与训练交接
+
+客户端分别保留模型基线、人工修正和内容验证状态。工作区及直接打开的 Source 均支持后台自动保存、Save / Ctrl+S 和未保存提示；旧 V1/V2 标签以备份方式迁移到 V3。Export 默认生成仅含已验证帧的训练包，另可生成全帧评审快照，附带帧映射、JSON/CSV diff 和 SHA-256 校验。模型返回经校验后进入独立轮次，旧轮次保留。
+
+从仓库根运行完整演示，输出目录须为新目录：
+
+```bash
+source project_env.sh
+"$PROJECT6_PYTHON" python/part4.py demo --output output/part4-demo
+```
+
+演示使用真实编辑与验证命令，等待自动保存，重开并导出 6 帧训练包和 120 帧评审快照，再导入模拟的新模型轮次；不依赖本地 `tests/` 或已有 `sample/`，不执行训练。`evidence.json` 记录文件路径和结果。CLI 另提供 `export`、`validate-package`、`import-round`。
+
+[设计规范](docs/part4-design.md) · [任务清单](docs/part4-development-plan.md) · [协作协议](docs/part4-protocol.md) · [CLI/UI 评审步骤](docs/part4-review.md) · [测量与故障证据](RESULTS.md)
 
 # 其他
 

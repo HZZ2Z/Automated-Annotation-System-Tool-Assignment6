@@ -102,8 +102,11 @@ changed_frames, changed_regions and the five category counts.
 
 `TrainingPackage.export_package(snapshot, options) -> Dictionary` options include
 output_parent and kind (`training_update_v2|review_export_v1`); result has success,
-errors, output_path, package_id, revision and cancelled. Export workers can accept
-a cancellation/progress callable that does not touch the SceneTree.
+errors, output_path, package_id, revision and cancelled. Export workers accept
+a mutex-protected cancellation/progress token that does not touch the SceneTree.
+The result also returns `reused`, `summary` and monotonic `timings_ms` for preview,
+artifact writing, independent revalidation and publication. Timing measurements
+are outside the manifest and do not contribute to package identity.
 
 ## Acceptance
 

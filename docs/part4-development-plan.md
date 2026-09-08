@@ -55,3 +55,19 @@ Tests remain local per repository policy. Use TDD and requirement-level evidence
 - Run existing Python/Godot and batch gates; independently verify package/diff.
 - Complete one-page interface agreement, README reviewer steps, RESULTS evidence,
   requirements traceability; review changes before delivery.
+
+## Delivery checklist (2026-09-08)
+
+- [x] P4-1: baseline/correction/verification ownership, immutable snapshots, V3 and exact legacy backup; store and cross-language codec gates.
+- [x] P4-2: one background writer, coalesced revisions, deadline, external-write rejection, failures and old/new crash recovery; Save and lifecycle integration.
+- [x] P4-3: final ID-based JSON/CSV audit and class aggregation; numeric, order, undo and empty/unknown-baseline boundaries.
+- [x] P4-4: verified-only and all-frame package contracts, frame maps, shared semantic validation, independent Python verification, deterministic publication/reuse and CLI/UI parity.
+- [x] P4-5: export preview/progress/cancellation/results, batch persistence waits, validated independent round/archive switch, four production CLI commands and 30fps synthetic loop.
+- [x] P4-6: fresh full regressions,27 focused behavioral suites,4 crash boundaries, measured120/10,000-frame workloads, rendered UI, exported runtime schemas, interface agreement and reviewer runbook.
+
+Evidence and measured limitations are recorded in `RESULTS.md`. The implementation
+and review-fix waves have independent code review; one integrated review also
+caught legal Unicode JSONL separators being split incorrectly by Python. The
+LF-specific reader and actual Godot→Python regression close that discrepancy.
+Large-session memory and latency tails remain explicit performance follow-up
+items. Real training and real-video annotation accuracy are outside Part4 scope.
