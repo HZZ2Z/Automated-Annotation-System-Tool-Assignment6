@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project6.local/model-round-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "package_type": {
+      "const": "model_round_v1"
+    },
+    "annotation_schema_version": {
+      "const": 1
+    },
+    "round_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model_revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_package_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "taxonomy_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "media_id",
+        "media_type",
+        "source",
+        "source_relative_path",
+        "source_sha256"
+      ],
+      "properties": {
+        "media_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9_]{0,62}[A-Za-z0-9])?$"
+        },
+        "media_type": {
+          "enum": [
+            "image",
+            "video",
+            "image_sequence"
+          ]
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_relative_path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+        },
+        "source_sha256": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "source_frame_entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "frame",
+          "frame_id"
+        ],
+        "properties": {
+          "frame": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "frame_id": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 999999
+          },
+          "time_s": {
+            "type": "number",
+            "minimum": 0
+          },
+          "image_path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "weights_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "annotations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "bytes",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "model_output_v1.jsonl"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "package_type",
+    "annotation_schema_version",
+    "round_id",
+    "model_revision",
+    "parent_package_id",
+    "taxonomy_version",
+    "media",
+    "source_frame_entries",
+    "annotations"
+  ]
+}
