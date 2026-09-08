@@ -1,0 +1,229 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "available",
+    "frames",
+    "summary",
+    "by_class"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "available": {
+      "type": "boolean"
+    },
+    "frames": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "frame_id",
+          "events",
+          "counts",
+          "changed_regions"
+        ],
+        "properties": {
+          "frame_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "region_id",
+                "type",
+                "before",
+                "after"
+              ],
+              "properties": {
+                "region_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": {
+                  "enum": [
+                    "added",
+                    "deleted",
+                    "label_changed",
+                    "geometry_changed",
+                    "attributes_changed"
+                  ]
+                },
+                "before": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "model_output_v1.schema.json#/$defs/region"
+                    }
+                  ]
+                },
+                "after": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "model_output_v1.schema.json#/$defs/region"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "counts": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "added",
+              "deleted",
+              "label_changed",
+              "geometry_changed",
+              "attributes_changed"
+            ],
+            "properties": {
+              "added": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "deleted": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "label_changed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "geometry_changed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "attributes_changed": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "changed_regions": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "added",
+        "deleted",
+        "label_changed",
+        "geometry_changed",
+        "attributes_changed",
+        "total_frames",
+        "included_frames",
+        "excluded_frames",
+        "changed_frames",
+        "changed_regions"
+      ],
+      "properties": {
+        "added": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deleted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "label_changed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "geometry_changed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "attributes_changed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_frames": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "included_frames": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excluded_frames": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "changed_frames": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "changed_regions": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "by_class": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "class",
+          "added",
+          "deleted",
+          "reclassified_in",
+          "reclassified_out",
+          "geometry_changed",
+          "attributes_changed"
+        ],
+        "properties": {
+          "class": {
+            "type": "string",
+            "minLength": 1
+          },
+          "added": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deleted": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reclassified_in": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reclassified_out": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "geometry_changed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "attributes_changed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "annotation-diff-v1.schema.json"
+}

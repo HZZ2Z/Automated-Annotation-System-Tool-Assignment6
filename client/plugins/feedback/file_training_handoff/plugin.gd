@@ -232,3 +232,12 @@ func _remove_tree(path: String) -> void:
 	for child_name: String in directory.get_directories():
 		_remove_tree(path.path_join(child_name))
 	DirAccess.remove_absolute(path)
+
+
+# Optional API V1 capability; the required legacy export(context) remains intact.
+func export_package(snapshot: Dictionary, options: Dictionary, token = null) -> Dictionary:
+	return preload("res://client/feedback/training_package.gd").export_package(snapshot, options, token)
+
+
+func preview_package(snapshot: Dictionary, options: Dictionary, token = null) -> Dictionary:
+	return preload("res://client/feedback/training_package.gd").preview(snapshot, options, token)
