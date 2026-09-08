@@ -63,8 +63,15 @@ def validate_review_session(payload: object) -> list[str]:
             errors.append("baseline_digest: differs from immutable baseline")
     for record in baseline:
         errors.extend(_record_identity(record, record["frame"], payload["source"], frame_map, "baseline_records"))
+    baseline_by_frame = {record["frame"]: record for record in baseline}
     for key, record in payload["frames"].items():
         errors.extend(_record_identity(record, int(key), "human_corrected", frame_map, f"frames.{key}"))
+        original = baseline_by_frame.get(int(key))
+        if known and original is not None and (
+            ("time_s" in record) != ("time_s" in original)
+            or record.get("time_s") != original.get("time_s")
+        ):
+            errors.append(f"frames.{key}.time_s: must preserve baseline timestamp including absence")
     for key in payload["review_state"]:
         if int(key) not in explicit:
             errors.append(f"review_state.{key}: reviewed frame must be explicit")
@@ -92,9 +99,10 @@ def _record_identity(record: dict, frame: int, source: str, entries: dict, prefi
     errors = []
     if record["frame"] != frame or frame not in entries or record["source"] != source:
         errors.append(f"{prefix}: wrong source or original frame identity")
-    elif (("time_s" in record) != ("time_s" in entries[frame])
-          or record.get("time_s") != entries[frame].get("time_s")):
-        errors.append(f"{prefix}.time_s: must preserve source timestamp including absence")
+    elif "time_s" in record and (
+        "time_s" not in entries[frame] or record["time_s"] != entries[frame]["time_s"]
+    ):
+        errors.append(f"{prefix}.time_s: provided timestamp must exactly match source")
     ids = [region["id"] for region in record["regions"]]
     if len(ids) != len(set(ids)):
         errors.append(f"{prefix}.regions: duplicate region ID")

@@ -426,7 +426,7 @@ func configure_session(context: Dictionary) -> PackedStringArray:
 			else:
 				frame_map[frame] = true
 				var record: Dictionary = _model_records[frame]
-				if record.source != context.get("source") or record.has("time_s") != entry.has("time_s") or record.get("time_s") != entry.get("time_s"):
+				if record.source != context.get("source") or (record.has("time_s") and (not entry.has("time_s") or record.time_s != entry.time_s)):
 					errors.append("frame_entries: source or timestamp differs from loaded record")
 	var next_explicit := {}
 	if not explicit is Array:

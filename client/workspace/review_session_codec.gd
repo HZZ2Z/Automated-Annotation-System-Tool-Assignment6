@@ -67,8 +67,7 @@ func decode(payload: Variant) -> Dictionary:
 		var frame := int(entry.frame_id)
 		frame_map[frame] = true
 		if known and not baseline.has(frame): return _failure("baseline_records: incomplete frame set")
-		var record: Dictionary = baseline[frame].duplicate(true) if known else {"schema_version":1, "source":payload.source, "frame":frame, "regions":[]}
-		if not known and entry.has("time_s"): record["time_s"] = entry.time_s
+		var record: Dictionary = baseline[frame].duplicate(true) if known else _empty_display_record(payload.source, entry, payload.frames.get(str(frame)))
 		display.append(record)
 	if known and baseline.size() != frame_map.size(): return _failure("baseline_records: unexpected frame")
 	var store = STORE.new()
@@ -115,9 +114,19 @@ static func _failure(message: String) -> Dictionary:
 static func baseline_display_records(snapshot: Dictionary) -> Array:
 	if snapshot.get("baseline_kind") in ["model", "imported_labels"]:
 		return snapshot.baseline_records.duplicate(true)
+	var annotations := {}
+	for record: Dictionary in snapshot.get("records", []):
+		annotations[int(record.frame)] = record
 	var result: Array = []
 	for entry: Dictionary in snapshot.frame_entries:
-		var record := {"schema_version":1, "source":snapshot.source, "frame":entry.frame_id, "regions":[]}
-		if entry.has("time_s"): record["time_s"] = entry.time_s
-		result.append(record)
+		result.append(_empty_display_record(snapshot.source, entry, annotations.get(int(entry.frame_id))))
 	return result
+
+
+static func _empty_display_record(source: String, entry: Dictionary, annotation: Variant = null) -> Dictionary:
+	var record := {"schema_version":1, "source":source, "frame":entry.frame_id, "regions":[]}
+	# An explicit legacy record owns timestamp presence, even when Source knows
+	# the time. Only missing annotations may take their display time from Source.
+	var timestamp_origin: Dictionary = annotation if annotation is Dictionary else entry
+	if timestamp_origin.has("time_s"): record["time_s"] = timestamp_origin.time_s
+	return record
