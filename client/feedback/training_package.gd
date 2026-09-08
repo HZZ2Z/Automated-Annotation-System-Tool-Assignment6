@@ -2,6 +2,7 @@ extends RefCounted
 
 const EXACT_JSON := preload("res://client/domain/exact_json.gd")
 ## Worker-only package service. It owns no live Store, SceneTree or mutable UI state.
+const SEMANTICS = preload("res://client/feedback/package_semantics.gd")
 const DIFF = preload("res://client/feedback/annotation_diff.gd")
 const CODEC = preload("res://client/workspace/review_session_codec.gd")
 const VALIDATOR = preload("res://client/domain/model_output_validator.gd")
@@ -39,8 +40,10 @@ static func preview(snapshot: Dictionary, options: Dictionary, token = null) -> 
 	return result
 
 static func export_package(snapshot: Dictionary, options: Dictionary, token = null) -> Dictionary:
+	var preview_started = Time.get_ticks_usec()
 	var prepared = preview(snapshot, options, token)
-	var result = {"success":false,"errors":prepared.errors,"output_path":"","package_id":"","revision":snapshot.get("revision",0),"cancelled":prepared.cancelled,"reused":false,"summary":prepared.summary}
+	var timings = {"preview":(Time.get_ticks_usec()-preview_started)/1000.0,"artifact_write":0.0,"validation":0.0,"publication":0.0}
+	var result = {"success":false,"errors":prepared.errors,"output_path":"","package_id":"","revision":snapshot.get("revision",0),"cancelled":prepared.cancelled,"reused":false,"summary":prepared.summary,"timings_ms":timings}
 	if not prepared.success: return result
 	var parent = String(options.get("output_parent", ""))
 	result.errors.append_array(prepare_output_parent(parent))
@@ -71,13 +74,15 @@ static func export_package(snapshot: Dictionary, options: Dictionary, token = nu
 	for entry in snapshot.frame_entries:
 		all_ids.append(int(entry.frame_id))
 		if int(entry.frame_id) not in selected: excluded.append(int(entry.frame_id))
-	var manifest = {"schema_version":2 if kind == "training_update_v2" else 1,"package_type":kind,"tool":{"name":"Project6","version":"part4-v1"},"annotation_schema_version":1,"diff_schema_version":1,"frame_digits":6,"round_id":snapshot.round_id,"model_revision":snapshot.model_revision,"taxonomy_version":snapshot.taxonomy_version,"media":{"media_id":snapshot.media_id,"media_type":snapshot.media_type,"source":snapshot.source,"source_relative_path":snapshot.source_relative_path,"source_sha256":snapshot.source_sha256},"baseline":{"kind":snapshot.baseline_kind,"digest":snapshot.baseline_digest},"revision":snapshot.revision,"source_frame_entries":snapshot.frame_entries,"coverage":{"total_frames":all_ids.size(),"included_frames":selected.size(),"excluded_frames":excluded.size(),"source_frame_ids":all_ids,"included_frame_ids":selected,"excluded_frame_ids":excluded,"verified_frame_ids":prepared.verified_frame_ids,"explicit_frame_ids":snapshot.explicit_frames,"exclusion_reason":"not_content_verified" if kind == "training_update_v2" else "none"},"review_state":snapshot.review_state,"batch_operations":snapshot.batch_operations,"summary":prepared.summary,"artifacts":artifacts}
+	var manifest = {"schema_version":2 if kind == "training_update_v2" else 1,"package_type":kind,"tool":{"name":"Project6","version":"part4-v1"},"annotation_schema_version":1,"diff_schema_version":1,"frame_digits":6,"round_id":snapshot.round_id,"model_revision":snapshot.model_revision,"taxonomy_version":snapshot.taxonomy_version,"media":{"media_id":snapshot.media_id,"media_type":snapshot.media_type,"source":snapshot.source,"source_relative_path":snapshot.source_relative_path,"source_sha256":snapshot.source_sha256},"baseline":{"kind":snapshot.baseline_kind,"digest":snapshot.baseline_digest},"revision":snapshot.revision,"source_frame_entries":snapshot.frame_entries,"coverage":{"policy":"verified_only" if kind == "training_update_v2" else "all_frames_review","total_frames":all_ids.size(),"included_frames":selected.size(),"excluded_frames":excluded.size(),"source_frame_ids":all_ids,"included_frame_ids":selected,"excluded_frame_ids":excluded,"verified_frame_ids":prepared.verified_frame_ids,"explicit_frame_ids":snapshot.explicit_frames,"exclusion_reason":"not_content_verified" if kind == "training_update_v2" else "none"},"review_state":snapshot.review_state,"batch_operations":snapshot.batch_operations,"summary":prepared.summary,"artifacts":artifacts}
 	manifest["package_id"] = package_identity(manifest)
 	result.package_id = manifest.package_id
 	var destination = parent.path_join("%s_%s_%s_%s" % [kind,snapshot.media_id,safe_component(snapshot.round_id),String(manifest.package_id).left(12)])
 	result.output_path = destination
 	if DirAccess.dir_exists_absolute(destination) or FileAccess.file_exists(destination):
+		var validation_started = Time.get_ticks_usec()
 		result.errors = validate_package(destination, manifest)
+		timings.validation = (Time.get_ticks_usec()-validation_started)/1000.0
 		result.success = result.errors.is_empty()
 		result.reused = result.success
 		return result
@@ -91,6 +96,7 @@ static func export_package(snapshot: Dictionary, options: Dictionary, token = nu
 	if DirAccess.make_dir_absolute(staging) != OK:
 		result.errors.append("cannot create staging directory")
 		return result
+	var write_started = Time.get_ticks_usec()
 	for sub in ["data","reports"]:
 		if DirAccess.make_dir_absolute(staging.path_join(sub)) != OK: result.errors.append("cannot create artifact directory")
 	for i in PATHS.size():
@@ -102,15 +108,21 @@ static func export_package(snapshot: Dictionary, options: Dictionary, token = nu
 		progress(token, float(i+1)/7.0, "Writing package")
 	if result.errors.is_empty() and not result.cancelled:
 		result.errors.append_array(write_text(staging.path_join("manifest.json"),JSON.stringify(manifest,"",true,true)+"\n"))
+	timings.artifact_write = (Time.get_ticks_usec()-write_started)/1000.0
+	if result.errors.is_empty() and not result.cancelled:
+		var validation_started = Time.get_ticks_usec()
 		result.errors.append_array(validate_package(staging,manifest))
+		timings.validation = (Time.get_ticks_usec()-validation_started)/1000.0
 	if cancelled(token): result.cancelled = true
 	if result.errors.is_empty() and not result.cancelled:
 		# A competing destination must never be replaced, including an empty directory.
+		var publication_started = Time.get_ticks_usec()
 		if DirAccess.dir_exists_absolute(destination) or FileAccess.file_exists(destination): result.errors.append("destination appeared during export")
 		elif DirAccess.rename_absolute(staging,destination) != OK: result.errors.append("atomic package publication failed")
 		else:
 			result.success = true
-			progress(token, 1.0, "Package published")
+		timings.publication = (Time.get_ticks_usec()-publication_started)/1000.0
+		if result.success: progress(token, 1.0, "Package published")
 	if not result.success: remove_own_staging(staging)
 	return result
 
@@ -209,12 +221,26 @@ static func validate_package(directory: String, expected: Dictionary = {}) -> Pa
 		if not FileAccess.file_exists(file_path) or FileAccess.get_sha256(file_path) != artifact.get("sha256") or FileAccess.get_file_as_bytes(file_path).size() != artifact.get("bytes"):
 			errors.append("artifact integrity mismatch: " + relative)
 	if not expected.is_empty() and not DIFF.equivalent(manifest.artifacts,expected.artifacts): errors.append("artifact manifest conflict")
+	if not errors.is_empty(): return errors
+	var texts = {}
+	for relative in PATHS: texts[relative] = FileAccess.get_file_as_string(directory.path_join(relative))
+	var diff = EXACT_JSON.parse_string(texts[PATHS[2]])
+	var diff_schema = EXACT_JSON.parse_string(FileAccess.get_file_as_string("res://core/feedback/annotation-diff-v1.schema.json"))
+	if not diff_schema is Dictionary: return PackedStringArray(["audit schema unavailable"])
+	# Region contracts are checked by the same strict V1 validator below; no
+	# second incomplete implementation of its referenced geometry schema.
+	for field in ["before","after"]:
+		diff_schema.properties.frames.items.properties.events.items.properties[field] = {"type":["object","null"]}
+	errors.append_array(_manifest_schema_errors(diff,diff_schema,"diff"))
+	if errors.is_empty(): errors.append_array(SEMANTICS.validate(manifest,texts,diff))
 	return errors
 
 static func jsonl(values: Array) -> String:
-	var out = ""
-	for value in values: out += JSON.stringify(normalize(value),"",true,true) + "\n"
-	return out
+	if values.is_empty(): return ""
+	var lines = PackedStringArray()
+	lines.resize(values.size())
+	for index in values.size(): lines[index] = JSON.stringify(normalize(values[index]),"",true,true)
+	return "\n".join(lines) + "\n"
 
 static func write_text(path: String, text: String) -> PackedStringArray:
 	var file = FileAccess.open(path,FileAccess.WRITE)

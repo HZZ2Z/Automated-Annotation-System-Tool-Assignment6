@@ -198,7 +198,8 @@
         "excluded_frame_ids",
         "verified_frame_ids",
         "explicit_frame_ids",
-        "exclusion_reason"
+        "exclusion_reason",
+        "policy"
       ],
       "properties": {
         "total_frames": {
@@ -262,6 +263,12 @@
           "enum": [
             "none",
             "not_content_verified"
+          ]
+        },
+        "policy": {
+          "enum": [
+            "verified_only",
+            "all_frames_review"
           ]
         }
       }

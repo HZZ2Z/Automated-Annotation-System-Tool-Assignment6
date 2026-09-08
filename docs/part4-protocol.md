@@ -7,8 +7,9 @@ an opaque provenance string and is never opened or executed.
 
 **Tool → model team.** `training_update_v2` includes only frames verified against
 their current annotation content, including verified unchanged/negative frames.
-Zero coverage and unknown legacy baselines are rejected. `review_export_v1` is a
-separate full-source export with honest explicit/annotation/review status. Both
+Coverage explicitly declares `policy: verified_only`. Zero coverage and unknown
+legacy baselines are rejected. The separate full-source `review_export_v1` declares
+`policy: all_frames_review` with honest explicit/annotation/review status. Both
 contain `manifest.json`, `data/corrected_annotations.jsonl`, `data/frame_map.jsonl`,
 `reports/diff.json`, `reports/diff.csv`, and `reports/summary_by_class.csv`.
 The manifest records round/model/taxonomy, media/source/frame identity, baseline
@@ -36,7 +37,8 @@ complete `source_frame_entries`, and `annotations` with fixed relative `path`,
 `bytes`, and `sha256`. Returned records cover **every** source frame exactly once,
 even when the parent training package selected only a subset. A second model
 round still uses annotation schema V1. Import requires the actual parent training
-package directory, validates its artifacts, and matches its media, old round,
+package directory, validates artifact integrity and annotation/verification/map/
+audit/CSV consistency, and matches its media, old round,
 baseline, taxonomy and full frame map. Same-round returns are rejected.
 
 **Transaction and legacy binding.** Save the old active V3 first. Preparation
@@ -45,8 +47,11 @@ archives exact prior V3 bytes as `label/rounds/<sha256>.json`, then atomically
 replaces the active V3. Failures preserve old active data; a valid orphan archive
 is harmless. New rounds have independent session identity, revision zero, and
 empty verification/batch/undo state. Explicit binding of an unknown legacy
-baseline retains corrections/reviews/batches, requires compatible optional time
-presence, and atomically increments revision; known baselines cannot be rebound.
+baseline retains the explicit correction/review/batch evidence and its explicit
+frame set. Implicit display placeholders initialize from the bound raw model and
+remain unannotated, rather than becoming negative corrections. Explicit correction
+timestamps must retain compatible optional presence. Binding atomically increments
+revision; known baselines cannot be rebound.
 
 **Reviewer CLI.** Source `project_env.sh`, then run `$PROJECT6_PYTHON python/part4.py`:
 

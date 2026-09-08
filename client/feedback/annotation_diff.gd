@@ -100,19 +100,19 @@ static func class_increment(classes: Dictionary, label: String, field: String) -
 	classes[label][field] += 1
 
 static func events_csv(diff: Dictionary) -> String:
-	var text = "frame_id,region_id,type,before,after\n"
+	var chunks = PackedStringArray(["frame_id,region_id,type,before,after\n"])
 	for frame in diff.frames:
 		for event in frame.events:
-			text += csv_row([str(frame.frame_id), event.region_id, event.type, JSON.stringify(normalize(event.before),"",true,true), JSON.stringify(normalize(event.after),"",true,true)])
-	return text
+			chunks.append(csv_row([str(frame.frame_id), event.region_id, event.type, JSON.stringify(normalize(event.before),"",true,true), JSON.stringify(normalize(event.after),"",true,true)]))
+	return "".join(chunks)
 
 static func classes_csv(diff: Dictionary) -> String:
-	var text = "class," + ",".join(CLASS_COUNTS) + "\n"
+	var chunks = PackedStringArray(["class," + ",".join(CLASS_COUNTS) + "\n"])
 	for row in diff.by_class:
 		var values = [row["class"]]
 		for key in CLASS_COUNTS: values.append(str(row[key]))
-		text += csv_row(values)
-	return text
+		chunks.append(csv_row(values))
+	return "".join(chunks)
 
 static func csv_row(values: Array) -> String:
 	var escaped = PackedStringArray()

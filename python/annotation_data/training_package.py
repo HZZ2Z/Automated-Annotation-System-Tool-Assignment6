@@ -138,6 +138,8 @@ def _validate(root: Path) -> list[str]:
     for key, values in (("total_frames", source_ids), ("included_frames", included), ("excluded_frames", excluded)):
         if coverage[key] != len(values) or manifest["summary"][key] != len(values) or diff["summary"][key] != len(values):
             errors.append(f"{key}: incorrect count")
+    if coverage["policy"] != ("verified_only" if training else "all_frames_review"):
+        errors.append("coverage policy does not match package type")
     if training:
         if not included or included != verified or coverage["exclusion_reason"] != "not_content_verified":
             errors.append("training coverage must exactly equal nonempty current verified frames")

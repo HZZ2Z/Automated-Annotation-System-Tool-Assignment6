@@ -78,9 +78,12 @@ static func _prepare(context: Dictionary, input_path: String, binding: bool, tok
 	candidate.records = snapshot.records if binding else loaded.records
 	if binding:
 		candidate.revision = int(snapshot.revision) + 1
-		# All corrections remain explicit, including old unknown negative records.
-		candidate.explicit_frames = []
-		for record in snapshot.records: candidate.explicit_frames.append(int(record.frame))
+		# Implicit unknown display empties were never annotation evidence. Bind them
+		# to raw model predictions while preserving only explicit human corrections.
+		var corrected = PACKAGE.DIFF.records_by_frame(snapshot.records)
+		candidate.records = []
+		for record in loaded.records:
+			candidate.records.append(corrected[int(record.frame)] if int(record.frame) in snapshot.explicit_frames else record)
 	else:
 		candidate.round_id = manifest.round_id
 		candidate.model_revision = manifest.model_revision
