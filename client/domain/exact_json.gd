@@ -8,7 +8,9 @@ const MAX_FINITE_BITS := 0x7fefffffffffffff
 const FRACTION_MASK := 0x000fffffffffffff
 const SIGN_MASK := -9223372036854775807 - 1
 const LIMB_BASE := 1000000000
-const MAX_DEPTH := 512
+# Each container uses both _value and _container stack frames. Leave VM
+# headroom for callers and numeric/string decoding at the accepted boundary.
+const MAX_DEPTH := 256
 var data: Variant
 var _text := ""
 var _position := 0
@@ -44,10 +46,10 @@ func _space() -> void:
 func _value() -> Variant:
 	_space()
 	if _position >= _text.length(): _fail("Expected JSON value"); return null
-	if _depth >= MAX_DEPTH: _fail("JSON nesting limit exceeded"); return null
 	var character := _text[_position]
 	if character == '"': return _string()
 	if character == "[" or character == "{":
+		if _depth >= MAX_DEPTH: _fail("JSON nesting limit exceeded"); return null
 		_depth += 1
 		var value: Variant = _container(character == "{")
 		_depth -= 1
