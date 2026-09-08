@@ -75,7 +75,10 @@ def _validate(root: Path) -> list[str]:
             return ["package symlinks are forbidden"]
         if item.is_file():
             actual_files.add(item.relative_to(root).as_posix())
-        elif not item.is_dir():
+        elif item.is_dir():
+            if item.relative_to(root).as_posix() not in {"data", "reports"}:
+                return ["package contains a foreign directory"]
+        else:
             return ["package contains a special filesystem entry"]
     if actual_files != expected_files:
         return ["package files must exactly match the fixed artifact allowlist"]
@@ -151,9 +154,12 @@ def _validate(root: Path) -> list[str]:
             errors.append(f"frame {frame}: corrected source must be human_corrected")
         if len({r["id"] for r in record["regions"]}) != len(record["regions"]):
             errors.append(f"frame {frame}: duplicate region id")
-        for value in (record, mapped):
-            if ("time_s" in value) != ("time_s" in entry) or value.get("time_s") != entry.get("time_s"):
-                errors.append(f"frame {frame}: source timestamp value/presence mismatch")
+        # Model Output V1 timestamps are optional independently of Source timing.
+        # Preserve a record's absence; any supplied timestamp must match Source.
+        if "time_s" in record and ("time_s" not in entry or record["time_s"] != entry["time_s"]):
+            errors.append(f"frame {frame}: provided annotation timestamp differs from source")
+        if ("time_s" in mapped) != ("time_s" in entry) or mapped.get("time_s") != entry.get("time_s"):
+            errors.append(f"frame {frame}: frame map source timestamp value/presence mismatch")
         expected = dict(entry, sample_id=f"{manifest['media']['media_id']}_{frame:06d}", explicit=frame in explicit,
                         verified=frame in verified, review_status="verified" if frame in verified else "unverified",
                         annotation_status=("negative" if not record["regions"] else "annotated") if frame in explicit else "unannotated")
@@ -168,6 +174,17 @@ def _validate(root: Path) -> list[str]:
     for operation in manifest["batch_operations"]:
         if any(operation[k] not in entry_map for k in ("keyframe", "start_frame", "end_frame")):
             errors.append("batch provenance contains unknown source frame")
+        if operation["start_frame"] > operation["end_frame"]:
+            errors.append("batch provenance has reversed frame range")
+        if "metric_id" in operation:
+            if not operation["start_frame"] <= operation["keyframe"] <= operation["end_frame"]:
+                errors.append("batch metric range must contain keyframe")
+            if (operation["start_index"] > operation["end_index"]
+                    or operation["covered_count"] != operation["end_index"] - operation["start_index"] + 1
+                    or operation["covered_count"] > operation["max_frames"]
+                    or operation["changed_count"] != len(operation["affected_frames"])
+                    or operation["changed_count"] >= operation["covered_count"]):
+                errors.append("batch metric range/coverage/changed counts inconsistent")
         if any(f not in entry_map or f == operation["keyframe"] or not operation["start_frame"] <= f <= operation["end_frame"] for f in operation["affected_frames"]):
             errors.append("batch provenance contains invalid target")
     if manifest["summary"]["verified_frames"] != len(verified):
@@ -194,6 +211,11 @@ def _validate_diff(diff: dict, manifest: dict, records: dict, texts: dict) -> li
         changed = set()
         grouped = {}
         current = {r["id"]: r for r in records[int(frame["frame_id"] )]["regions"]}
+        if manifest["baseline"]["kind"] == "empty":
+            expected_events = [{"region_id": rid, "type": "added", "before": None, "after": current[rid]}
+                               for rid in sorted(current)]
+            if frame["events"] != expected_events:
+                errors.append("empty baseline audit must exactly add every current region")
         for event in frame["events"]:
             rid, kind = event["region_id"], event["type"]
             before, after = event["before"], event["after"]

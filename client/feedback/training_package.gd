@@ -184,6 +184,10 @@ static func validate_package(directory: String, expected: Dictionary = {}) -> Pa
 	if root.is_link("manifest.json"): return PackedStringArray(["manifest link refused"])
 	var manifest = JSON.parse_string(FileAccess.get_file_as_string(directory.path_join("manifest.json")))
 	if not manifest is Dictionary: return PackedStringArray(["invalid package manifest"])
+	var schema = JSON.parse_string(FileAccess.get_file_as_string("res://core/feedback/training-package-v2.schema.json"))
+	if not schema is Dictionary: return PackedStringArray(["package manifest schema unavailable"])
+	errors.append_array(_manifest_schema_errors(manifest,schema,"manifest"))
+	if not errors.is_empty(): return errors
 	if not manifest.get("artifacts") is Array or manifest.artifacts.size() != PATHS.size(): return PackedStringArray(["invalid artifacts"])
 	if manifest.get("package_id") != package_identity(manifest): errors.append("package identity mismatch")
 	if not expected.is_empty() and manifest.get("package_id") != expected.get("package_id"): errors.append("conflicting existing package")
@@ -251,3 +255,72 @@ static func prepare_output_parent(path: String) -> PackedStringArray:
 		if FileAccess.file_exists(cursor): return PackedStringArray(["output_parent conflicts with a file"])
 	if DirAccess.make_dir_recursive_absolute(path) != OK: return PackedStringArray(["cannot create output_parent"])
 	return PackedStringArray()
+
+# Evaluate only the keywords used by our local manifest contract. Unknown keywords
+# fail closed so a future schema extension cannot silently bypass reuse validation.
+static func _manifest_schema_errors(value: Variant, schema: Dictionary, path: String) -> PackedStringArray:
+	var errors = PackedStringArray()
+	for key in schema:
+		if key not in ["$schema","$id","$defs","type","const","enum","oneOf","properties","required","additionalProperties","propertyNames","dependentRequired","items","minItems","maxItems","uniqueItems","pattern","minLength","minimum","maximum","exclusiveMinimum"]:
+			errors.append(path + ": unsupported manifest schema keyword " + key)
+	if schema.has("type"):
+		var types = schema.type if schema.type is Array else [schema.type]
+		var valid = false
+		for type in types:
+			valid = valid or _schema_type(value,type)
+		if not valid: return PackedStringArray([path + ": invalid type"])
+	if schema.has("const") and not DIFF.equivalent(value,schema.const): errors.append(path + ": invalid constant")
+	if schema.has("enum"):
+		var found = false
+		for candidate in schema.enum:
+			if DIFF.equivalent(value,candidate): found = true
+		if not found: errors.append(path + ": invalid enum")
+	if schema.has("oneOf"):
+		var matches = 0
+		for branch in schema.oneOf:
+			if _manifest_schema_errors(value,branch,path).is_empty(): matches += 1
+		if matches != 1: errors.append(path + ": must match one schema branch")
+	if value is Dictionary:
+		var properties = schema.get("properties",{})
+		for key in schema.get("required",[]):
+			if not value.has(key): errors.append(path + ": missing " + key)
+		for key in value:
+			if schema.has("propertyNames"): errors.append_array(_manifest_schema_errors(key,schema.propertyNames,path + ".key"))
+			if properties.has(key): errors.append_array(_manifest_schema_errors(value[key],properties[key],path + "." + key))
+			elif schema.get("additionalProperties") is Dictionary: errors.append_array(_manifest_schema_errors(value[key],schema.additionalProperties,path + "." + key))
+			elif schema.get("additionalProperties",true) == false: errors.append(path + ": unexpected " + key)
+		for key in schema.get("dependentRequired",{}):
+			if value.has(key):
+				for dependency in schema.dependentRequired[key]:
+					if not value.has(dependency): errors.append(path + ": missing dependent " + dependency)
+	if value is Array:
+		if value.size() < schema.get("minItems",0) or value.size() > schema.get("maxItems",value.size()): errors.append(path + ": invalid array length")
+		var seen = {}
+		for index in value.size():
+			if schema.has("items"): errors.append_array(_manifest_schema_errors(value[index],schema.items,path + "." + str(index)))
+			if schema.get("uniqueItems",false):
+				var canonical = JSON.stringify(normalize(value[index]),"",true,true)
+				if seen.has(canonical): errors.append(path + ": duplicate item")
+				seen[canonical] = true
+	if value is String:
+		if value.length() < schema.get("minLength",0): errors.append(path + ": text too short")
+		if schema.has("pattern"):
+			var regex = RegEx.new()
+			if regex.compile(schema.pattern) != OK or regex.search(value) == null: errors.append(path + ": invalid text pattern")
+	if value is int or value is float:
+		if not is_finite(float(value)): errors.append(path + ": nonfinite number")
+		if schema.has("minimum") and value < schema.minimum: errors.append(path + ": below minimum")
+		if schema.has("maximum") and value > schema.maximum: errors.append(path + ": above maximum")
+		if schema.has("exclusiveMinimum") and value <= schema.exclusiveMinimum: errors.append(path + ": below exclusive minimum")
+	return errors
+
+static func _schema_type(value: Variant, type: String) -> bool:
+	match type:
+		"object": return value is Dictionary
+		"array": return value is Array
+		"string": return value is String
+		"boolean": return value is bool
+		"null": return value == null
+		"number": return (value is int or value is float) and is_finite(float(value))
+		"integer": return (value is int or value is float) and is_finite(float(value)) and float(value) == floorf(float(value))
+	return false
