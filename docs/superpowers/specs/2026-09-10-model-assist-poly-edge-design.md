@@ -270,12 +270,20 @@ fake worker 用于穷尽协议和 UI 分支，但不足以声明模型工具完�
 - v1 marker 兼容、v2 marker 严格校验、edge 摘要保存/重开和 V1 输出不污染；
 - 真实 Main 场景验证默认算法、阈值可见、模式文案、无候选、预览、保存、重开、确认和自动前进。
 
-### 12.3 回归与证据边界
+### 12.3 Endoscapes 真实连续帧验收
+
+- 优先使用本地 Endoscapes2023 的 1 fps 连续帧做真实 Batch smoke test；数据集根目录由命令行参数传入，不在仓库中硬编码用户路径。
+- 新增可重复的 fixture 准备脚本，只把选定片段链接或复制到本地忽略目录，生成播放索引连续的 manifest，并在独立 provenance JSON 中保留 Endoscapes video ID、原始 frame number、文件相对路径与 SHA-256。不改写原数据集，不提交图像或标注。
+- 默认确定性 smoke 片段为 video `65`、原始 frame `11775..11875`、步长 `25`，关键帧为 `11800`。当前数据快照在默认阈值 `0.02` 下可覆盖 5 帧；这是真实路径可运行性证据，不是固定精度基准。
+- 另可准备同一 video 内最多 30 帧的连续窗口，用于验证相似度停止、光流停止、范围上限和诊断；不要求 30 帧全部通过默认阈值。
+- 以 `insseg/65_11800.npy` 及匹配 CSV 中的实例作为关键帧 seed，记录每帧 raw/refined 边界、edge accepted/fallback 原因与人工判读。因 Endoscapes-Seg50 只对稀疏帧有真值，未额外人工标注的目标帧只做定性验收；可量化 IoU 改善仍以合成序列为主。
+
+### 12.4 回归与证据边界
 
 - 修复所有会在出现 `SCRIPT ERROR` 后仍输出 PASS 的 focused harness；验收必须同时检查进程状态和日志。
 - 运行完整 Python 套件、完整 Godot 套件和所有新增 focused gates；任何失败、未处理异常或 `SCRIPT ERROR` 都不得声明完成。
 - 更新 README、architecture、plugin API、Poly 文档、RESULTS 和 requirements traceability，明确分开实现、自动证据、真实 SAM 运行、真实手术视频精度与 GPU 性能。
-- 至少在一段真实手术连续帧中做可见 Batch 预览，记录边缘接受/fallback 和人工检查边界。没有人工真值时只报告定性结果，不声称手术数据准确率已被证明。
+- 按 12.3 的 Endoscapes 片段做可见 Batch 预览，记录边缘接受/fallback 和人工检查边界。没有人工真值时只报告定性结果，不声称手术数据准确率已被证明。
 
 ## 13. 当前环境边界
 
