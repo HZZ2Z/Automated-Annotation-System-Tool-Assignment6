@@ -291,6 +291,10 @@ func cancel(token: int) -> void:
 		_set_busy_state("loading", "正在缓存当前图像…")
 
 
+func candidate_job_dir() -> String:
+	return _job_dir
+
+
 func step() -> void:
 	_step_preflight()
 	if _pid <= 0:

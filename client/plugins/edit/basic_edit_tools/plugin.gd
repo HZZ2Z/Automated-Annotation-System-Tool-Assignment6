@@ -16,6 +16,9 @@ const REGION_GEOMETRY := preload("res://client/domain/region_geometry.gd")
 const POLYGON_OPS := preload("res://client/domain/polygon_ops.gd")
 const MASK_REGION_OPS := preload("res://client/domain/mask_region_ops.gd")
 const EDIT_SESSION := preload("res://client/domain/edit_session.gd")
+const MODEL_ASSIST_SESSION := preload("res://client/domain/model_assist_session.gd")
+const MODEL_ASSIST_SERVICE := preload("res://client/services/model_assist_service.gd")
+const MODEL_ASSIST_CANDIDATE := preload("res://client/domain/model_assist_candidate.gd")
 const FILL_SOLVER := preload("res://client/domain/fill_region_solver.gd")
 const BRUSH_BUFFER := preload("res://client/domain/brush_stroke_buffer.gd")
 const VERTEX_EDITOR := preload("res://client/plugins/edit/basic_edit_tools/polygon_vertex_editor.gd")
@@ -34,6 +37,7 @@ const ERASER_OVERLAY_COLOR := Color("#a855f7")
 const TOOL_IDS: Array[StringName] = [
 	&"box", &"subtract", &"lasso", &"fill",
 	&"paint", &"eraser", &"select",
+	&"model_assist",
 ]
 const BRUSH_OPTION := {
 	"id": &"brush_radius", "label": "Brush radius", "kind": &"float_range",
@@ -52,7 +56,10 @@ const TOOL_DESCRIPTORS: Array[Dictionary] = [
 	{"id": &"paint", "node_name": "Paint", "label": "Paint", "implemented": true, "tooltip": "Repair one overlapped region, or paint a new object", "icon_path": "res://client/ui/icons/tools/paint.svg", "options": [BRUSH_OPTION]},
 	{"id": &"eraser", "node_name": "Eraser", "label": "Eraser", "implemented": true, "tooltip": "Erase every region touched by the stroke; no selection needed", "icon_path": "res://client/ui/icons/tools/erase.svg", "options": [BRUSH_OPTION]},
 	{"id": &"select", "node_name": "Select", "label": "Selection", "implemented": true, "default": true, "tooltip": "Select, move, or resize a region", "icon_path": "res://client/ui/icons/tools/selection.svg"},
+	{"id": &"model_assist", "node_name": "ModelAssist", "label": "Model Assist", "presentation_text": "Model\nAssist", "implemented": true, "tooltip": "Prompt SAM2 on the current frame; click +, Shift-click -, Ctrl-drag a box", "icon_path": "res://client/ui/icons/tools/model_assist.svg"},
 ]
+
+var model_assist_service_factory: Callable
 
 var _vertex_editor = VERTEX_EDITOR.new()
 var _vertex_mode_requested := false
@@ -60,6 +67,7 @@ var _store: Variant
 var _history: Variant
 var _viewport: Variant
 var _current_frame_getter := Callable()
+var _playback_index_getter := Callable()
 var _selected_region_getter := Callable()
 var _selected_region_setter := Callable()
 var _current_image_getter := Callable()
@@ -77,6 +85,22 @@ var _brush_error := ""
 var _last_pointer_image_position := Vector2.ZERO
 var _has_last_pointer_image_position := false
 var _session = EDIT_SESSION.new()
+var _model_session = MODEL_ASSIST_SESSION.new()
+var _model_service: Variant
+var _model_preflight: Dictionary = {}
+var _model_session_id := ""
+var _model_box_dragging := false
+var _model_box_start := Vector2.ZERO
+var _model_frozen_record: Dictionary = {}
+var _model_frozen_image: Image
+var _model_frozen_image_digest := ""
+var _model_frozen_image_size := Vector2i.ZERO
+var _model_frozen_frame := -1
+var _model_frozen_playback := -1
+var _model_initial_mask: Dictionary = {}
+var _model_latest_token := -1
+var _model_latest_context: Dictionary = {}
+var _model_tearing_down := false
 var _candidate_token := 0
 
 var _add_pointer_mode := false
@@ -110,6 +134,17 @@ func get_tool_descriptors() -> Array[Dictionary]:
 
 
 func get_edit_state() -> Dictionary:
+	if _active_tool == &"model_assist":
+		var model := _model_session.snapshot()
+		return {
+			"phase": model.phase,
+			"gesture_active": _model_box_dragging,
+			"navigation_blocked": model.navigation_blocked or _session.has_pending_class_assignment(),
+			"draft_active": model.draft_active,
+			"draft_history": {},
+			"session_panel": model.session_panel.duplicate(true),
+			"message": str(model.message),
+		}.duplicate(true)
 	return {
 		"phase": _session.phase,
 		"gesture_active": _has_transient_edit() or _add_pointer_mode,
@@ -137,6 +172,8 @@ func _fill_session_panel() -> Dictionary:
 
 
 func invoke(action_id: StringName, payload: Dictionary = {}) -> PackedStringArray:
+	if action_id in [&"model_apply", &"model_cancel", &"model_retry", &"model_previous_candidate", &"model_next_candidate", &"model_recheck"]:
+		return _invoke_model_action(action_id)
 	if action_id == &"confirm_fill_repair":
 		return _confirm_fill_repair()
 	if action_id == &"cancel_fill_repair":
@@ -227,6 +264,7 @@ func invoke(action_id: StringName, payload: Dictionary = {}) -> PackedStringArra
 func activate(context: Dictionary) -> PackedStringArray:
 	if _active:
 		cancel()
+	_teardown_model_service()
 	_disconnect_viewport_cancel()
 	_clear_transient()
 	_active = false
@@ -242,6 +280,7 @@ func activate(context: Dictionary) -> PackedStringArray:
 	_history = context.get("history")
 	_viewport = context.get("viewport")
 	_current_frame_getter = _context_callable(context, ["current_frame", "current_frame_getter", "get_current_frame"])
+	_playback_index_getter = _context_callable(context, ["playback_index", "playback_index_getter", "get_playback_index"])
 	_selected_region_getter = _context_callable(context, ["selected_region", "selected_region_getter", "get_selected_region"])
 	_selected_region_setter = _context_callable(context, ["set_selected_region", "selected_region_setter"])
 	_current_image_getter = _context_callable(context, ["get_current_image", "current_image_getter", "current_image"])
@@ -256,6 +295,8 @@ func activate(context: Dictionary) -> PackedStringArray:
 	_require_object_method(_viewport, "viewport", "set_selected_region_id", 1, errors)
 	_require_object_method(_viewport, "viewport", "get_image_transform", 0, errors)
 	_validate_callable_arity(_current_frame_getter, "current_frame", 0, errors)
+	if _playback_index_getter.is_valid():
+		_validate_callable_arity(_playback_index_getter, "playback_index", 0, errors)
 	_validate_callable_arity(_selected_region_getter, "selected_region", 0, errors)
 	_validate_callable_arity(_selected_region_setter, "set_selected_region", 1, errors)
 	if _current_image_getter.is_valid():
@@ -274,22 +315,34 @@ func activate(context: Dictionary) -> PackedStringArray:
 			errors.append("context.request_class_assignment: expected a valid Callable with 1 argument(s)")
 	if not taxonomy_value is Dictionary:
 		errors.append("context.taxonomy: expected a Dictionary")
+	_model_service = model_assist_service_factory.call() if model_assist_service_factory.is_valid() else MODEL_ASSIST_SERVICE.new()
+	_validate_model_service(_model_service, errors)
 	if not errors.is_empty():
+		_shutdown_model_service(_model_service)
+		_model_service = null
 		_report_errors(errors)
 		return errors
 	_active = true
+	_model_session_id = _new_model_session_id()
+	_connect_model_service()
+	var preflight: Variant = _model_service.preflight()
+	_model_preflight = preflight.duplicate(true) if preflight is Dictionary else {}
 	_connect_viewport_cancel()
 	_emit_edit_state()
 	return errors
 
 
 func deactivate() -> void:
+	if _active:
+		_cancel_model_session(false)
 	_clear_transient()
+	_teardown_model_service()
 	_disconnect_viewport_cancel()
 	_store = null
 	_history = null
 	_viewport = null
 	_current_frame_getter = Callable()
+	_playback_index_getter = Callable()
 	_selected_region_getter = Callable()
 	_selected_region_setter = Callable()
 	_current_image_getter = Callable()
@@ -324,15 +377,21 @@ func set_active_tool(tool_id: StringName) -> PackedStringArray:
 		_add_pointer_mode = false
 		return PackedStringArray()
 	if tool_id == _active_tool:
+		if tool_id == &"model_assist" and not bool(_model_session.snapshot().get("draft_active", false)):
+			_begin_model_session()
 		_show_idle_brush_cursor()
 		_vertex_mode_requested = tool_id == &"lasso"
 		refresh_edit_overlay()
 		return PackedStringArray()
+	if _active_tool == &"model_assist":
+		_cancel_model_session(false)
 	_clear_transient()
 	_active_tool = tool_id
 	_vertex_mode_requested = tool_id == &"lasso"
 	_add_pointer_mode = tool_id == &"box"
 	_show_idle_brush_cursor()
+	if tool_id == &"model_assist":
+		_begin_model_session()
 	refresh_edit_overlay()
 	return PackedStringArray()
 
@@ -357,6 +416,9 @@ func handle_pointer(event: InputEvent, image_position: Vector2) -> void:
 		return
 	_last_pointer_image_position = image_position
 	_has_last_pointer_image_position = true
+	if _active_tool == &"model_assist":
+		_handle_model_pointer(event, image_position)
+		return
 	if _active_tool == &"lasso":
 		if _vertex_editor.pointer(self, event, image_position):
 			return
@@ -398,6 +460,8 @@ func handle_key(event: InputEvent) -> bool:
 	if _session.has_pending_class_assignment():
 		_report("Choose a class and kind, or press Escape to discard the pending region")
 		return true
+	if _active_tool == &"model_assist":
+		return _handle_model_key(event, key)
 	if _session.has_working_mask() or _session.has_fill_repair():
 		if event.ctrl_pressed and key in [KEY_Z, KEY_Y]:
 			invoke(&"redo_draft" if key == KEY_Y or event.shift_pressed else &"undo_draft")
@@ -458,6 +522,9 @@ func handle_key(event: InputEvent) -> bool:
 				return _begin_keyboard_spatial(&"fill")
 			KEY_P:
 				return _begin_keyboard_spatial(&"eraser" if event.shift_pressed else &"paint")
+			KEY_M:
+				set_active_tool(&"model_assist")
+				return true
 	if key == KEY_A and not event.ctrl_pressed and not event.alt_pressed:
 		_begin_keyboard_add()
 		return true
@@ -529,6 +596,7 @@ func cancel() -> void:
 		_clear_transient()
 		return
 	var keep_vertex_mode := _vertex_mode_requested
+	_cancel_model_session(_active_tool == &"model_assist")
 	_clear_transient()
 	_vertex_mode_requested = keep_vertex_mode
 	_show_idle_brush_cursor()
@@ -641,8 +709,13 @@ func _confirm_pending_region(payload: Dictionary) -> PackedStringArray:
 	if not errors.is_empty():
 		_report_errors(errors)
 		return errors
-	var continue_lasso_vertices: bool = _session.tool_id == &"lasso"
+	var pending_tool: StringName = _session.tool_id
+	var continue_lasso_vertices: bool = pending_tool == &"lasso"
+	if pending_tool == &"model_assist":
+		_finish_model_commit()
 	_clear_transient()
+	if pending_tool == &"model_assist":
+		_begin_model_session()
 	_vertex_mode_requested = continue_lasso_vertices
 	_refresh_visible_frame(frame)
 	_select_added_if_still_current(frame, command.get_region_id())
@@ -660,7 +733,10 @@ func _cancel_pending_region(payload: Dictionary) -> PackedStringArray:
 	var token_value: Variant = payload.get("candidate_token")
 	if typeof(token_value) != TYPE_INT or int(token_value) != int(request.get("candidate_token", -1)):
 		return _pending_confirmation_error("Pending region token is stale")
+	var pending_tool: StringName = _session.tool_id
 	_clear_transient()
+	if pending_tool == &"model_assist":
+		_cancel_model_session(true)
 	return PackedStringArray()
 
 
@@ -2388,6 +2464,578 @@ func _retain_invalid_subtract(
 	_push_session_overlay()
 	_report(message)
 	_refresh_visible_frame(frame)
+
+
+func step() -> void:
+	if _active and _is_live_object(_model_service):
+		_model_service.step()
+
+
+func _handle_model_pointer(event: InputEvent, image_position: Vector2) -> void:
+	if event is InputEventMouseMotion:
+		if _model_box_dragging and event.button_mask & MOUSE_BUTTON_MASK_LEFT != 0:
+			_push_model_box_preview(Rect2(_model_box_start, image_position - _model_box_start).abs())
+		return
+	if not event is InputEventMouseButton or event.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if event.ctrl_pressed:
+		if event.pressed:
+			_model_box_dragging = true
+			_model_box_start = image_position
+			_push_model_box_preview(Rect2(image_position, Vector2.ZERO))
+		elif _model_box_dragging:
+			_model_box_dragging = false
+			if not _ensure_model_target_frozen():
+				_push_model_overlay()
+				return
+			_apply_model_prompt_change(_model_session.set_box(
+				Rect2(_model_box_start, image_position - _model_box_start).abs()
+			))
+		return
+	if not event.pressed:
+		return
+	_model_box_dragging = false
+	if not _ensure_model_target_frozen():
+		return
+	_apply_model_prompt_change(_model_session.add_point(image_position, not event.shift_pressed))
+
+
+func _handle_model_key(event: InputEventKey, key: Key) -> bool:
+	if key == KEY_M and not event.ctrl_pressed and not event.alt_pressed:
+		return true
+	if key == KEY_BACKSPACE:
+		_apply_model_prompt_change(_model_session.undo_prompt())
+		return true
+	if key == KEY_TAB:
+		_model_session.cycle(-1 if event.shift_pressed else 1)
+		_push_model_overlay()
+		return true
+	if key in [KEY_ENTER, KEY_KP_ENTER]:
+		_invoke_model_action(&"model_apply")
+		return true
+	return false
+
+
+func _invoke_model_action(action_id: StringName) -> PackedStringArray:
+	if not _active or _active_tool != &"model_assist":
+		return PackedStringArray(["Model Assist is not the active edit tool"])
+	match action_id:
+		&"model_apply":
+			return _apply_model_candidate()
+		&"model_cancel":
+			cancel()
+			return PackedStringArray()
+		&"model_retry":
+			_apply_model_prompt_change(_model_session.retry())
+			return PackedStringArray()
+		&"model_previous_candidate":
+			_model_session.cycle(-1)
+			_push_model_overlay()
+			return PackedStringArray()
+		&"model_next_candidate":
+			_model_session.cycle(1)
+			_push_model_overlay()
+			return PackedStringArray()
+		&"model_recheck":
+			if bool(_model_session.snapshot().get("draft_active", false)):
+				return _model_action_error("Cancel the current Model Assist draft before rechecking the runtime")
+			var preflight: Variant = _model_service.preflight()
+			if not preflight is Dictionary:
+				return _model_action_error("Model Assist preflight returned an invalid snapshot")
+			_model_preflight = preflight.duplicate(true)
+			_begin_model_session()
+			return PackedStringArray()
+	return PackedStringArray(["Unsupported Model Assist action: %s" % action_id])
+
+
+func _apply_model_candidate() -> PackedStringArray:
+	var commit: Dictionary = _model_session.commit_snapshot()
+	var entered_class_assignment := false
+	if commit.is_empty() and _model_session.await_class_assignment():
+		entered_class_assignment = true
+		commit = _model_session.commit_snapshot()
+	if commit.is_empty():
+		return _model_action_error("Only the current safe Model Assist candidate can be applied")
+	var stale_reason := _model_commit_stale_reason(commit)
+	if not stale_reason.is_empty():
+		if entered_class_assignment:
+			_cancel_model_session(true)
+		return _model_action_error(stale_reason)
+	var mode := StringName(commit.get("mode", &""))
+	if mode == &"add":
+		if not entered_class_assignment:
+			return _model_action_error("The current Model Assist candidate cannot enter class assignment")
+		_await_class_for_polygon(
+			int(commit.frame_id),
+			commit.before,
+			commit.polygon,
+			Vector2(commit.image_size),
+			&"model_assist",
+		)
+		_push_model_overlay()
+		return PackedStringArray()
+	if mode != &"replace":
+		return _model_action_error("Model Assist returned an unsupported commit mode")
+	var command = REPLACE_GEOMETRY_COMMAND.new(
+		int(commit.frame_id),
+		commit.before,
+		str(commit.region_id),
+		commit.polygon,
+		Vector2(commit.image_size),
+	)
+	var errors: PackedStringArray = _history.execute(command, _store)
+	if not errors.is_empty():
+		_report_errors(errors)
+		return errors
+	var frame := int(commit.frame_id)
+	var region_id := str(commit.region_id)
+	_finish_model_commit()
+	_clear_transient()
+	_begin_model_session()
+	_refresh_visible_frame(frame)
+	if _current_frame() == frame:
+		_set_selected_region(region_id)
+	else:
+		_validate_current_selection()
+	return PackedStringArray()
+
+
+func _ensure_model_target_frozen() -> bool:
+	if _model_frozen_frame >= 0:
+		var stale_reason := _model_frozen_stale_reason()
+		if stale_reason.is_empty():
+			return true
+		_cancel_model_session(true)
+		_report(stale_reason)
+		return false
+	if not bool(_model_preflight.get("ok", false)) or _model_preflight.get("status") != "ready":
+		_report(str(_model_preflight.get("message", "Model Assist runtime is not ready")))
+		_begin_model_session()
+		return false
+	var snapshot := _current_model_target_snapshot()
+	if not bool(snapshot.get("ok", false)):
+		_report(str(snapshot.get("message", "Current frame cannot be frozen for Model Assist")))
+		return false
+	_model_frozen_frame = int(snapshot.frame_id)
+	_model_frozen_playback = int(snapshot.playback_index)
+	_model_frozen_record = snapshot.record.duplicate(true)
+	_model_frozen_image = snapshot.image.duplicate()
+	_model_frozen_image_digest = str(snapshot.image_sha256)
+	_model_frozen_image_size = snapshot.image_size
+	_model_initial_mask = snapshot.initial_mask.duplicate(true)
+	_model_session.begin(
+		_model_frozen_frame,
+		_model_frozen_playback,
+		_model_frozen_record,
+		str(snapshot.selected_region_id),
+		_model_frozen_image_size,
+		_model_preflight,
+	)
+	_push_model_overlay()
+	return _model_session.snapshot().get("phase") == MODEL_ASSIST_SESSION.READY
+
+
+func _current_model_target_snapshot() -> Dictionary:
+	var frame := _current_frame()
+	var playback := _current_playback_index()
+	var record := _record_for_frame(frame)
+	var image_size_vector := _current_image_size()
+	if frame < 0 or playback < 0 or record.is_empty():
+		return {"ok": false, "message": "Model Assist needs a current frame, playback index and annotation record"}
+	if image_size_vector == Vector2.ZERO or image_size_vector.x != floorf(image_size_vector.x) or image_size_vector.y != floorf(image_size_vector.y):
+		return {"ok": false, "message": "Model Assist needs integer current-image dimensions"}
+	var image_value: Variant = _current_image_getter.call() if _current_image_getter.is_valid() else null
+	if not image_value is Image or image_value.is_empty():
+		return {"ok": false, "message": "Model Assist cannot read the current image"}
+	var image: Image = image_value
+	var image_size := Vector2i(roundi(image_size_vector.x), roundi(image_size_vector.y))
+	if image.get_size() != image_size:
+		return {"ok": false, "message": "Model Assist image dimensions do not match the viewport"}
+	var image_digest := _image_sha256(image)
+	if image_digest.is_empty():
+		return {"ok": false, "message": "Model Assist cannot hash the current image"}
+	var selected_id := _selected_region_id()
+	var selected_region := _find_region(record, selected_id)
+	var initial_mask: Dictionary = {}
+	if not selected_region.is_empty():
+		var polygon := _region_polygon(selected_region)
+		if not polygon.is_empty():
+			initial_mask = MASK_REGION_OPS.rasterize_polygon_mask(polygon, image_size)
+			if not bool(initial_mask.get("ok", false)):
+				return {"ok": false, "message": "Selected region cannot be rasterized safely for Model Assist"}
+		else:
+			selected_id = ""
+	return {
+		"ok": true,
+		"frame_id": frame,
+		"playback_index": playback,
+		"record": record.duplicate(true),
+		"record_sha256": _record_sha256(frame, record),
+		"selected_region_id": selected_id,
+		"image": image.duplicate(),
+		"image_sha256": image_digest,
+		"image_size": image_size,
+		"initial_mask": initial_mask.duplicate(true),
+	}
+
+
+func _current_model_session_snapshot() -> Dictionary:
+	var frame := _current_frame()
+	var playback := _current_playback_index()
+	var record := _record_for_frame(frame)
+	var image_size_vector := _current_image_size()
+	if frame < 0 or playback < 0 or record.is_empty():
+		return {"ok": false, "message": "Model Assist needs a current frame, playback index and annotation record"}
+	if image_size_vector == Vector2.ZERO or image_size_vector.x != floorf(image_size_vector.x) or image_size_vector.y != floorf(image_size_vector.y):
+		return {"ok": false, "message": "Model Assist needs integer current-image dimensions"}
+	var selected_id := _selected_region_id()
+	if _region_polygon(_find_region(record, selected_id)).is_empty():
+		selected_id = ""
+	return {
+		"ok": true,
+		"frame_id": frame,
+		"playback_index": playback,
+		"record": record.duplicate(true),
+		"selected_region_id": selected_id,
+		"image_size": Vector2i(roundi(image_size_vector.x), roundi(image_size_vector.y)),
+	}
+
+
+func _apply_model_prompt_change(change: Dictionary) -> void:
+	if not bool(change.get("changed", false)):
+		var reason := str(change.get("message", "Model Assist prompt did not change"))
+		if not reason.is_empty():
+			_report(reason)
+		_push_model_overlay()
+		return
+	var cancel_token := int(change.get("cancel_token", -1))
+	if cancel_token > 0 and _is_live_object(_model_service):
+		_model_service.cancel(cancel_token)
+	if not _model_frozen_stale_reason().is_empty():
+		var stale_reason := _model_frozen_stale_reason()
+		_cancel_model_session(true)
+		_report(stale_reason)
+		return
+	var request: Variant = change.get("request")
+	if not request is Dictionary or not _model_request_has_prompts(request):
+		_model_latest_token = -1
+		_model_latest_context.clear()
+		_push_model_overlay()
+		return
+	var context := _model_context_for_request(request)
+	if context.is_empty():
+		_report("Model Assist could not build a frozen request context")
+		_push_model_overlay()
+		return
+	var image_token: int = _model_service.set_image(context, _model_frozen_image, _model_initial_mask)
+	if image_token <= 0:
+		_report("Model Assist could not cache the frozen current image")
+		_push_model_overlay()
+		return
+	var prediction_token: int = _model_service.predict(context, request.prompts)
+	if prediction_token <= 0:
+		_report("Model Assist could not start prediction")
+		_push_model_overlay()
+		return
+	if not _model_session.begin_request(prediction_token, context):
+		_model_service.cancel(prediction_token)
+		_report("Model Assist refused an inconsistent prompt request")
+		_push_model_overlay()
+		return
+	_model_latest_token = prediction_token
+	_model_latest_context = context.duplicate(true)
+	_push_model_overlay()
+
+
+func _model_request_has_prompts(request: Dictionary) -> bool:
+	var prompts: Variant = request.get("prompts")
+	return prompts is Dictionary and (
+		(prompts.get("points") is Array and not prompts.points.is_empty())
+		or prompts.get("box") is Array
+	)
+
+
+func _model_context_for_request(request: Dictionary) -> Dictionary:
+	if _model_frozen_frame < 0 or _model_frozen_image_digest.is_empty() or _model_frozen_record.is_empty():
+		return {}
+	return {
+		"session_id": _model_session_id,
+		"frame_id": _model_frozen_frame,
+		"playback_index": _model_frozen_playback,
+		"image_sha256": _model_frozen_image_digest,
+		"record_sha256": _record_sha256(_model_frozen_frame, _model_frozen_record),
+		"selected_region_id": str(request.get("selected_region_id", "")),
+		"prompt_revision": int(request.get("prompt_revision", -1)),
+	}
+
+
+func _on_model_prediction_ready(token: int, result: Dictionary) -> void:
+	if _model_tearing_down or not _is_live_object(_model_service):
+		return
+	if token != _model_latest_token or result.get("context") != _model_latest_context:
+		_model_service.cancel(token)
+		return
+	_model_latest_token = -1
+	if result.get("ok") != true:
+		var errors: Variant = result.get("errors", [])
+		var reason := "; ".join(errors) if errors is Array else "Model Assist worker failed"
+		_model_session.fail(token, reason)
+		_model_latest_context.clear()
+		_model_service.cancel(token)
+		_push_model_overlay()
+		return
+	var data: Variant = result.get("data")
+	if not data is Dictionary or data.get("image_sha256") != _model_frozen_image_digest or not data.get("candidates") is Array:
+		_model_session.fail(token, "Model Assist returned an invalid candidate envelope")
+		_model_latest_context.clear()
+		_model_service.cancel(token)
+		_push_model_overlay()
+		return
+	var candidates: Array = []
+	var job_dir: Variant = _model_service.candidate_job_dir()
+	for descriptor: Variant in data.candidates:
+		if descriptor is Dictionary and job_dir is String:
+			candidates.append(MODEL_ASSIST_CANDIDATE.validate_file(job_dir, descriptor, _model_frozen_image_size))
+		else:
+			candidates.append({
+				"ok": false,
+				"polygon": PackedVector2Array(),
+				"mask": {"roi": Rect2i(), "mask": PackedByteArray()},
+				"reason": "Candidate descriptor is invalid.",
+				"score": 0.0,
+			})
+	_model_service.cancel(token)
+	_model_latest_context.clear()
+	if not _model_session.accept(token, candidates):
+		_report("Model Assist ignored a stale or malformed candidate response")
+		return
+	_push_model_overlay()
+
+
+func _on_model_service_state_changed(snapshot: Dictionary) -> void:
+	if _model_tearing_down:
+		return
+	var status := str(snapshot.get("status", ""))
+	if status in ["checking", "ready", "unavailable"]:
+		_model_preflight = snapshot.duplicate(true)
+		if _active and _active_tool == &"model_assist" and not bool(_model_session.snapshot().get("draft_active", false)):
+			_begin_model_session()
+	elif _active and _active_tool == &"model_assist":
+		_emit_edit_state()
+
+
+func _begin_model_session() -> void:
+	if not _active or _active_tool != &"model_assist":
+		return
+	# Tool selection only prepares a cheap UI snapshot. Image hashing and target
+	# rasterization happen exactly once when the first prompt freezes the target.
+	var snapshot := _current_model_session_snapshot()
+	if bool(snapshot.get("ok", false)):
+		_model_session.begin(
+			int(snapshot.frame_id),
+			int(snapshot.playback_index),
+			snapshot.record,
+			str(snapshot.selected_region_id),
+			snapshot.image_size,
+			_model_preflight,
+		)
+	else:
+		var unavailable := _model_preflight.duplicate(true)
+		unavailable["ok"] = false
+		unavailable["status"] = "unavailable"
+		unavailable["message"] = str(snapshot.get("message", unavailable.get("message", "Model Assist is unavailable")))
+		_model_session.begin(-1, -1, {}, "", Vector2i.ZERO, unavailable)
+	_push_model_overlay()
+
+
+func _push_model_overlay() -> void:
+	if not _active or _active_tool != &"model_assist":
+		return
+	var snapshot := _model_session.snapshot()
+	var overlay: Dictionary = snapshot.get("overlay", {}).duplicate(true)
+	if _is_live_object(_viewport):
+		if overlay.is_empty() and _viewport.has_method("clear_edit_overlay"):
+			_viewport.clear_edit_overlay()
+		elif _viewport.has_method("set_edit_overlay"):
+			_viewport.set_edit_overlay(overlay)
+	_emit_edit_state()
+
+
+func _push_model_box_preview(box: Rect2) -> void:
+	if not _active or _active_tool != &"model_assist" or not _is_live_object(_viewport) or not _viewport.has_method("set_edit_overlay"):
+		return
+	var snapshot := _model_session.snapshot()
+	var overlay: Dictionary = snapshot.get("overlay", {}).duplicate(true)
+	overlay["phase"] = snapshot.get("phase", MODEL_ASSIST_SESSION.READY)
+	overlay["prompt_box"] = box
+	overlay["message"] = "拖动设置提示框"
+	_viewport.set_edit_overlay(overlay)
+	_emit_edit_state()
+
+
+func _cancel_model_session(rebegin: bool) -> void:
+	_model_box_dragging = false
+	var session_token := _model_session.cancel()
+	if _is_live_object(_model_service):
+		if _model_latest_token > 0:
+			_model_service.cancel(_model_latest_token)
+		if session_token > 0 and session_token != _model_latest_token:
+			_model_service.cancel(session_token)
+	_model_latest_token = -1
+	_model_latest_context.clear()
+	_clear_model_frozen()
+	if rebegin and _active and _active_tool == &"model_assist":
+		_begin_model_session()
+	else:
+		_model_session.reset()
+		if _is_live_object(_viewport) and _viewport.has_method("clear_edit_overlay"):
+			_viewport.clear_edit_overlay()
+		_emit_edit_state()
+
+
+func _finish_model_commit() -> void:
+	_cancel_model_session(false)
+
+
+func _clear_model_frozen() -> void:
+	_model_frozen_record.clear()
+	_model_frozen_image = null
+	_model_frozen_image_digest = ""
+	_model_frozen_image_size = Vector2i.ZERO
+	_model_frozen_frame = -1
+	_model_frozen_playback = -1
+	_model_initial_mask.clear()
+
+
+func _model_commit_stale_reason(commit: Dictionary) -> String:
+	if int(commit.get("frame_id", -1)) != _current_frame():
+		return "Model Assist refused the candidate because the current frame changed"
+	if int(commit.get("playback_index", -1)) != _current_playback_index():
+		return "Model Assist refused the candidate because the playback position changed"
+	if commit.get("before") != _record_for_frame(int(commit.get("frame_id", -1))):
+		return "Model Assist refused the candidate because the annotation record changed"
+	var context: Variant = commit.get("request_context")
+	if not context is Dictionary or str(context.get("selected_region_id", "")) != _selected_region_id():
+		return "Model Assist refused the candidate because the selection changed"
+	var image_value: Variant = _current_image_getter.call() if _current_image_getter.is_valid() else null
+	if not image_value is Image or _image_sha256(image_value) != str(context.get("image_sha256", "")):
+		return "Model Assist refused the candidate because the current image changed"
+	return ""
+
+
+func _model_frozen_stale_reason() -> String:
+	if _model_frozen_frame < 0:
+		return "Model Assist has no frozen prompt target"
+	if _current_frame() != _model_frozen_frame:
+		return "Model Assist cancelled because the current frame changed"
+	if _current_playback_index() != _model_frozen_playback:
+		return "Model Assist cancelled because the playback position changed"
+	if _record_for_frame(_model_frozen_frame) != _model_frozen_record:
+		return "Model Assist cancelled because the annotation record changed"
+	var request := _model_session.request_snapshot()
+	if not request.is_empty() and str(request.get("selected_region_id", "")) != _selected_region_id():
+		return "Model Assist cancelled because the selection changed"
+	var image_value: Variant = _current_image_getter.call() if _current_image_getter.is_valid() else null
+	if not image_value is Image or _image_sha256(image_value) != _model_frozen_image_digest:
+		return "Model Assist cancelled because the current image changed"
+	return ""
+
+
+func _current_playback_index() -> int:
+	if not _playback_index_getter.is_valid():
+		return -1
+	var value: Variant = _playback_index_getter.call()
+	if (typeof(value) not in [TYPE_INT, TYPE_FLOAT]
+			or not is_finite(float(value)) or float(value) != floorf(float(value)) or int(value) < 0):
+		return -1
+	return int(value)
+
+
+func _record_sha256(frame: int, record: Dictionary) -> String:
+	if _is_live_object(_store) and _store.has_method("record_digest") and _record_for_frame(frame) == record:
+		var value: Variant = _store.record_digest(frame)
+		if value is String and value.length() == 64:
+			return value
+	return JSON.stringify(record, "", true, true).sha256_text()
+
+
+func _image_sha256(image: Image) -> String:
+	if image == null or image.is_empty():
+		return ""
+	var payload := image.save_png_to_buffer()
+	if payload.is_empty():
+		return ""
+	var hashing := HashingContext.new()
+	hashing.start(HashingContext.HASH_SHA256)
+	hashing.update(payload)
+	return hashing.finish().hex_encode()
+
+
+func _model_action_error(message: String) -> PackedStringArray:
+	var errors := PackedStringArray([message])
+	_report_errors(errors)
+	return errors
+
+
+func _validate_model_service(value: Variant, errors: PackedStringArray) -> void:
+	for method: String in ["preflight", "step", "shutdown", "candidate_job_dir"]:
+		_require_object_method(value, "model_assist_service", method, 0, errors)
+	_require_object_method(value, "model_assist_service", "set_image", 3, errors)
+	_require_object_method(value, "model_assist_service", "predict", 2, errors)
+	_require_object_method(value, "model_assist_service", "cancel", 1, errors)
+	if not _is_live_object(value):
+		return
+	for signal_name: String in ["state_changed", "prediction_ready"]:
+		if not value.has_signal(signal_name):
+			errors.append("context.model_assist_service: expected signal %s" % signal_name)
+
+
+func _connect_model_service() -> void:
+	if not _is_live_object(_model_service):
+		return
+	var state_callback := Callable(self, "_on_model_service_state_changed")
+	var prediction_callback := Callable(self, "_on_model_prediction_ready")
+	if not _model_service.is_connected("state_changed", state_callback):
+		_model_service.connect("state_changed", state_callback)
+	if not _model_service.is_connected("prediction_ready", prediction_callback):
+		_model_service.connect("prediction_ready", prediction_callback)
+
+
+func _disconnect_model_service() -> void:
+	if not _is_live_object(_model_service):
+		return
+	var state_callback := Callable(self, "_on_model_service_state_changed")
+	var prediction_callback := Callable(self, "_on_model_prediction_ready")
+	if _model_service.is_connected("state_changed", state_callback):
+		_model_service.disconnect("state_changed", state_callback)
+	if _model_service.is_connected("prediction_ready", prediction_callback):
+		_model_service.disconnect("prediction_ready", prediction_callback)
+
+
+func _teardown_model_service() -> void:
+	if not _is_live_object(_model_service):
+		_model_service = null
+		return
+	_model_tearing_down = true
+	_disconnect_model_service()
+	_shutdown_model_service(_model_service)
+	_model_service = null
+	_model_tearing_down = false
+	_model_preflight.clear()
+	_model_session.reset()
+	_model_session_id = ""
+	_model_latest_token = -1
+	_model_latest_context.clear()
+	_clear_model_frozen()
+
+
+func _shutdown_model_service(value: Variant) -> void:
+	if _is_live_object(value) and value.has_method("shutdown"):
+		value.shutdown()
+
+
+func _new_model_session_id() -> String:
+	return ("model-assist|%d|%d|%d" % [OS.get_process_id(), Time.get_ticks_usec(), _candidate_token]).sha256_text()
 
 
 func _current_image_size() -> Vector2:

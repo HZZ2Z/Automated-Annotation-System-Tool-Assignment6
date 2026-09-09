@@ -27,6 +27,7 @@ var _prompt_box: Variant = null
 var _prompt_history: Array[Dictionary] = []
 var _prompt_revision := 0
 var _active_token := -1
+var _candidate_token := -1
 var _request_context: Dictionary = {}
 var _candidates: Array[Dictionary] = []
 var _candidate_index := -1
@@ -94,7 +95,7 @@ func set_box(box: Rect2) -> Dictionary:
 func undo_prompt() -> Dictionary:
 	if not _can_edit_prompts() or _prompt_history.is_empty():
 		return _change_result(false, -1, "没有可撤销的提示。")
-	var cancel_token := _active_token
+	var cancel_token := _active_token if _active_token > 0 else _candidate_token
 	var previous: Dictionary = _prompt_history.pop_back()
 	_restore_prompt_state(previous)
 	_advance_prompt_revision()
@@ -125,6 +126,7 @@ func accept(token: int, candidates: Array) -> bool:
 			return false
 		normalized.append(copy)
 	_active_token = -1
+	_candidate_token = token
 	_candidates = normalized
 	_candidate_index = 0 if not normalized.is_empty() else -1
 	if normalized.is_empty():
@@ -139,6 +141,7 @@ func fail(token: int, reason: String) -> bool:
 	if token <= 0 or token != _active_token or _phase != REQUESTING:
 		return false
 	_active_token = -1
+	_candidate_token = -1
 	_candidates.clear()
 	_candidate_index = -1
 	_phase = FAILED
@@ -172,13 +175,14 @@ func await_class_assignment() -> bool:
 
 
 func cancel() -> int:
-	var token := _active_token
+	var token := _active_token if _active_token > 0 else _candidate_token
 	_target_locked = false
 	_point_prompts.clear()
 	_prompt_box = null
 	_prompt_history.clear()
 	_prompt_revision = 0
 	_active_token = -1
+	_candidate_token = -1
 	_request_context.clear()
 	_candidates.clear()
 	_candidate_index = -1
@@ -230,6 +234,7 @@ func commit_snapshot() -> Dictionary:
 		"prompt_revision": _prompt_revision,
 		"request_context": _request_context.duplicate(true),
 		"score": float(candidate.score),
+		"candidate_token": _candidate_token,
 	}
 
 
@@ -261,6 +266,7 @@ func reset() -> void:
 	_prompt_history.clear()
 	_prompt_revision = 0
 	_active_token = -1
+	_candidate_token = -1
 	_request_context.clear()
 	_candidates.clear()
 	_candidate_index = -1
@@ -268,7 +274,7 @@ func reset() -> void:
 
 
 func _finish_prompt_change(previous: Dictionary) -> Dictionary:
-	var cancel_token := _active_token
+	var cancel_token := _active_token if _active_token > 0 else _candidate_token
 	_prompt_history.append(previous)
 	_target_locked = true
 	_advance_prompt_revision()
@@ -278,6 +284,7 @@ func _finish_prompt_change(previous: Dictionary) -> Dictionary:
 func _advance_prompt_revision() -> void:
 	_prompt_revision += 1
 	_active_token = -1
+	_candidate_token = -1
 	_request_context.clear()
 	_candidates.clear()
 	_candidate_index = -1
@@ -395,30 +402,32 @@ func _session_panel() -> Dictionary:
 	var actions: Array[Dictionary] = []
 	match _phase:
 		UNAVAILABLE:
-			actions.append(_action(&"recheck_model_assist", "Recheck", true, true))
+			actions.append(_action(&"model_recheck", "Recheck", true, true))
 		READY:
 			if _target_locked:
-				actions.append(_action(&"retry_model_assist", "Generate", _has_prompts(), true))
-				actions.append(_action(&"cancel_model_assist", "Cancel", true, false))
+				actions.append(_action(&"model_retry", "Generate", _has_prompts(), true))
+				actions.append(_action(&"model_cancel", "Cancel", true, false))
 			else:
-				actions.append(_action(&"recheck_model_assist", "Recheck", true, false))
+				actions.append(_action(&"model_recheck", "Recheck", true, false))
 		REQUESTING:
-			actions.append(_action(&"cancel_model_assist", "Cancel", true, false))
+			actions.append(_action(&"model_cancel", "Cancel", true, false))
 		CANDIDATE:
-			actions.append(_action(&"apply_model_assist", "Apply", true, true))
+			actions.append(_action(&"model_apply", "Apply", true, true))
 			if _candidates.size() > 1:
-				actions.append(_action(&"cycle_model_assist_candidate", "Next candidate", true, false))
-			actions.append(_action(&"cancel_model_assist", "Cancel", true, false))
+				actions.append(_action(&"model_previous_candidate", "Previous", true, false))
+				actions.append(_action(&"model_next_candidate", "Next", true, false))
+			actions.append(_action(&"model_cancel", "Cancel", true, false))
 		INVALID:
 			if _candidates.size() > 1:
-				actions.append(_action(&"cycle_model_assist_candidate", "Next candidate", true, false))
-			actions.append(_action(&"retry_model_assist", "Retry", _has_prompts(), false))
-			actions.append(_action(&"cancel_model_assist", "Cancel", true, false))
+				actions.append(_action(&"model_previous_candidate", "Previous", true, false))
+				actions.append(_action(&"model_next_candidate", "Next", true, false))
+			actions.append(_action(&"model_retry", "Retry", _has_prompts(), false))
+			actions.append(_action(&"model_cancel", "Cancel", true, false))
 		FAILED:
-			actions.append(_action(&"retry_model_assist", "Retry", _has_prompts(), true))
-			actions.append(_action(&"cancel_model_assist", "Cancel", true, false))
+			actions.append(_action(&"model_retry", "Retry", _has_prompts(), true))
+			actions.append(_action(&"model_cancel", "Cancel", true, false))
 		AWAITING_CLASS:
-			actions.append(_action(&"cancel_model_assist", "Cancel", true, false))
+			actions.append(_action(&"model_cancel", "Cancel", true, false))
 	return {
 		"tool_id": &"model_assist",
 		"status": str(_phase),

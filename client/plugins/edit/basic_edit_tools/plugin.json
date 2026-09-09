@@ -17,6 +17,7 @@
     "delete",
     "paint",
     "eraser",
+    "model_assist",
     "keyboard_only",
     "range_propagate"
   ]
