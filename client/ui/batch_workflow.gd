@@ -254,6 +254,7 @@ func clear() -> void:
 	controller.configure(null, null, null, [])
 	_range = Vector2i(-1, -1)
 	_preview = false
+	_reset_range_controls()
 	if _show_preview != null:
 		_show_preview.set_pressed_no_signal(false)
 	set_process(false)
@@ -291,11 +292,18 @@ func _process(_delta: float) -> void:
 		return
 	_first_entry.clear()
 	_last_entry.clear()
-	for frame_id: int in _range_model.frame_ids():
-		_first_entry.add_item(str(frame_id))
-		_last_entry.add_item(str(frame_id))
-	_first_entry.select(_range_model.option_for_index(int(plan.start_index)))
-	_last_entry.select(_range_model.option_for_index(int(plan.end_index)))
+	var first_selected := -1
+	for index in range(int(plan.start_index), int(plan.key_index) + 1):
+		if index == int(plan.start_index):
+			first_selected = _first_entry.item_count
+		_add_range_option(_first_entry, index)
+	var last_selected := -1
+	for index in range(int(plan.key_index), int(plan.end_index) + 1):
+		if index == int(plan.end_index):
+			last_selected = _last_entry.item_count
+		_add_range_option(_last_entry, index)
+	_first_entry.select(first_selected)
+	_last_entry.select(last_selected)
 	_range_controls.visible = _range_model.indices().size() > 1
 	_next_contiguous.visible = _algorithm.selected == 1 and _range_model.indices().size() == 1
 	var next_run := controller.find_next_contiguous_run(int(plan.end_index))
@@ -315,8 +323,8 @@ func _update_preview() -> void:
 	var plan: Dictionary = controller.get_plan()
 	if plan.is_empty():
 		return
-	var first := _range_model.index_at(_first_entry.selected)
-	var last := _range_model.index_at(_last_entry.selected)
+	var first := _selected_range_index(_first_entry)
+	var last := _selected_range_index(_last_entry)
 	if first < 0 or last < 0:
 		_apply.disabled = true
 		return
@@ -443,11 +451,10 @@ func _boundary(which: String) -> void:
 func cancel() -> void:
 	controller.cancel()
 	set_process(false)
-	_show_preview.button_pressed = false
+	_preview = false
+	_show_preview.set_pressed_no_signal(false)
 	_range = Vector2i(-1, -1)
-	_range_model.configure([], 0, 0, -1)
-	_range_controls.visible = false
-	_next_contiguous.visible = false
+	_reset_range_controls()
 	_host._timeline.set_candidate(-1, -1, -1)
 	_summary.text = "尚未选择范围"
 	_key_label.text = "在播放器中选一帧，先修正它的标注。"
@@ -582,6 +589,29 @@ func _spin(parent: Node, minimum: float, maximum: float, value: float, increment
 func _frame_id(index: int) -> int:
 	return int(_host._frame_entries[index].frame_id)
 
+func _add_range_option(selector: OptionButton, index: int) -> void:
+	var option := _range_model.option_for_index(index)
+	selector.add_item(str(_range_model.frame_ids()[option]))
+	selector.set_item_metadata(selector.item_count - 1, option)
+
+func _selected_range_index(selector: OptionButton) -> int:
+	if selector.selected < 0:
+		return -1
+	var option: Variant = selector.get_item_metadata(selector.selected)
+	return _range_model.index_at(int(option)) if typeof(option) == TYPE_INT else -1
+
+func _reset_range_controls() -> void:
+	_range_model.configure([], 0, 0, -1)
+	if _first_entry != null:
+		_first_entry.clear()
+	if _last_entry != null:
+		_last_entry.clear()
+	if _range_controls != null:
+		_range_controls.visible = false
+	if _next_contiguous != null:
+		_next_contiguous.visible = false
+		_next_contiguous.disabled = true
+
 func _no_poly_candidate_summary(plan: Dictionary) -> String:
 	if str(plan.get("right_stop", "")) != "missing original frame ID":
 		return "没有可传播的可靠相邻帧。"
@@ -603,11 +633,7 @@ func _jump_to_next_contiguous() -> void:
 		_summary.text = "没有可跳转的连续原始帧段。"
 		_next_contiguous.disabled = true
 		return
-	controller.cancel()
-	_range = Vector2i(-1, -1)
-	_range_controls.visible = false
-	_next_contiguous.visible = false
-	_host._timeline.set_candidate(-1, -1, -1)
+	cancel()
 	if _host.seek(run.x):
 		_summary.text = "已跳到下一段连续帧；请修正或选择参考帧后重新分析。"
 		_status("已跳到下一段连续帧；请修正或选择参考帧后重新分析。")
