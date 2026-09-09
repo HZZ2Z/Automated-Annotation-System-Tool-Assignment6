@@ -72,7 +72,7 @@ class ModelAssistBackend:
         checkpoint_digest = ""
         checkpoint = Path(self.checkpoint_path)
         if checkpoint.is_file() and not checkpoint.is_symlink():
-            checkpoint_digest = _sha256_bytes(checkpoint.read_bytes())
+            checkpoint_digest = _sha256_file(checkpoint)
         return {
             "backend": "sam2-image-predictor",
             "persistent": True,
@@ -84,22 +84,45 @@ class ModelAssistBackend:
     def _official_predictor(config_path: str, checkpoint_path: str, requested_device: str) -> Any:
         if requested_device not in {"auto", "cpu", "cuda"}:
             raise RuntimeError("device must be auto, cpu or cuda")
-        config = Path(config_path)
-        checkpoint = Path(checkpoint_path)
-        if not config.is_absolute() or not config.is_file():
+        raw_config = Path(config_path)
+        raw_checkpoint = Path(checkpoint_path)
+        if not raw_config.is_absolute() or not raw_config.is_file():
             raise RuntimeError("SAM2 config must be an absolute readable file")
-        if not checkpoint.is_absolute() or not checkpoint.is_file():
+        if not raw_checkpoint.is_absolute() or not raw_checkpoint.is_file():
             raise RuntimeError("SAM2 checkpoint must be an absolute readable file")
+        try:
+            config = raw_config.resolve(strict=True)
+            checkpoint = raw_checkpoint.resolve(strict=True)
+        except OSError as exc:
+            raise RuntimeError(f"SAM2 config or checkpoint cannot be resolved: {exc}") from exc
         import torch
+        import sam2
         from sam2.build_sam import build_sam2
         from sam2.sam2_image_predictor import SAM2ImagePredictor
+
+        config_name = ""
+        for raw_package_root in sam2.__path__:
+            try:
+                package_root = Path(raw_package_root).resolve(strict=True)
+                relative = config.relative_to(package_root)
+            except (OSError, ValueError):
+                continue
+            if relative.parts and relative.parts[0] == "configs":
+                config_name = relative.as_posix()
+                break
+        if not config_name:
+            raise RuntimeError(
+                "SAM2 config must be inside the installed sam2 package configs directory"
+            )
 
         if requested_device == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA was requested but is unavailable")
         actual_device = "cuda" if requested_device == "cuda" or (
             requested_device == "auto" and torch.cuda.is_available()
         ) else "cpu"
-        model = build_sam2(str(config), str(checkpoint), device=actual_device)
+        # Hydra's package search path accepts the config name relative to the
+        # installed sam2 module, even though the UI contract uses an absolute file.
+        model = build_sam2(config_name, str(checkpoint), device=actual_device)
         predictor = SAM2ImagePredictor(model)
         predictor.model_assist_device = actual_device
         return predictor
@@ -285,6 +308,14 @@ class ModelAssistBackend:
 
 def _sha256_bytes(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _decode_png(payload: bytes, mode: int, label: str) -> np.ndarray:
