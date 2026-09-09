@@ -59,16 +59,17 @@ func start_polygon_analysis(index: int) -> PackedStringArray:
 	return errors
 
 func configure_provider(provider_id: StringName, provider: Variant) -> PackedStringArray:
-	if String(provider_id).is_empty():
+	var normalized_id: StringName = StringName(String(provider_id).strip_edges())
+	if String(normalized_id).is_empty():
 		return PackedStringArray(["Provider ID must not be empty"])
-	if _providers.has(provider_id):
+	if _providers.has(normalized_id):
 		return PackedStringArray(["Provider ID is already registered"])
 	if provider == null:
 		return PackedStringArray(["Provider is missing required lifecycle methods"])
 	for method: String in PROVIDER_METHODS:
 		if not provider.has_method(method):
 			return PackedStringArray(["Provider is missing required lifecycle methods"])
-	_providers[provider_id] = provider
+	_providers[normalized_id] = provider
 	return PackedStringArray()
 
 func is_analyzing() -> bool:
