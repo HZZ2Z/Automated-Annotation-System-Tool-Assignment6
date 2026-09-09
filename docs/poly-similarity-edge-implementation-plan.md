@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.14 project `.venv`, NumPy, OpenCV DIS/GrabCut/Sobel, Godot 4.7.2 / GDScript, pytest, local Endoscapes2023.
 
-**Approved design:** `docs/superpowers/specs/2026-09-10-model-assist-poly-edge-design.md`
+**Approved design:** `docs/model-assist-poly-edge-design.md`
 
 **Execution order:** Complete this plan before the model-assist plan's real-SAM environment task. It uses only the existing project environment and produces the default Batch path independently of SAM.
 

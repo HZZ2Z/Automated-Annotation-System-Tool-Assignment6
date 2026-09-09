@@ -8,7 +8,7 @@
 
 **Tech Stack:** Godot 4.7.2 / GDScript, Python 3.10+ external Conda runtime, PyTorch, official `sam2`, OpenCV, NumPy, JSONL, pytest.
 
-**Approved design:** `docs/superpowers/specs/2026-09-10-model-assist-poly-edge-design.md`
+**Approved design:** `docs/model-assist-poly-edge-design.md`
 
 ---
 
