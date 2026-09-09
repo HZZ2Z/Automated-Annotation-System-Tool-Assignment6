@@ -11,6 +11,10 @@ import numpy as np
 MAX_VERTICES = 4096
 MAX_OUTPUT_VERTICES = 2048
 MIN_MASK_AREA = 64
+MIN_ADJACENT_AREA_RATIO = 0.75
+MAX_ADJACENT_AREA_RATIO = 1.33
+MIN_ANCHOR_AREA_RATIO = 0.60
+MAX_ANCHOR_AREA_RATIO = 1.67
 
 
 def validate_polygon(points: object, size: tuple[int, int]) -> np.ndarray:
@@ -70,6 +74,25 @@ def mask_iou(left: np.ndarray, right: np.ndarray) -> float:
     left, right = left >= 128, right >= 128
     union = np.count_nonzero(left | right)
     return float(np.count_nonzero(left & right) / union) if union else 0.0
+
+
+def candidate_mask_geometry(mask: np.ndarray, previous_mask: np.ndarray,
+                            anchor_mask: np.ndarray,
+                            original_size: tuple[int, int]) -> tuple[list[list[float]], dict[str, float]]:
+    """对 raw/refined 候选使用同一拓扑、面积和多边形转换门。"""
+    polygon = mask_to_polygon(mask, original_size)
+    area = int(np.count_nonzero(np.asarray(mask) >= 128))
+    previous_area = int(np.count_nonzero(np.asarray(previous_mask) >= 128))
+    anchor_area = int(np.count_nonzero(np.asarray(anchor_mask) >= 128))
+    if previous_area == 0 or anchor_area == 0:
+        raise ValueError("reference mask is empty")
+    area_ratio = float(area / previous_area)
+    anchor_area_ratio = float(area / anchor_area)
+    if not MIN_ADJACENT_AREA_RATIO <= area_ratio <= MAX_ADJACENT_AREA_RATIO:
+        raise ValueError("area changed beyond the supported visible-target range")
+    if not MIN_ANCHOR_AREA_RATIO <= anchor_area_ratio <= MAX_ANCHOR_AREA_RATIO:
+        raise ValueError("area changed beyond the fixed-keyframe range")
+    return polygon, {"area_ratio": area_ratio, "anchor_area_ratio": anchor_area_ratio}
 
 
 def single_mask_contour(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

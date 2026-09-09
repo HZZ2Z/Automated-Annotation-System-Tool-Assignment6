@@ -15,12 +15,13 @@ import cv2
 import numpy as np
 
 from .contracts import validate_instance
+from .polygon_edge_refinement import EdgeRefinement, refine
 from .polygon_flow import MotionPair
-from .polygon_geometry import mask_iou, mask_to_polygon, polygon_to_mask, single_mask_contour, validate_polygon
+from .polygon_geometry import candidate_mask_geometry, mask_iou, polygon_to_mask, single_mask_contour, validate_polygon
 from .similarity import similarity_gate
 
 
-METRIC_ID = "poly-flow-mask-v1"
+METRIC_ID = "poly-sim-flow-edge-v1"
 DEFAULT_SIMILARITY_THRESHOLD = 0.02
 FLOW_QUALITY_THRESHOLD = 0.65
 MAX_FRAMES = 30
@@ -128,37 +129,126 @@ def _analyse_pair(source, target, masks, check_cancel, motion_factory):
             warped.append(motion.warp_mask(mask))
         except ValueError as error:
             raise ValueError(f"region {region['id']}: {error}") from error
-    return warped, evidence
+    return motion, warped, evidence
+
+
+_EDGE_SCORE_FIELDS = {"raw_edge_score", "refined_edge_score", "raw_iou", "area_ratio", "hausdorff"}
+
+
+def _validated_edge_result(result: object, raw_mask: np.ndarray) -> tuple[np.ndarray, dict]:
+    if not isinstance(result, EdgeRefinement):
+        raise TypeError("edge refinement returned an invalid result type")
+    if type(result.accepted) is not bool or not isinstance(result.reason, str) or not 1 <= len(result.reason) <= 160:
+        raise TypeError("edge refinement returned invalid status fields")
+    if any(ord(character) < 32 for character in result.reason):
+        raise TypeError("edge refinement reason contains control characters")
+    candidate = np.asarray(result.mask)
+    if candidate.shape != raw_mask.shape or candidate.ndim != 2:
+        raise TypeError("edge refinement returned an invalid mask shape")
+    if not np.issubdtype(candidate.dtype, np.number) or not np.isfinite(candidate).all():
+        raise TypeError("edge refinement returned invalid mask values")
+    if not result.accepted and not np.array_equal(candidate, raw_mask):
+        raise TypeError("edge refinement fallback changed the raw mask")
+    if not isinstance(result.scores, dict) or set(result.scores) != _EDGE_SCORE_FIELDS:
+        raise TypeError("edge refinement returned invalid score fields")
+    scores = {}
+    for field in sorted(_EDGE_SCORE_FIELDS):
+        value = result.scores[field]
+        if isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, float, np.integer, np.floating)):
+            raise TypeError("edge refinement returned a nonnumeric score")
+        value = float(value)
+        if not math.isfinite(value):
+            raise TypeError("edge refinement returned a non-finite score")
+        scores[field] = value
+    diagnostics = {"attempted": True, "accepted": result.accepted,
+                   "reason": result.reason, **scores}
+    return candidate.copy(), diagnostics
+
+
+def _run_edge_refinement(edge_refiner, target: np.ndarray,
+                         raw_mask: np.ndarray) -> tuple[np.ndarray, dict]:
+    try:
+        result = edge_refiner(target, raw_mask)
+    except cv2.error:
+        raise
+    except ValueError as error:
+        raise TypeError("edge refinement rejected its internal inputs") from error
+    return _validated_edge_result(result, raw_mask)
 
 
 def _candidate_frame(previous, target, anchor, masks, anchor_masks, frame, size,
-                     adjacent, check_cancel, motion_factory, similarity):
+                     adjacent, check_cancel, motion_factory, edge_refiner, similarity):
     """局部作用域释放临时光流；同时持有关键帧、上一步和当前 mask 状态。"""
-    warped, qualities = _analyse_pair(previous, target, masks, check_cancel, motion_factory)
-    anchor_motion = None if adjacent else motion_factory(anchor, target, check_cancel)
+    motion, warped, qualities = _analyse_pair(previous, target, masks, check_cancel, motion_factory)
+    if adjacent:
+        anchor_motion, anchor_warped, anchor_qualities = motion, warped, qualities
+    else:
+        anchor_motion, anchor_warped, anchor_qualities = _analyse_pair(
+            anchor, target, anchor_masks, check_cancel, motion_factory
+        )
     output_regions, quality_by_id = [], {}
-    for i, ((region, prior), candidate) in enumerate(zip(masks, warped)):
+    next_masks = []
+    for i, ((region, prior), raw_candidate, raw_anchor_candidate) in enumerate(
+            zip(masks, warped, anchor_warped)):
         check_cancel()
         try:
-            polygon = mask_to_polygon(candidate, size)
-            area = np.count_nonzero(candidate >= 128)
-            ratio = float(area / np.count_nonzero(prior >= 128))
-            anchor_ratio = float(area / np.count_nonzero(anchor_masks[i][1] >= 128))
-            if not 0.75 <= ratio <= 1.33 or not 0.60 <= anchor_ratio <= 1.67:
-                raise ValueError("area changed beyond the supported visible-target range")
-            # 固定关键帧的临时 mask 逐目标计算，不缓存一整组直接预测。
-            anchor_evidence = qualities[i] if adjacent else anchor_motion.evidence(anchor_masks[i][1])
-            anchor_iou = 1.0 if adjacent else mask_iou(candidate, anchor_motion.warp_mask(anchor_masks[i][1]))
+            _, raw_geometry = candidate_mask_geometry(
+                raw_candidate, prior, anchor_masks[i][1], size
+            )
+            raw_anchor_iou = mask_iou(raw_candidate, raw_anchor_candidate)
+            if raw_anchor_iou < 0.85:
+                raise ValueError(f"fixed anchor disagreement ({raw_anchor_iou:.3f})")
+            raw_anchor_quality = min(
+                anchor_qualities[i][field] for field in ("appearance", "fb_consistency", "texture")
+            )
+            raw_quality = {
+                **qualities[i], **raw_geometry, "anchor_iou": raw_anchor_iou,
+                "anchor_quality": raw_anchor_quality,
+            }
+            raw_quality["score"] = min(
+                raw_quality[field] for field in
+                ("appearance", "fb_consistency", "texture", "anchor_iou", "anchor_quality")
+            )
+            if raw_quality["score"] < FLOW_QUALITY_THRESHOLD:
+                raise ValueError(
+                    f"quality {raw_quality['score']:.3f} below threshold {FLOW_QUALITY_THRESHOLD:.3f}"
+                )
+
+            check_cancel()
+            candidate, edge = _run_edge_refinement(edge_refiner, target, raw_candidate)
+            check_cancel()
+            anchor_candidate, _ = _run_edge_refinement(
+                edge_refiner, target, raw_anchor_candidate
+            )
+            check_cancel()
+
+            polygon, final_geometry = candidate_mask_geometry(
+                candidate, prior, anchor_masks[i][1], size
+            )
+            anchor_iou = mask_iou(candidate, anchor_candidate)
             if anchor_iou < 0.85:
                 raise ValueError(f"fixed anchor disagreement ({anchor_iou:.3f})")
-            quality = {**qualities[i], "anchor_iou": anchor_iou, "area_ratio": ratio,
-                       "anchor_area_ratio": anchor_ratio}
-            quality["anchor_quality"] = min(anchor_evidence[field] for field in ("appearance", "fb_consistency", "texture"))
-            quality["score"] = min(quality[field] for field in ("appearance", "fb_consistency", "texture", "anchor_iou", "anchor_quality"))
-            quality["adjacent_mad"] = similarity["adjacent_mad"]
-            quality["keyframe_mad"] = similarity["keyframe_mad"]
+            # 光流证据定义在 source 坐标；选择 refined/fallback 后重新执行相同证据门。
+            final_evidence = motion.evidence(prior)
+            final_anchor_evidence = anchor_motion.evidence(anchor_masks[i][1])
+            anchor_quality = min(
+                final_anchor_evidence[field]
+                for field in ("appearance", "fb_consistency", "texture")
+            )
+            quality = {
+                **final_evidence, **final_geometry, "anchor_iou": anchor_iou,
+                "anchor_quality": anchor_quality, "adjacent_mad": similarity["adjacent_mad"],
+                "keyframe_mad": similarity["keyframe_mad"], "raw_flow": raw_quality,
+                "edge": edge,
+            }
+            quality["score"] = min(
+                quality[field] for field in
+                ("appearance", "fb_consistency", "texture", "anchor_iou", "anchor_quality")
+            )
             if quality["score"] < FLOW_QUALITY_THRESHOLD:
-                raise ValueError(f"quality {quality['score']:.3f} below threshold {FLOW_QUALITY_THRESHOLD:.3f}")
+                raise ValueError(
+                    f"quality {quality['score']:.3f} below threshold {FLOW_QUALITY_THRESHOLD:.3f}"
+                )
             updated = deepcopy(region)
             updated["polygon"] = polygon
             if "box" in updated:
@@ -166,16 +256,17 @@ def _candidate_frame(previous, target, anchor, masks, anchor_masks, frame, size,
                 updated["box"] = [*vertices.min(axis=0).tolist(), *np.ptp(vertices, axis=0).tolist()]
             output_regions.append(updated)
             quality_by_id[region["id"]] = quality
+            next_masks.append((region, candidate))
         except ValueError as error:
             raise ValueError(f"region {region['id']}: {error}") from error
     proposal = {"index": int(frame["index"]), "frame_id": int(frame["frame_id"]),
                 "regions": output_regions, "quality": quality_by_id}
-    return proposal, [(region, mask) for (region, _), mask in zip(masks, warped)]
+    return proposal, next_masks
 
 
 def propagate(request: dict, *, cancelled: Callable[[], bool] | None = None,
               progress: Callable[[dict], None] | None = None,
-              motion_factory=MotionPair) -> dict:
+              motion_factory=MotionPair, edge_refiner=refine) -> dict:
     """消耗独立图像快照，返回连续候选闭区间；失败/取消丢弃全部临时结果。"""
     def check_cancel():
         if cancelled is not None and cancelled():
@@ -240,7 +331,7 @@ def propagate(request: dict, *, cancelled: Callable[[], bool] | None = None,
                 try:
                     proposal, next_masks = _candidate_frame(previous, target, anchor, masks, anchor_masks,
                                                             frame, size, abs(position - key_position) == 1,
-                                                            check_cancel, motion_factory, similarity)
+                                                            check_cancel, motion_factory, edge_refiner, similarity)
                     proposals.append(proposal)
                 except ValueError as error:
                     stops[name] = f"frame {frame['index']}: {error}"
