@@ -112,6 +112,8 @@ Fill 由纯函数 `FillRegionSolver.solve` 先严格求包含种子的封闭空�
 
 编辑命令的内部契约为 `apply(store) -> PackedStringArray` 与 `revert(store) -> PackedStringArray`，均须在验证通过后原子修改 Store。`CommandHistory.try_undo(store)` 检查 revert 结果，失败保持两侧栈并把错误交给 Main；`undo(store) -> bool` 保留为包装。execute/redo 同样在成功后才移动栈，全局容量 200。范围恢复使用 `AnnotationStore.restore_corrected_records`，整批记录与传播日志同时提交后才发出变更信号。这些命令/参考插件能力没有改变 Stage V1 的必需方法签名或 Model Output V1。
 
+批量页不是 EditStage 插件方法的扩展。`BatchController` 通过受限 provider 生命周期（availability/begin/step/cancel/get_result/validate_source）调用默认 `polygon_flow` provider；provider 只能返回冻结的逐帧候选，不能写 Store 或确认帧。生产 provider 的 `metric_id` 为 `poly-sim-flow-edge-v1`：它在同一批冻结 PNG 上先执行相邻帧和固定关键帧 MAD 门，再做 DIS 光流和有界 GrabCut/Sobel 边缘精修。覆盖/合并、预览、一次性 `ApplyPropagationCommand`、v2 batch marker、undo/redo、保存和人工确认仍由应用层拥有；候选 polygon 保持 Model Output V1 单环约束。第三方 provider 必须返回独立候选及完整诊断，并接受提交前 stale 校验，不能把算法分数解释为验证状态。
+
 ### FeedbackStage
 
 继承 `client/pipeline/stages/feedback_stage.gd` 并实现：
