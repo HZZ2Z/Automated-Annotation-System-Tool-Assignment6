@@ -4,11 +4,14 @@ extends VBoxContainer
 signal tool_requested(tool_id: StringName)
 signal unavailable_tool_requested(tool_id: StringName)
 signal tool_option_changed(tool_id: StringName, option_id: StringName, value: Variant)
-signal fill_repair_action(action: StringName)
+signal tool_action_requested(action_id: StringName)
 
 const COMPACT_ICON_MAX_WIDTH := 16
 const COMPACT_FONT_SIZE := 11
 const REQUIRED_FIELDS := ["id", "node_name", "label", "implemented", "tooltip", "icon_path"]
+const SESSION_FIELDS := ["actions", "badge", "status", "summary", "tool_id"]
+const ACTION_FIELDS := ["enabled", "id", "label", "primary"]
+const MAX_SESSION_ACTIONS := 8
 
 @onready var _grid: GridContainer = $ToolGrid
 @onready var _option_row: Control = $OptionRow
@@ -23,27 +26,73 @@ var _definitions: Array[Dictionary] = []
 var _option_values: Dictionary = {}
 var _active_option: Dictionary = {}
 var _syncing_option := false
-var _repair_actions: HBoxContainer
+var _session_panel: VBoxContainer
+var _session_status: Label
+var _session_badge: Label
+var _session_summary: Label
+var _session_actions: HBoxContainer
+var _session_snapshot: Dictionary = {}
 
 
 func _ready() -> void:
 	_option_value.value_changed.connect(_on_option_value_changed)
 	_option_row.visible = false
-	_repair_actions = HBoxContainer.new()
-	_repair_actions.name = "FillRepairActions"
-	add_child(_repair_actions)
-	for definition: Array in [["Apply fill", &"confirm_fill_repair"], ["Cancel", &"cancel_fill_repair"]]:
+	_session_panel = VBoxContainer.new()
+	_session_panel.name = "SessionPanel"
+	add_child(_session_panel)
+	_session_status = Label.new()
+	_session_status.name = "Status"
+	_session_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_session_panel.add_child(_session_status)
+	_session_badge = Label.new()
+	_session_badge.name = "Badge"
+	_session_badge.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_session_panel.add_child(_session_badge)
+	_session_summary = Label.new()
+	_session_summary.name = "Summary"
+	_session_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_session_panel.add_child(_session_summary)
+	_session_actions = HBoxContainer.new()
+	_session_actions.name = "Actions"
+	_session_panel.add_child(_session_actions)
+	_session_panel.hide()
+
+
+func set_session_panel(snapshot: Dictionary) -> PackedStringArray:
+	if snapshot.is_empty():
+		_session_snapshot.clear()
+		_clear_session_buttons()
+		if is_instance_valid(_session_panel):
+			_session_panel.hide()
+		return PackedStringArray()
+	var errors := _validate_session_panel(snapshot)
+	if not errors.is_empty():
+		return errors
+	_session_snapshot = snapshot.duplicate(true)
+	if not is_instance_valid(_session_panel):
+		return PackedStringArray(["session_panel: ToolPanel is not ready"])
+	_session_status.text = str(_session_snapshot.status)
+	_session_badge.text = str(_session_snapshot.badge)
+	_session_badge.visible = not _session_badge.text.is_empty()
+	_session_summary.text = str(_session_snapshot.summary)
+	_clear_session_buttons()
+	for action: Dictionary in _session_snapshot.actions:
 		var button := Button.new()
-		button.text = definition[0]
+		button.name = "Action%d" % _session_actions.get_child_count()
+		button.text = str(action.label)
+		button.disabled = not bool(action.enabled)
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.pressed.connect(func(): fill_repair_action.emit(definition[1]))
-		_repair_actions.add_child(button)
-	_repair_actions.hide()
+		button.set_meta("action_id", StringName(action.id))
+		if bool(action.primary):
+			button.add_theme_color_override("font_color", Color("#22c55e"))
+		button.pressed.connect(_on_session_action_pressed.bind(StringName(action.id)))
+		_session_actions.add_child(button)
+	_session_panel.show()
+	return PackedStringArray()
 
 
-func set_fill_repair_visible(enabled: bool) -> void:
-	if is_instance_valid(_repair_actions):
-		_repair_actions.visible = enabled
+func get_session_panel_snapshot() -> Dictionary:
+	return _session_snapshot.duplicate(true)
 
 
 func validate_tools(definitions: Array[Dictionary]) -> PackedStringArray:
@@ -226,6 +275,79 @@ func _valid_option_value(option: Dictionary, value: Variant) -> bool:
 	var min_value := float(option.get("min", 0.0))
 	var max_value := float(option.get("max", 0.0))
 	return float(value) >= min_value and float(value) <= max_value
+
+
+func _validate_session_panel(snapshot: Dictionary) -> PackedStringArray:
+	var errors := PackedStringArray()
+	if not _keys_equal(snapshot, SESSION_FIELDS):
+		errors.append("session_panel: expected exactly tool_id/status/badge/summary/actions")
+		return errors
+	var tool_id: Variant = snapshot.get("tool_id")
+	if (typeof(tool_id) not in [TYPE_STRING, TYPE_STRING_NAME] or String(tool_id).is_empty()
+			or not String(tool_id).is_valid_identifier()):
+		errors.append("session_panel.tool_id: expected non-empty identifier")
+	for field: String in ["status", "badge", "summary"]:
+		if not snapshot.get(field) is String:
+			errors.append("session_panel.%s: expected String" % field)
+	var actions: Variant = snapshot.get("actions")
+	if not actions is Array:
+		errors.append("session_panel.actions: expected Array")
+		return errors
+	if actions.size() > MAX_SESSION_ACTIONS:
+		errors.append("session_panel.actions: expected at most %d actions" % MAX_SESSION_ACTIONS)
+	var ids := {}
+	var primary_count := 0
+	for index in range(actions.size()):
+		var value: Variant = actions[index]
+		if not value is Dictionary:
+			errors.append("session_panel.actions.%d: expected Dictionary" % index)
+			continue
+		var action: Dictionary = value
+		if not _keys_equal(action, ACTION_FIELDS):
+			errors.append("session_panel.actions.%d: expected exactly id/label/enabled/primary" % index)
+			continue
+		var action_id: Variant = action.get("id")
+		if (typeof(action_id) not in [TYPE_STRING, TYPE_STRING_NAME] or String(action_id).is_empty()
+				or not String(action_id).is_valid_identifier()):
+			errors.append("session_panel.actions.%d.id: expected non-empty identifier" % index)
+		elif ids.has(StringName(action_id)):
+			errors.append("session_panel.actions.%d.id: duplicate %s" % [index, action_id])
+		else:
+			ids[StringName(action_id)] = true
+		if not action.get("label") is String or str(action.get("label")).is_empty():
+			errors.append("session_panel.actions.%d.label: expected non-empty String" % index)
+		if not action.get("enabled") is bool:
+			errors.append("session_panel.actions.%d.enabled: expected bool" % index)
+		if not action.get("primary") is bool:
+			errors.append("session_panel.actions.%d.primary: expected bool" % index)
+		elif action.primary:
+			primary_count += 1
+	if primary_count > 1:
+		errors.append("session_panel.actions: expected at most one primary action")
+	return errors
+
+
+func _clear_session_buttons() -> void:
+	if not is_instance_valid(_session_actions):
+		return
+	for child: Node in _session_actions.get_children():
+		_session_actions.remove_child(child)
+		child.queue_free()
+
+
+func _on_session_action_pressed(action_id: StringName) -> void:
+	tool_action_requested.emit(action_id)
+
+
+func _keys_equal(value: Dictionary, expected: Array) -> bool:
+	var actual: Array = value.keys()
+	for key: Variant in actual:
+		if not key is String:
+			return false
+	actual.sort()
+	var sorted_expected := expected.duplicate()
+	sorted_expected.sort()
+	return actual == sorted_expected
 
 
 func _prepare_tools(definitions: Array[Dictionary], errors: PackedStringArray) -> Array[Dictionary]:

@@ -1388,12 +1388,12 @@ func _try_draft_history(redo: bool) -> bool:
 	return true
 
 
-func _on_fill_repair_action(action: StringName) -> void:
+func _on_tool_action_requested(action: StringName) -> void:
 	if _edit_plugin == null:
 		return
 	var errors: PackedStringArray = _edit_plugin.invoke(action)
 	if not errors.is_empty():
-		_show_errors("Fill refused", errors)
+		_show_errors("Tool action refused", errors)
 	_sync_tool_panel()
 	_viewport.grab_focus()
 
@@ -1690,7 +1690,7 @@ func _on_edit_state_changed(state: Dictionary) -> void:
 		"navigation_blocked": bool(state.get("navigation_blocked", false)),
 		"draft_active": bool(state.get("draft_active", false)),
 		"draft_history": state.get("draft_history", {}).duplicate(true),
-		"fill_repair": bool(state.get("fill_repair", false)),
+		"session_panel": state.get("session_panel", {}).duplicate(true) if state.get("session_panel") is Dictionary else {},
 		"message": str(state.get("message", "")),
 	}.duplicate(true)
 	if next_state == _edit_state:
@@ -1903,7 +1903,7 @@ func _connect_ui() -> void:
 	_tool_panel.tool_requested.connect(_on_tool_requested)
 	_tool_panel.unavailable_tool_requested.connect(_on_unavailable_tool_requested)
 	_tool_panel.tool_option_changed.connect(_on_tool_option_changed)
-	_tool_panel.fill_repair_action.connect(_on_fill_repair_action)
+	_tool_panel.tool_action_requested.connect(_on_tool_action_requested)
 	_source_dialog.file_selected.connect(_on_file_selected)
 	_source_dialog.dir_selected.connect(_on_directory_selected)
 	_export_dialog.dir_selected.connect(_on_export_parent_selected)
@@ -2016,7 +2016,9 @@ func _sync_tool_panel() -> void:
 		if typeof(value) == TYPE_STRING or typeof(value) == TYPE_STRING_NAME:
 			active_tool = StringName(value)
 	_tool_panel.set_active_tool(active_tool)
-	_tool_panel.set_fill_repair_visible(bool(_edit_state.get("fill_repair", false)))
+	var panel_errors: PackedStringArray = _tool_panel.set_session_panel(_edit_state.get("session_panel", {}))
+	if not panel_errors.is_empty():
+		_set_status(panel_errors[0])
 
 
 func _tool_display_name(tool_id: StringName) -> String:

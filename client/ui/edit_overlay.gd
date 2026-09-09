@@ -7,6 +7,9 @@ const DRAWING_COLOR := Color("#22d3ee")
 const CANDIDATE_COLOR := Color("#22c55e")
 const WORKING_MASK_COLOR := Color("#f97316")
 const INVALID_COLOR := Color("#ef4444")
+const POSITIVE_PROMPT_COLOR := Color("#22c55e")
+const NEGATIVE_PROMPT_COLOR := Color("#ef4444")
+const PROMPT_BOX_COLOR := Color("#22d3ee")
 const LINE_WIDTH := 2.0
 const POINT_RADIUS := 3.0
 const MASK_ALPHA := 0.45
@@ -76,7 +79,69 @@ func _draw() -> void:
 	_draw_candidate(color)
 	_draw_path(color)
 	_draw_vertices(color)
+	_draw_model_prompts()
 	_draw_brush_cursor(color)
+
+
+func get_prompt_draw_commands() -> Array:
+	return _prompt_draw_commands().duplicate(true)
+
+
+func _draw_model_prompts() -> void:
+	for command: Dictionary in _prompt_draw_commands():
+		if command.kind == &"prompt_point":
+			var center: Vector2 = command.center
+			var point_color: Color = command.color
+			draw_circle(center, 7.0, Color("#111827"))
+			draw_circle(center, 5.5, point_color)
+			draw_line(center + Vector2(-3.0, 0.0), center + Vector2(3.0, 0.0), Color.WHITE, 1.5, true)
+			if command.positive:
+				draw_line(center + Vector2(0.0, -3.0), center + Vector2(0.0, 3.0), Color.WHITE, 1.5, true)
+		elif command.kind == &"prompt_box":
+			_draw_dashed_rect(command.rect, command.color)
+
+
+func _prompt_draw_commands() -> Array:
+	var commands: Array = []
+	if not _valid_transform():
+		return commands
+	var positive: Variant = _state.get("positive_points", PackedVector2Array())
+	if positive is PackedVector2Array:
+		for point: Vector2 in positive:
+			if point.is_finite():
+				commands.append({"kind": &"prompt_point", "center": _transform.image_to_viewport(point), "positive": true, "glyph": "+", "color": POSITIVE_PROMPT_COLOR})
+	var negative: Variant = _state.get("negative_points", PackedVector2Array())
+	if negative is PackedVector2Array:
+		for point: Vector2 in negative:
+			if point.is_finite():
+				commands.append({"kind": &"prompt_point", "center": _transform.image_to_viewport(point), "positive": false, "glyph": "-", "color": NEGATIVE_PROMPT_COLOR})
+	var box: Variant = _state.get("prompt_box")
+	if box is Rect2 and box.size.x > 0.0 and box.size.y > 0.0:
+		var top_left: Vector2 = _transform.image_to_viewport(box.position)
+		var bottom_right: Vector2 = _transform.image_to_viewport(box.end)
+		commands.append({"kind": &"prompt_box", "rect": Rect2(top_left, bottom_right - top_left).abs(), "dashed": true, "color": PROMPT_BOX_COLOR})
+	return commands
+
+
+func _draw_dashed_rect(rect: Rect2, color: Color) -> void:
+	var top_left := rect.position
+	var top_right := Vector2(rect.end.x, rect.position.y)
+	var bottom_right := rect.end
+	var bottom_left := Vector2(rect.position.x, rect.end.y)
+	for segment: Array in [[top_left, top_right], [top_right, bottom_right], [bottom_right, bottom_left], [bottom_left, top_left]]:
+		_draw_dashed_line(segment[0], segment[1], color)
+
+
+func _draw_dashed_line(start: Vector2, finish: Vector2, color: Color) -> void:
+	var length := start.distance_to(finish)
+	if length <= 0.0:
+		return
+	var direction := (finish - start) / length
+	var offset := 0.0
+	while offset < length:
+		var dash_end := minf(offset + 7.0, length)
+		draw_line(start + direction * offset, start + direction * dash_end, color, LINE_WIDTH, true)
+		offset += 12.0
 
 
 func _draw_vertices(color: Color) -> void:

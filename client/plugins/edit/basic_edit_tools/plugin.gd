@@ -116,9 +116,24 @@ func get_edit_state() -> Dictionary:
 		"navigation_blocked": _session.has_working_mask() or _session.has_pending_class_assignment() or _session.has_fill_repair(),
 		"draft_active": _session.has_working_mask() or _session.has_fill_repair(),
 		"draft_history": _session.draft_counts(),
-		"fill_repair": _session.has_fill_repair(),
+		"session_panel": _fill_session_panel(),
 		"message": String(_session.message),
 	}.duplicate(true)
+
+
+func _fill_session_panel() -> Dictionary:
+	if not _session.has_fill_repair():
+		return {}
+	return {
+		"tool_id": &"fill",
+		"status": "candidate",
+		"badge": "",
+		"summary": str(_session.message),
+		"actions": [
+			{"id": &"confirm_fill_repair", "label": "Apply fill", "enabled": true, "primary": true},
+			{"id": &"cancel_fill_repair", "label": "Cancel", "enabled": true, "primary": false},
+		],
+	}
 
 
 func invoke(action_id: StringName, payload: Dictionary = {}) -> PackedStringArray:
