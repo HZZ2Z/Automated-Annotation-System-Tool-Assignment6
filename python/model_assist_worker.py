@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from contextlib import redirect_stdout
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -36,12 +37,23 @@ def _best_effort_request_id(raw: bytes) -> str:
     return match.group(1).decode("utf-8", errors="replace") or "invalid"
 
 
-def _dispatch(backend: Any, request: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+def _dispatch(
+    backend: Any,
+    request: dict[str, Any],
+    *,
+    service_session_id: str = "",
+) -> tuple[dict[str, Any], bool]:
     op = request["op"]
     data = request["data"]
     with redirect_stdout(sys.stderr):
         if op == "hello":
             result = backend.hello()
+            if service_session_id:
+                result = {
+                    **result,
+                    "session_id": service_session_id,
+                    "pid": os.getpid(),
+                }
         elif op == "set_image":
             image = data["image"]
             result = backend.set_image(
@@ -60,7 +72,13 @@ def _dispatch(backend: Any, request: dict[str, Any]) -> tuple[dict[str, Any], bo
     return success_response(request, result), op == "shutdown"
 
 
-def run_loop(backend: Any, source: BinaryIO, output: BinaryIO) -> int:
+def run_loop(
+    backend: Any,
+    source: BinaryIO,
+    output: BinaryIO,
+    *,
+    service_session_id: str = "",
+) -> int:
     """Serve bounded requests until shutdown or clean EOF."""
     try:
         while True:
@@ -70,7 +88,9 @@ def run_loop(backend: Any, source: BinaryIO, output: BinaryIO) -> int:
             request: dict[str, Any] | None = None
             try:
                 request = loads_line(raw)
-                response, should_stop = _dispatch(backend, request)
+                response, should_stop = _dispatch(
+                    backend, request, service_session_id=service_session_id
+                )
             except Exception as exc:
                 request_id = request["request_id"] if request is not None else _best_effort_request_id(raw)
                 context = request["context"] if request is not None else {}
@@ -90,6 +110,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
+    parser.add_argument("--session-id", required=True)
     return parser
 
 
@@ -103,7 +124,12 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"model assist worker startup failed: {exc}", file=sys.stderr)
         return 2
-    return run_loop(backend, sys.stdin.buffer, sys.stdout.buffer)
+    return run_loop(
+        backend,
+        sys.stdin.buffer,
+        sys.stdout.buffer,
+        service_session_id=args.session_id,
+    )
 
 
 if __name__ == "__main__":
