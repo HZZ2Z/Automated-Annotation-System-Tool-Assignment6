@@ -3,6 +3,7 @@ extends Node
 
 const CONTROLLER := preload("res://client/services/batch_controller.gd")
 const REVIEW := preload("res://client/domain/commands/review_frames_command.gd")
+const RANGE_MODEL := preload("res://client/ui/batch_range_model.gd")
 var controller = CONTROLLER.new()
 var _host: Variant
 var _store: Variant
@@ -11,8 +12,10 @@ var _scroll: ScrollContainer
 var _info: Label
 var _summary: Label
 var _current: Label
-var _first: SpinBox
-var _last: SpinBox
+var _first_entry: OptionButton
+var _last_entry: OptionButton
+var _range_controls: HBoxContainer
+var _range_model = RANGE_MODEL.new()
 var _threshold: SpinBox
 var _mode: OptionButton
 var _algorithm: OptionButton
@@ -38,6 +41,7 @@ var _edges: HBoxContainer
 var _cancel: Button
 var _annotation_tab: Button
 var _batch_tab: Button
+var _next_contiguous: Button
 
 func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_host = host
@@ -91,17 +95,22 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_algorithm.item_selected.connect(_select_algorithm)
 	_analyze = _button("以当前帧查找相似段", analyze)
 	_section("2  应用标注")
-	var range_row := HBoxContainer.new()
-	_panel.add_child(range_row)
-	_first = _spin(range_row, 0, 0, 0, 1)
-	_first.tooltip_text = "起始帧号，只能缩短候选范围"
+	_range_controls = HBoxContainer.new()
+	_panel.add_child(_range_controls)
+	_first_entry = OptionButton.new()
+	_first_entry.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_first_entry.tooltip_text = "起始候选帧，只能缩短候选范围"
+	_range_controls.add_child(_first_entry)
 	var through := Label.new()
 	through.text = "至"
-	range_row.add_child(through)
-	_last = _spin(range_row, 0, 0, 0, 1)
-	_last.tooltip_text = "结束帧号，范围必须包含参考帧"
-	_first.value_changed.connect(func(_value: float): _update_preview())
-	_last.value_changed.connect(func(_value: float): _update_preview())
+	_range_controls.add_child(through)
+	_last_entry = OptionButton.new()
+	_last_entry.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_last_entry.tooltip_text = "结束候选帧，范围必须包含参考帧"
+	_range_controls.add_child(_last_entry)
+	_range_controls.visible = false
+	_first_entry.item_selected.connect(func(_option: int): _update_preview())
+	_last_entry.item_selected.connect(func(_option: int): _update_preview())
 	_edges = HBoxContainer.new()
 	_panel.add_child(_edges)
 	for pair: Array in [["首帧", "first"], ["末帧", "last"]]:
@@ -118,6 +127,8 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_mode_hint = _label("替换目标帧的全部标注。")
 	_mode_hint.add_theme_color_override("font_color", Color("#b4bac5"))
 	_summary = _label("尚未选择范围")
+	_next_contiguous = _button("跳到下一段连续帧", _jump_to_next_contiguous, false)
+	_next_contiguous.visible = false
 	_show_preview = CheckButton.new()
 	_show_preview.text = "预览传播结果"
 	_panel.add_child(_show_preview)
@@ -273,12 +284,23 @@ func _process(_delta: float) -> void:
 		return
 	_range = Vector2i(plan.start_index, plan.end_index)
 	_setting = true
-	_first.min_value = _frame_id(plan.start_index)
-	_first.max_value = plan.keyframe
-	_last.min_value = plan.keyframe
-	_last.max_value = _frame_id(plan.end_index)
-	_first.value = _frame_id(plan.start_index)
-	_last.value = _frame_id(plan.end_index)
+	var range_errors := _range_model.configure(_host._frame_entries, int(plan.start_index), int(plan.key_index), int(plan.end_index))
+	if not range_errors.is_empty():
+		_setting = false
+		_status(range_errors[0])
+		return
+	_first_entry.clear()
+	_last_entry.clear()
+	for frame_id: int in _range_model.frame_ids():
+		_first_entry.add_item(str(frame_id))
+		_last_entry.add_item(str(frame_id))
+	_first_entry.select(_range_model.option_for_index(int(plan.start_index)))
+	_last_entry.select(_range_model.option_for_index(int(plan.end_index)))
+	_range_controls.visible = _range_model.indices().size() > 1
+	_next_contiguous.visible = _algorithm.selected == 1 and _range_model.indices().size() == 1
+	var next_run := controller.find_next_contiguous_run(int(plan.end_index))
+	_next_contiguous.disabled = next_run.x < 0
+	_next_contiguous.tooltip_text = "没有可跳转的连续段" if next_run.x < 0 else "跳到连续原始帧段的起点"
 	_setting = false
 	_info.visible = false
 	_key_label.text = "参考帧 %d · %d 个区域" % [plan.keyframe, _host._store.get_corrected_record(plan.keyframe).regions.size()]
@@ -293,8 +315,11 @@ func _update_preview() -> void:
 	var plan: Dictionary = controller.get_plan()
 	if plan.is_empty():
 		return
-	var first := int(plan.key_index) + int(_first.value) - int(plan.keyframe)
-	var last := int(plan.key_index) + int(_last.value) - int(plan.keyframe)
+	var first := _range_model.index_at(_first_entry.selected)
+	var last := _range_model.index_at(_last_entry.selected)
+	if first < 0 or last < 0:
+		_apply.disabled = true
+		return
 	var preview: Dictionary = controller.preview(first, last, "overwrite" if _mode.selected == 0 else "merge")
 	if not preview.get("errors", []).is_empty():
 		_apply.disabled = true
@@ -302,7 +327,7 @@ func _update_preview() -> void:
 	_range = Vector2i(first, last)
 	_summary.text = "%d 帧 · 将修改 %d 帧" % [preview.covered_count, preview.changed_count]
 	if preview.changed_count == 0:
-		_summary.text = "没有可传播的可靠相邻帧，详见高级设置。" if _algorithm.selected == 1 and preview.covered_count == 1 else "标注已一致，无需应用。"
+		_summary.text = _no_poly_candidate_summary(plan) if _algorithm.selected == 1 and preview.covered_count == 1 else "标注已一致，无需应用。"
 	_summary.tooltip_text = "新增 %d 个区域，替换 %d 个，删除 %d 个" % [preview.added, preview.replaced, preview.removed]
 	_apply.text = "应用到 %d 帧" % preview.changed_count
 	if _host._store.get_corrected_record(plan.keyframe).regions.is_empty() and _mode.selected == 0:
@@ -420,6 +445,9 @@ func cancel() -> void:
 	set_process(false)
 	_show_preview.button_pressed = false
 	_range = Vector2i(-1, -1)
+	_range_model.configure([], 0, 0, -1)
+	_range_controls.visible = false
+	_next_contiguous.visible = false
 	_host._timeline.set_candidate(-1, -1, -1)
 	_summary.text = "尚未选择范围"
 	_key_label.text = "在播放器中选一帧，先修正它的标注。"
@@ -461,8 +489,8 @@ func refresh_current() -> void:
 	_apply.disabled = not enabled or not controller.can_apply()
 	_verify_range.disabled = not enabled or _range.x < 0 or _preview
 	_verify_current.disabled = not enabled or _preview
-	_first.editable = enabled and not controller.get_plan().is_empty()
-	_last.editable = _first.editable
+	_first_entry.disabled = not enabled or controller.get_plan().is_empty() or _range_model.indices().size() <= 1
+	_last_entry.disabled = _first_entry.disabled
 	_show_preview.disabled = not enabled or controller.get_plan().is_empty()
 	_preview_note.visible = _preview
 	_cancel.visible = controller.is_analyzing() or not controller.get_plan().is_empty()
@@ -553,6 +581,39 @@ func _spin(parent: Node, minimum: float, maximum: float, value: float, increment
 
 func _frame_id(index: int) -> int:
 	return int(_host._frame_entries[index].frame_id)
+
+func _no_poly_candidate_summary(plan: Dictionary) -> String:
+	if str(plan.get("right_stop", "")) != "missing original frame ID":
+		return "没有可传播的可靠相邻帧。"
+	var next_index := int(plan.end_index) + 1
+	if next_index < 0 or next_index >= _host._frame_entries.size():
+		return "没有可传播的可靠相邻帧。"
+	var end_id := int(_host._frame_entries[int(plan.end_index)].frame_id)
+	var next_id := int(_host._frame_entries[next_index].frame_id)
+	return "Poly 无法跨越缺失原始帧 %d–%d；下一个可接受帧为 %d。" % [end_id + 1, next_id - 1, next_id]
+
+func _jump_to_next_contiguous() -> void:
+	if not _ready_for_action():
+		return
+	var plan := controller.get_plan()
+	if plan.is_empty():
+		return
+	var run := controller.find_next_contiguous_run(int(plan.end_index))
+	if run.x < 0:
+		_summary.text = "没有可跳转的连续原始帧段。"
+		_next_contiguous.disabled = true
+		return
+	controller.cancel()
+	_range = Vector2i(-1, -1)
+	_range_controls.visible = false
+	_next_contiguous.visible = false
+	_host._timeline.set_candidate(-1, -1, -1)
+	if _host.seek(run.x):
+		_summary.text = "已跳到下一段连续帧；请修正或选择参考帧后重新分析。"
+		_status("已跳到下一段连续帧；请修正或选择参考帧后重新分析。")
+	else:
+		_status("下一段连续帧加载失败，已停止。")
+	refresh_current()
 
 func _select_algorithm(index: int) -> void:
 	cancel()

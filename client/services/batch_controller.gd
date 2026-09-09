@@ -77,6 +77,31 @@ func cancel() -> void:
 	_key_record.clear()
 	last_error = ""
 
+func find_next_contiguous_run(after_index: int, min_length: int = 2) -> Vector2i:
+	if min_length < 2 or after_index < -1 or after_index >= _entries.size() - 1:
+		return Vector2i(-1, -1)
+	var run_start := -1
+	var run_length := 0
+	for index in range(maxi(after_index + 2, 1), _entries.size()):
+		var previous: Variant = _entries[index - 1].get("frame_id")
+		var current: Variant = _entries[index].get("frame_id")
+		if typeof(previous) != TYPE_INT or typeof(current) != TYPE_INT:
+			run_start = -1
+			run_length = 0
+			continue
+		if int(current) == int(previous) + 1:
+			if run_length == 0:
+				run_start = index - 1
+				run_length = 2
+			else:
+				run_length += 1
+		else:
+			if run_length >= min_length:
+				return Vector2i(run_start, index - 1)
+			run_start = -1
+			run_length = 0
+	return Vector2i(run_start, _entries.size() - 1) if run_length >= min_length else Vector2i(-1, -1)
+
 func preview(first: int, last: int, mode: String) -> Dictionary:
 	_preview = {}
 	if _plan.is_empty() or first < int(_plan.start_index) or last > int(_plan.end_index) or first > int(_plan.key_index) or last < int(_plan.key_index) or mode not in ["overwrite", "merge"]:
