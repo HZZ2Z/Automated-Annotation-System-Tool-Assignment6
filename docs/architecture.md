@@ -64,7 +64,7 @@ MainVBox
 
 `DatasetExplorer` 有工作区树和旧 Source 呈现两种只读模式，不是通用文件管理器。工作区模式只列出嵌套文件夹和逻辑媒体；视频和数字图片序列不在左树逐帧物化。选择媒体只发出一次请求，候选 Source、标注和编辑会话都验证后才事务替换当前界面。旧 Source 模式仍保留连续帧列表；超过 500 帧时只物化总数和当前帧，避免为 10,000 帧创建 10,000 个 `TreeItem`。
 
-中央 `AnnotationViewport`、所选 Renderer 和图像坐标变换是唯一显示路径。右侧 `AnnotationSidebar` 显示项目类别与当前帧标注，其下方固定无分类、四列七工具区。Part 2.2 的工具 ID、名称、图标和可用性由 Edit plugin descriptors 提供。
+中央 `AnnotationViewport`、所选 Renderer 和图像坐标变换是唯一显示路径。右侧 `AnnotationSidebar` 显示项目类别与当前帧标注，其下方固定无分类、四列工具区。工具区保留 Part 2.2 的 7 个 Assignment 工具，并追加第八个单帧 Model Assist。工具 ID、名称、图标和可用性均由 Edit plugin descriptors 提供。
 
 各层所有权如下：
 
@@ -169,13 +169,13 @@ zoom/Fit/pan 不清除 overlay。开始编辑会暂停播放；切帧、seek 或
 
 #### 3.3.4 工具清单与键盘语义
 
-工具栏为 7 个工具：Add Box、Subtract、Lasso、Fill、Paint、Eraser 和 Select。Select 统一选中、拖动移动、box/polygon 八柄缩放与 1/5/10 image-px keyboard nudge。命中先取最上层内部区域；无内部命中才按 6 viewport-px 容差查边缘。缩放柄在 8 viewport px 内取最近者，所有保存几何仍为 image-space。
+工具栏保留 7 个 Assignment 工具：Add Box、Subtract、Lasso、Fill、Paint、Eraser 和 Select，并追加 Model Assist。Select 统一选中、拖动移动、box/polygon 八柄缩放与 1/5/10 image-px keyboard nudge。命中先取最上层内部区域；无内部命中才按 6 viewport-px 容差查边缘。缩放柄在 8 viewport px 内取最近者，所有保存几何仍为 image-space。
 
 Paint/Eraser 共用 1–40 image-px 圆形笔刷，默认半径 8 px；选中工具即显示跟随鼠标的细半径环，不画轨迹或中心点。Paint 重合唯一/选中 region 时做 union；无重合的单环创建新对象，闭合空心轮廓留给 Fill。Eraser 无需选区，擦除全部相交对象，完全擦除可删除；任一候选不符合 V1 时整笔拒绝。Subtract 有选区时做单对象减法，无选区时作为多对象大范围删减。右键只发出选择取消意图，Main 原子清除临时编辑、选区和 hover，再同步切回 Select，不创建 history。
 
 Region Growing 未被 Assignment 要求，且对本医疗场景的单点颜色容差结果不够稳定，因此已删除。Live Wire 在确定为直线 anchor 连接后与 Lasso 的逐点轮廓语义重复，也已从用户可见和可调用合同中删除。
 
-键盘直达为 `V/A/S/L/F/P/Shift+P`；`C/E/G/I` 不绑定工具。Arrow 为 1 image px，Shift+Arrow 为 5，Ctrl+Shift+Arrow 为 10；Select/Add Box 的 Alt+Arrow 调整大小。Lasso/Subtract 松手按 12 viewport px 自动闭合，Space 强制闭合，Backspace 删除末点，Enter 不重复提交。WorkingMask 中按 F 从 ROI 中心初始化 Fill 种子，Arrow 移动、Enter 填孔；第一次填孔后仍可继续同一草稿。Tab/Shift+Tab 保留焦点遍历，尤其允许从 Fill 候选进入 Apply fill/Cancel。
+键盘直达为 `V/A/S/L/F/P/Shift+P/M`；`C/E/G/I` 不绑定工具。M 只选中 Model Assist，不在没有提示时推理。Arrow 为 1 image px，Shift+Arrow 为 5，Ctrl+Shift+Arrow 为 10；Select/Add Box 的 Alt+Arrow 调整大小。Lasso/Subtract 松手按 12 viewport px 自动闭合，Space 强制闭合，Backspace 删除末点，Enter 不重复提交。WorkingMask 中按 F 从 ROI 中心初始化 Fill 种子，Arrow 移动、Enter 填孔；第一次填孔后仍可继续同一草稿。Tab/Shift+Tab 保留焦点遍历，尤其允许从 Fill 或 Model Assist 候选进入声明式 action row。
 
 Main 按文本框 → 活动草稿 → 全局命令的顺序分配 Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y。WorkingMask 使用 `MaskDraftHistory`，尚未确认的修补先退回前一草稿；类别窗口内只执行文本编辑。空闲 Select 的 Delete/Backspace 删除整个对象，Escape 清选区；`V → Escape → S` 可纯键盘进入无选区批量 Subtract。草稿中的 Escape 只取消草稿，修补中的 Escape 只取消候选。
 
@@ -183,11 +183,21 @@ Main 按文本框 → 活动草稿 → 全局命令的顺序分配 Ctrl+Z / Ctrl
 
 #### 3.3.5 验收边界
 
-自动测试覆盖真实 `ToolPanel → AnnotationViewport → Edit plugin → CommandHistory → Store` 和挂载 Main 的焦点路由。`test_brush_stroke_buffer.gd` 对照参考光栅化，`test_fill_region_solver.gd` 检查严格/近闭合与边缘拒绝，`test_editing_assignment.gd` 检查 WorkingMask 连续键盘 Fill、修补确认/取消与 UI 交接，`test_checked_history.gd` 检查真实 Store 拒绝后的栈保留。既有 advanced、keyboard、region edit 和 integration suites 继续覆盖七工具与逐项撤销/重做。
+自动测试覆盖真实 `ToolPanel → AnnotationViewport → Edit plugin → CommandHistory → Store` 和挂载 Main 的焦点路由。`test_brush_stroke_buffer.gd` 对照参考光栅化，`test_fill_region_solver.gd` 检查严格/近闭合与边缘拒绝，`test_editing_assignment.gd` 检查 WorkingMask 连续键盘 Fill、修补确认/取消与 UI 交接，`test_checked_history.gd` 检查真实 Store 拒绝后的栈保留。既有 advanced、keyboard、region edit 和 integration suites 继续覆盖原有 7 个工具与逐项撤销/重做；Model Assist 额外覆盖严格协议、候选安全门、进程生命周期、会话状态机和挂载 UI。
 
 `tests/benchmarks/godot/editing_benchmark.gd` 在 1280×800 窗口、640×360 图像、20 regions 和一个 320×150 image-px 目标下运行四场景，各预热 2 s、测量 10 s。`tests/benchmarks/results/part2_2_editing.json` 记录的 Select/Paint/Eraser/zoom-pan 均达到平均 ≥30 fps、p95 ≤40 ms；释放鼠标到命令完成的提交耗时单独记录，不能混入实时预览统计。设备和具体数值见 `RESULTS.md`，不向未测设备外推。
 
-README 的逐项键盘/鼠标 reviewer script 尚待人在正式样本和暂停手术视频帧上复跑，所以 Part 2.2/2.3 整体验收仍为 BLOCKED；可见自动执行不代替人工评审。持久化 polygon vertex editing 已由 Lasso 的 `polygon_vertex_editor.gd` 实现：控制点/边命中、冻结拖动预览和键盘操作由该模块负责，提交复用 `ReplaceRegionGeometryCommand`；Model Output V1 的 holes、multipolygon、mask 导出和 Part 3.2 工作流也不属于本轮实现。
+README 的逐项键盘/鼠标 reviewer script 尚待人在正式样本和暂停手术视频帧上复跑，所以 Part 2.2/2.3 整体验收仍为 BLOCKED；可见自动执行不代替人工评审。持久化 polygon vertex editing 已由 Lasso 的 `polygon_vertex_editor.gd` 实现：控制点/边命中、冻结拖动预览和键盘操作由该模块负责，提交复用 `ReplaceRegionGeometryCommand`；Model Output V1 的 holes、multipolygon 和持久 mask 仍不在契约内。
+
+#### 3.3.6 单帧 Model Assist 所有权
+
+`ModelAssistSession` 是纯状态机，拥有当前正/负点、唯一 prompt box、候选索引、会话消息和声明式 `session_panel`。首个提示才冻结原始 `frame_id`、连续 `playback_index`、图像/record SHA-256 和可选的选中 region；之后的候选只有在 token、prompt revision 和所有冻结身份都仍一致时才可 Apply。
+
+`ModelAssistService` 无 Store 写权。它异步检查 `PROJECT6_MODEL_PYTHON`、`PROJECT6_SAM2_CONFIG`、`PROJECT6_SAM2_CHECKPOINT` 和 `PROJECT6_SAM2_DEVICE`，在独立 job 目录冻结 PNG，并且只启动该解释器的 `model_assist_worker.py`。service 与 worker 通过有上限的 `model-assist-v1` JSONL 交换 `hello/set_image/predict/shutdown`，用 session nonce 和 PID 绑定所有权。Cancel 或超时会终止并重建该实例；未确认退出前不删除 job。服务不自动安装包或下载权重。
+
+Python `ModelAssistBackend` 在 `hello` 时惰性构建官方 `SAM2ImagePredictor`，`set_image` 只计算并缓存当前帧 embedding。每次 `predict` 最多返回三个带 score 的二值 ROI PNG。`ModelAssistCandidate` 再在 Godot 侧验证目录边界、非链接文件、SHA-256、二值像素、ROI、单连通/无孔/非自交、最多 2,048 顶点和回栅格 IoU `>=0.99`。它只交付安全 Poly，不修复或持久不可表示拓扑。
+
+创建候选复用类别对话框和 `AddPolygonCommand`；修正候选复用 `ReplaceRegionGeometryCommand` 并保留区域元数据。两者均为一次原子 undo/redo。`ToolPanel` 只渲染校验过的 `tool_id/status/badge/summary/actions` 数据，不接受回调。挂载 UI 与 deterministic fake worker 已覆盖创建、修正、取消、stale、撤销/重做、保存/重开和导航门；真实 SAM smoke 与人工可见闭环仍单独依赖用户授权的外部环境。
 
 ### 3.4 Part 3.1 视频导入与播放所有权
 
@@ -289,7 +299,9 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 | Source 会话快照 | `client/pipeline/source_session_builder.gd` | 校验并分离 `playback_index` 与 `frame_id` |
 | 视口与坐标 | `client/services/viewport_transform.gd`、`client/ui/annotation_viewport.gd` | 唯一 `Transform2D` 正逆变换、缩放、平移、Fit 和输入边界 |
 | Region 几何与显示 | `client/domain/region_geometry.gd`、`canvas_region_renderer/plugin.gd` | polygon-first 几何、hit-test、overlay 缓存、opacity 和裁剪 |
-| 编辑工具 | `client/plugins/edit/basic_edit_tools/plugin.gd` | 7 个工具、指针/键盘手势、实时 mask 与 viewport-only preview；自动化通过，人工门禁待完成 |
+| 编辑工具 | `client/plugins/edit/basic_edit_tools/plugin.gd` | 7 个 Assignment 工具 + Model Assist；指针/键盘手势、实时 mask 与 viewport-only preview |
+| Model Assist | `client/domain/model_assist_session.gd`、`model_assist_candidate.gd`、`client/services/model_assist_service.gd` | 会话、V1 Poly 安全门、外部进程与 stale/cancel 生命周期 |
+| SAM 2 worker | `python/model_assist_worker.py`、`python/annotation_data/model_assist_backend.py` | 严格 JSONL、持久 image embedding、有哈希二值 candidate；无 Store 写权 |
 | 笔刷缓冲 | `client/domain/brush_stroke_buffer.gd` | 增量圆头线段、可增长 ROI、像素上限与失败保留 |
 | Mask 运算与 Fill | `client/domain/mask_region_ops.gd`、`fill_region_solver.gd` | raw mask、严格填充、方形核近闭合、修补候选与 V1 轮廓 |
 | 草稿会话与局部历史 | `client/domain/edit_session.gd`、`mask_draft_history.gd` | 冻结 frame/before、WorkingMask、种子、修补回退及 200 项/32 MiB 差异历史 |
@@ -321,6 +333,7 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 | Part 2.2 笔刷与 Fill | `brush_stroke_buffer.gd`、`mask_region_ops.gd`、`fill_region_solver.gd` | WorkingMask、repair preview、ROI 上限、V1 refusal | `test_brush_stroke_buffer.gd`、`test_fill_region_solver.gd`、`test_advanced_edit_tools.gd` |
 | Part 2.2 撤销边界 | `command_history.gd`、`mask_draft_history.gd`、`edit_session.gd` | Main 焦点路由、Store 原子恢复、两侧历史 | `test_checked_history.gd`、`test_annotation_store.gd`、`test_editing_assignment.gd` |
 | Part 2.2 boolean/轮廓 | `polygon_ops.gd`、`image_region_algorithms.gd` | V1 refusal、0.5 px 简化、精确轮廓回退、导出投影 | `test_polygon_ops.gd`、`test_image_region_algorithms.gd`、`test_mask_region_ops.gd` |
+| 单帧 Model Assist | `basic_edit_tools/plugin.gd`、`model_assist_session.gd`、`model_assist_service.gd` | ToolPanel session action、Main 的 frame/playback 身份、candidate 安全门、外部 worker | `test_model_assist_session.gd`、`test_model_assist_service.gd`、`test_model_assist_ui.gd`、`test_model_assist_smoke.py` |
 | Part 2.3 交互忠实度 | `RESULTS.md` | README reviewer script、Assignment 2.2 | `test_documentation.py` |
 | Part 3.1 播放或时间契约 | `playback_controller.gd`、`main.gd` | Source frame entries、Timeline、Explorer | `test_playback_controller.gd`、`test_playback.gd`、可见播放基准 |
 | Part 3.1 导入或取消 | `video_import_controller.gd`、`python/frame_source.py` | `.venv`、FFmpeg/FFprobe、归一化目录 | Python 视频测试、Godot 子进程测试、真实导入基准 |

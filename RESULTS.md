@@ -287,6 +287,18 @@ Python tests cover CFR/VFR-relevant timestamp handling, rotation, negative and w
 
 Audio playback, codec-level seeking, background `ImageTexture` creation, prefetching and looping remain outside the Part 3.1 implementation. The batch workflow is described in the following section.
 
+## Single-frame Model Assist (2026-09-10)
+
+Model assistance is now the eighth single-frame edit tool; it is not a Batch algorithm. With no selection it creates a pending Model Output V1 Poly for classification. With a selected Box or Poly it replaces only that region's geometry and preserves its ID, class and attributes. The first positive/negative point or prompt box freezes the original frame ID, contiguous playback index, image digest, record digest and optional target identity. Candidate application rechecks all frozen identities and enters command history as one atomic create or replace operation.
+
+`ModelAssistSession` owns prompt and candidate state. `ModelAssistService` owns asynchronous preflight, one external process, the bounded `model-assist-v1` JSONL exchange, deadlines, cancel/stale behavior and job cleanup; it has no Store write authority. Returned masks must be non-linked binary PNGs below the owned job directory with matching SHA-256, dimensions and ROI. Godot then requires one hole-free connected component, a simple V1 ring, no more than 2,048 vertices and raster round-trip IoU of at least 0.99 before exposing Apply. A deterministic fake worker has exercised create, correction, candidate switching, retry, cancellation, stale-result refusal, atomic undo/redo, navigation blocking, save/reopen and shutdown behavior through the mounted Main UI.
+
+The tracked smoke driver separately verifies a user-provided official SAM 2 installation with `hello -> set_image -> predict -> shutdown` and emits an auditable report without overwriting an existing output directory. It uses only explicit `PROJECT6_MODEL_PYTHON`, `PROJECT6_SAM2_CONFIG`, `PROJECT6_SAM2_CHECKPOINT` and `PROJECT6_SAM2_DEVICE` inputs; the client never installs packages or downloads weights. On this host, read-only probes found no environment containing the complete official `sam2` package, package-owned config and checkpoint. Therefore **real SAM smoke: NOT RUN** and the visible real-model UI loop is also NOT RUN. Fake-worker PASS is implementation evidence only, not evidence that official SAM inference ran. The exact provisioning, smoke and manual UI procedure is in `docs/model-assist-acceptance.md`.
+
+The fresh authoritative `tests/run_tests.sh` run passed **524 Python tests in 37.30 s** and all 24 log-audited Godot invocations with status 0. Those entries include the complete mounted suite, the standalone Model Assist service process test, delivery surface, editing, Batch/Poly propagation and Main boundaries. The aggregate emitted exactly the four intentional corrupt-PNG fixture pairs and ended with `PASS: complete Godot test suite`. The restricted-host editor probe emitted exactly two known local debug-listen socket failure pairs; its editor-only profile rejects missing, changed, extra or differently scoped errors. All other Godot profiles remained zero-error.
+
+Batch remains the independently verified `poly-sim-flow-edge-v1` similarity-gated optical-flow Poly propagation path described below. Model Assist does not replace or participate in Batch propagation.
+
 
 ## Part 3.2 / 3.3 — similarity-gated Poly motion and edge refinement (2026-09-10)
 

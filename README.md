@@ -30,6 +30,8 @@ Project/
 
     ├── frame_source.py           帧源脚本，负责解析视频源至图像
     ├── propagate_polygons.py    Poly 光流与边缘精修 worker
+    ├── model_assist_worker.py   单帧 SAM 2 JSONL worker
+    ├── model_assist_smoke.py    真实外部运行时验收驱动
     ├── make_sample_input.py      实例生成脚本
     ├── validate_model_output.py  模型输出验证脚本
     └── annotation_data/          可测试的 Python 领域实现
@@ -74,7 +76,7 @@ source project_env.sh
 # 正在开发和优化的功能
 
 1. 大规模标注持久化的内存保护和尾延迟优化。
-2. 单帧模型辅助 Poly 创建/修正工具与真实外部模型环境验收。
+2. 单帧 Model Assist 工具已实现；待用户确认外部 Conda/SAM 2 安装与官方权重后完成真实模型验收。
 3. Part 5 模型插件与更大数据集的稳健性评估。
 
 
@@ -103,7 +105,15 @@ s_fit=min(W_v/W_i,H_v/H_i)
 本项目参考 MITK Segmentation View，借鉴了区域选择与高亮、绘制过程中的可视反馈、标签命名与建议列表，以及可撤销的编辑流程。用户能够明确看到当前编辑对象和操作结果，未确认的草稿可以取消。
 针对二维视频中的框和多边形，本项目增加了拖动移动、八柄缩放及 1/5/10 px 键盘微移。重标注通过双击右侧标签行打开，支持列表、自由文本和滚轮选择；橡皮擦无需预选区域，可一次处理多个对象，并将整笔操作作为一次撤销。Fill 支持近闭合轮廓修补，先显示填充和修补预览，再由用户确认。
 本项目未实现三维体数据编辑、切片插值、Region Growing 和 Live Wire；已保留多边形原始点的可见顶点编辑。持久化数据保持 Model Output V1；产生孔洞、多连通分量等无法表示的结果时，整体拒绝并说明原因。
-报告已列出自动化测试和性能证据，明确保留“人工 reviewer 尚未完成”的状态。本次 12 项文档测试通过。
+报告已列出自动化测试和性能证据，明确保留“人工 reviewer 尚未完成”的状态。本次 15 项文档测试通过。
+
+## 单帧 Model Assist
+
+`Model Assist` 是标注页的第八个单帧工具，不是 Batch 算法。无选区时它生成待分类新 Poly；选中已有 Box/Poly 时只修正该区域的几何，保留 ID、类别和属性。按无修饰键 `M` 进入；左键添加正点，Shift+左键添加负点，Ctrl+拖动设置唯一 box，Backspace 撤销最后一个提示。侧栏动作可切换 candidate、Apply、Cancel、Retry 或重新检查运行时。
+
+首个提示会冻结原始帧 ID、连续播放索引、图像 SHA-256、record SHA-256 和修正目标。过期或已取消结果不能写 Store；候选 mask 必须是 worker 目录内的有哈希二值 PNG，并转换为无孔、单连通、非自交的 Model Output V1 Poly。创建与修正都只以一条命令进入 undo/redo。
+
+运行时只从 `PROJECT6_MODEL_PYTHON`、`PROJECT6_SAM2_CONFIG`、`PROJECT6_SAM2_CHECKPOINT` 和 `PROJECT6_SAM2_DEVICE=auto|cpu|cuda` 读取显式配置。工具只做非阻塞 preflight，显示 CPU/CUDA badge，不会为用户安装 `sam2` 或下载 checkpoint。可复用的 `model-assist-v1` 真实模型驱动是 `python/model_assist_smoke.py`，完整 smoke 命令和人工 UI 闭环见 [Model Assist 真实 SAM 2 验收](docs/model-assist-acceptance.md)；当前 fake-worker 自动证据已通过，real SAM 仍为 NOT RUN，不能混为真实模型 PASS。
 
 ## Part 3.1 如何处理帧索引和标注记录的一致性问题
 
@@ -150,7 +160,7 @@ Registry 在启动时扫描 `client/plugins`，验证插件 manifest、API versi
 
 - **Source：**`image_sequence_source` 读取归一化目录，`numeric_image_sequence_source` 保留稀疏原始帧号，`single_image_source` 将单张图像适配为一个索引帧。
 - **Render：**`canvas_region_renderer` 使用共享视口变换绘制图像和 regions。
-- **Edit tools：**`basic_edit_tools` 提供 Add Box、Subtract、Lasso、Fill、Paint、Eraser 和 Select 七工具；实现已通过自动化门禁，人工 reviewer 复跑边界单独保留。
+- **Edit tools：**`basic_edit_tools` 保留 Add Box、Subtract、Lasso、Fill、Paint、Eraser 和 Select 七个 Assignment 工具，并追加单帧 Model Assist；实现已通过自动化门禁，真实 SAM/UI 验收边界单独保留。
 - **Export / Feedback：**`file_training_handoff` 验证修正记录并原子生成本地训练交接包。
 
 新增插件只需在相应 stage 目录中添加 `plugin.json` 和 Stage 实现，不需要修改 Registry 或 core。完整 manifest 字段、方法签名、生命周期、深拷贝和错误隔离规则见 [docs/plugin-api.md](docs/plugin-api.md)。
@@ -158,6 +168,7 @@ Registry 在启动时扫描 `client/plugins`，验证插件 manifest、API versi
 ## 运行测试
 
 ```bash
+tests/run_tests.sh
 "$GODOT_BIN" --headless --editor --quit --path .
 .venv/bin/python -m pytest tests/python -q
 "$GODOT_BIN" --headless --path . --script tests/godot/test_runner.gd
@@ -181,7 +192,7 @@ ffmpeg -hide_banner -loglevel error -f lavfi \
   --result /tmp/part3_1_import.json
 ```
 
-基准的 `/tmp` 源目录、视频和输出目录都必须预先不存在；如需重跑，请换用新的临时名称。Python 测试必须没有 failure，也不能因为缺少 FFmpeg/FFprobe 而跳过视频集成测试。Godot 测试可能因故意打开损坏图片 fixture 而打印解码警告，但最后必须输出 `PASS: complete Godot test suite`，并以状态 `0` 退出。Part 3.1 可见播放基准要求索引严格连续且零跳帧；性能不足时允许实际播放率低于 nominal FPS，但必须在 `RESULTS.md` 如实记录。
+基准的 `/tmp` 源目录、视频和输出目录都必须预先不存在；如需重跑，请换用新的临时名称。`tests/run_tests.sh` 是权威回归入口：它把拥有外部进程的 Model Assist service 测试与纯组件套件分开运行，并审核每个 Godot 日志。聚合套件只接受四组故意损坏 PNG fixture 的精确解码错误；受限主机上的 editor-only 探针只接受两次固定的本地调试 socket 失败对。任何 `SCRIPT ERROR`、未处理异常、计数或文本变化及其他 `ERROR:` 都使门禁失败。Python 测试不能有 failure，也不能因缺少 FFmpeg/FFprobe 而跳过视频集成测试。Part 3.1 可见播放基准要求索引严格连续且零跳帧；性能不足时允许实际播放率低于 nominal FPS，但必须在 `RESULTS.md` 如实记录。真实 SAM 运行时不属于默认回归，必须用显式外部配置单独验收。
 
 ## Python 环境配置
 
@@ -196,9 +207,10 @@ S	Subtract	开始键盘绘制扣除轮廓
 F	Fill	进入键盘填充模式，使用方向键移动填充种子点
 P	Paint	开始键盘画笔绘制
 Shift + P	Eraser	开始键盘橡皮擦操作
+M	Model Assist	切换到当前帧 SAM 2 Poly 创建/修正工具；不自动发起推理
 
 
-这些绑定来自编辑插件的 handle_key()。其中 A / S / L / F / P / Shift+P 不只是选中工具按钮，还会进入对应的键盘操作流程。若你准备使用鼠标绘制，可以直接点击工具按钮。
+这些绑定来自编辑插件的 handle_key()。其中 A / S / L / F / P / Shift+P 不只是选中工具按钮，还会进入对应的键盘操作流程；M 只选中 Model Assist，首个鼠标提示才冻结上下文并发起请求。若你准备使用鼠标绘制，可以直接点击工具按钮。
 正在绘制时，草稿会优先接管按键。切换操作前，应先完成当前绘制，或者按 Esc 取消。
 二、选择、移动、缩放与删除
 1. 选择和删除对象
