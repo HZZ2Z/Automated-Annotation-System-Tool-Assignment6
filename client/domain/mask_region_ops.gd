@@ -155,6 +155,34 @@ static func masks_overlap(left_state: Dictionary, right_state: Dictionary) -> bo
 	return false
 
 
+static func mask_iou(left_state: Dictionary, right_state: Dictionary) -> float:
+	var left_validation := _validate_state(left_state)
+	var right_validation := _validate_state(right_state)
+	if not left_validation["valid"] or not right_validation["valid"]:
+		return -1.0
+	var left_roi: Rect2i = left_validation["roi"]
+	var right_roi: Rect2i = right_validation["roi"]
+	var combined := _merged_roi(left_roi, right_roi)
+	if combined == Rect2i():
+		return 1.0
+	if combined.size.x > MAX_MASK_PIXELS / combined.size.y:
+		return -1.0
+	var left_mask: PackedByteArray = left_validation["mask"]
+	var right_mask: PackedByteArray = right_validation["mask"]
+	var intersection := 0
+	var union := 0
+	for y in range(combined.position.y, combined.end.y):
+		for x in range(combined.position.x, combined.end.x):
+			var point := Vector2i(x, y)
+			var left_selected := _byte_at(left_roi, left_mask, point) != 0
+			var right_selected := _byte_at(right_roi, right_mask, point) != 0
+			if left_selected or right_selected:
+				union += 1
+				if left_selected and right_selected:
+					intersection += 1
+	return 1.0 if union == 0 else float(intersection) / float(union)
+
+
 static func _copy_mask_to_roi(source_roi: Rect2i, source: PackedByteArray, target_roi: Rect2i) -> PackedByteArray:
 	if source_roi == target_roi:
 		return source.duplicate()
