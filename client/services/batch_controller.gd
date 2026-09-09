@@ -4,14 +4,18 @@ extends RefCounted
 
 const SIMILARITY := preload("res://client/services/frame_similarity_service.gd")
 const PROPAGATE := preload("res://client/domain/commands/propagate_range_command.gd")
-const POLYGON := preload("res://client/services/polygon_propagation_service.gd")
+const POLY_PROVIDER := preload("res://client/services/poly_batch_provider.gd")
 const APPLY_PROPOSALS := preload("res://client/domain/commands/apply_propagation_command.gd")
+const PROVIDER_METHODS := [
+	"availability", "begin", "step", "cancel", "is_running", "progress_text", "get_result", "validate_source",
+]
 var _source: Variant
 var _store: Variant
 var _history: Variant
 var _entries: Array = []
 var _scanner = SIMILARITY.new()
-var _polygon = POLYGON.new()
+var _providers: Dictionary = {&"polygon_flow": POLY_PROVIDER.new()}
+var _active_provider: Variant
 var _strategy := "copy"
 var _plan: Dictionary = {}
 var _preview: Dictionary = {}
@@ -45,25 +49,51 @@ func start_analysis(index: int, threshold: float) -> PackedStringArray:
 func start_polygon_analysis(index: int) -> PackedStringArray:
 	cancel()
 	_strategy = "polygon_flow"
-	var errors: PackedStringArray = _polygon.begin(_source, _store, _entries, index)
+	_active_provider = _providers.get(&"polygon_flow")
+	if _active_provider == null:
+		return PackedStringArray(["Poly propagation provider is not configured"])
+	var errors: PackedStringArray = _active_provider.begin({"source": _source, "store": _store,
+		"entries": _entries.duplicate(true), "key_index": index, "region_id": "", "max_entries": 30})
 	if errors.is_empty():
 		_key_record = _store.get_corrected_record(int(_entries[index].frame_id))
 	return errors
 
+func configure_provider(provider_id: StringName, provider: Variant) -> PackedStringArray:
+	if String(provider_id).is_empty():
+		return PackedStringArray(["Provider ID must not be empty"])
+	if _providers.has(provider_id):
+		return PackedStringArray(["Provider ID is already registered"])
+	if provider == null:
+		return PackedStringArray(["Provider is missing required lifecycle methods"])
+	for method: String in PROVIDER_METHODS:
+		if not provider.has_method(method):
+			return PackedStringArray(["Provider is missing required lifecycle methods"])
+	_providers[provider_id] = provider
+	return PackedStringArray()
+
 func is_analyzing() -> bool:
-	return _polygon.running if _strategy == "polygon_flow" else _scanner.running
+	return _active_provider.is_running() if _active_provider != null else _scanner.running
 
 func progress_text() -> String:
-	return _polygon.progress_text() if _strategy == "polygon_flow" else "正在查找相似帧…"
+	return _active_provider.progress_text() if _active_provider != null else "正在查找相似帧…"
 
 func step_analysis() -> void:
-	var worker = _polygon if _strategy == "polygon_flow" else _scanner
-	worker.step()
-	if not worker.running and not worker.result.is_empty():
-		if not worker.result.errors.is_empty():
-			last_error = worker.result.errors[0]
+	if _active_provider != null:
+		_active_provider.step()
+		var provider_result: Dictionary = _active_provider.get_result()
+		if not _active_provider.is_running() and not provider_result.is_empty():
+			if not provider_result.errors.is_empty():
+				last_error = provider_result.errors[0]
+				return
+			_plan = provider_result.duplicate(true)
+			_plan["keyframe"] = int(_key_record.frame)
+		return
+	_scanner.step()
+	if not _scanner.running and not _scanner.result.is_empty():
+		if not _scanner.result.errors.is_empty():
+			last_error = _scanner.result.errors[0]
 			return
-		_plan = worker.result.duplicate(true)
+		_plan = _scanner.result.duplicate(true)
 		_plan["keyframe"] = int(_key_record.frame)
 
 func get_plan() -> Dictionary:
@@ -71,7 +101,9 @@ func get_plan() -> Dictionary:
 
 func cancel() -> void:
 	_scanner.cancel()
-	_polygon.cancel()
+	if _active_provider != null:
+		_active_provider.cancel()
+	_active_provider = null
 	_plan.clear()
 	_preview.clear()
 	_key_record.clear()
@@ -168,7 +200,9 @@ func apply_preview() -> PackedStringArray:
 	if int(_preview.changed_count) == 0:
 		return PackedStringArray(["Annotations already match; no batch was created"])
 	if _strategy == "polygon_flow":
-		var source_errors: PackedStringArray = _polygon.validate_source()
+		if _active_provider == null:
+			return PackedStringArray(["Poly propagation provider is not active; analyze again"])
+		var source_errors: PackedStringArray = _active_provider.validate_source()
 		if not source_errors.is_empty():
 			return source_errors
 	for frame_id: int in _preview.before:
