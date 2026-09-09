@@ -159,6 +159,15 @@ def _backend_call(backend: Any, method: str, *args: Any) -> dict[str, Any]:
     return result
 
 
+def _request_error(exc: BaseException) -> str:
+    """Return exception diagnostics that are always safe for UTF-8 JSON output."""
+    try:
+        text = str(exc)
+    except Exception:
+        return "request failed"
+    return text.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
 def _dispatch(backend: Any, request: SamBatchRequest, batch_open: bool) -> tuple[dict[str, Any], bool, bool]:
     if request.op == "hello":
         return _backend_call(backend, "hello"), batch_open, False
@@ -197,7 +206,7 @@ def run(input_stream: BinaryIO, output_stream: BinaryIO, backend: Any, job_dir: 
                     _write_response(output_stream, request_id, False, {}, {}, ["request_id must be strictly increasing"])
                 else:
                     last_request_id = request_id
-                    _write_response(output_stream, request_id, False, {}, {}, [str(exc)])
+                    _write_response(output_stream, request_id, False, {}, {}, [_request_error(exc)])
             continue
         if request.request_id <= last_request_id:
             _write_response(output_stream, request.request_id, False, request.context, {}, ["request_id must be strictly increasing"])
@@ -207,7 +216,7 @@ def run(input_stream: BinaryIO, output_stream: BinaryIO, backend: Any, job_dir: 
             data, batch_open, should_stop = _dispatch(backend, request, batch_open)
             _write_response(output_stream, request.request_id, True, request.context, data, [])
         except Exception as exc:
-            _write_response(output_stream, request.request_id, False, request.context, {}, [str(exc)])
+            _write_response(output_stream, request.request_id, False, request.context, {}, [_request_error(exc)])
             should_stop = False
         if should_stop:
             return 0
