@@ -45,6 +45,7 @@ class StagedEditContextBridge:
 	var _viewport_ref: WeakRef
 	var _live := false
 	var _staged_frame := 0
+	var _staged_playback_index := 0
 	var _staged_selection := ""
 	var _staged_record: Dictionary = {}
 	var _staged_viewport_selection := ""
@@ -58,8 +59,15 @@ class StagedEditContextBridge:
 		"message": "",
 	}
 
-	func _init(main: AnnotationMain, viewport: Variant, staged_texture: Texture2D, frame_id: int = 0) -> void:
+	func _init(
+		main: AnnotationMain,
+		viewport: Variant,
+		staged_texture: Texture2D,
+		frame_id: int = 0,
+		playback_index: int = 0,
+	) -> void:
 		_staged_frame = frame_id
+		_staged_playback_index = playback_index
 		_main_ref = weakref(main)
 		_viewport_ref = weakref(viewport)
 		var source_transform: Variant = viewport.get_image_transform() if viewport != null else null
@@ -72,6 +80,10 @@ class StagedEditContextBridge:
 	func get_current_frame() -> int:
 		var main := _main_ref.get_ref() as AnnotationMain
 		return main._current_record_frame() if _live and main != null else _staged_frame
+
+	func get_playback_index() -> int:
+		var main := _main_ref.get_ref() as AnnotationMain
+		return main._current_frame if _live and main != null else _staged_playback_index
 
 	func get_selected_region() -> String:
 		var main := _main_ref.get_ref() as AnnotationMain
@@ -1006,6 +1018,8 @@ func is_playing() -> bool:
 
 
 func _process(delta: float) -> void:
+	if _edit_plugin != null and _edit_plugin.has_method("step"):
+		_edit_plugin.step()
 	if not _playback_controller.is_playing() or _source == null:
 		return
 	var target: int = _playback_controller.tick(delta, _current_frame)
@@ -1391,11 +1405,18 @@ func _try_draft_history(redo: bool) -> bool:
 func _on_tool_action_requested(action: StringName) -> void:
 	if _edit_plugin == null:
 		return
+	var frame := _current_record_frame()
+	var before: Dictionary = _store.get_corrected_record(frame) if frame >= 0 else {}
 	var errors: PackedStringArray = _edit_plugin.invoke(action)
 	if not errors.is_empty():
 		_show_errors("Tool action refused", errors)
-	_sync_tool_panel()
-	_viewport.grab_focus()
+	var after: Dictionary = _store.get_corrected_record(frame) if frame >= 0 else {}
+	if errors.is_empty() and before != after:
+		_refresh_after_edit(true)
+	else:
+		_sync_tool_panel()
+	if errors.is_empty() and not _is_class_dialog_active():
+		_viewport.grab_focus()
 
 
 func _on_opacity_changed(value: float) -> void:
@@ -1718,6 +1739,7 @@ func _edit_context(store: Variant, history: Variant, bridge: StagedEditContextBr
 		"history": history,
 		"viewport": bridge,
 		"get_current_frame": Callable(bridge, "get_current_frame"),
+		"get_playback_index": Callable(bridge, "get_playback_index"),
 		"get_selected_region": Callable(bridge, "get_selected_region"),
 		"set_selected_region": Callable(bridge, "set_selected_region"),
 		"get_current_image": Callable(bridge, "get_current_image"),
@@ -1776,7 +1798,13 @@ func stage_review_replacement(candidate_store: Variant) -> Dictionary:
 	if errors.is_empty(): errors = catalog.rebuild(candidate_store.snapshot_corrected())
 	if not errors.is_empty(): return {"success":false,"errors":errors}
 	var history = HISTORY_SCRIPT.new(200)
-	var bridge := StagedEditContextBridge.new(self,_viewport,_viewport.get("_texture"),_current_record_frame())
+	var bridge := StagedEditContextBridge.new(
+		self,
+		_viewport,
+		_viewport.get("_texture"),
+		_current_record_frame(),
+		_current_frame,
+	)
 	var activated: Variant = candidate_edit.activate(_edit_context(candidate_store,history,bridge))
 	if not activated is PackedStringArray or not activated.is_empty():
 		_deactivate_edit(candidate_edit)

@@ -522,7 +522,7 @@ func handle_key(event: InputEvent) -> bool:
 				return _begin_keyboard_spatial(&"fill")
 			KEY_P:
 				return _begin_keyboard_spatial(&"eraser" if event.shift_pressed else &"paint")
-			KEY_M:
+			KEY_M when not event.shift_pressed and not event.meta_pressed:
 				set_active_tool(&"model_assist")
 				return true
 	if key == KEY_A and not event.ctrl_pressed and not event.alt_pressed:
@@ -2501,7 +2501,10 @@ func _handle_model_pointer(event: InputEvent, image_position: Vector2) -> void:
 
 
 func _handle_model_key(event: InputEventKey, key: Key) -> bool:
-	if key == KEY_M and not event.ctrl_pressed and not event.alt_pressed:
+	if key == KEY_M and not event.shift_pressed and not event.ctrl_pressed and not event.alt_pressed and not event.meta_pressed:
+		return true
+	if key == KEY_V and not event.shift_pressed and not event.ctrl_pressed and not event.alt_pressed and not event.meta_pressed:
+		set_active_tool(&"select")
 		return true
 	if key == KEY_BACKSPACE:
 		_apply_model_prompt_change(_model_session.undo_prompt())
