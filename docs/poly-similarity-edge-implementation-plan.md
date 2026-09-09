@@ -10,6 +10,8 @@
 
 **Approved design:** `docs/model-assist-poly-edge-design.md`
 
+**Repository evidence policy:** `/tests/` is intentionally ignored and the repository layout gate rejects force-added test artifacts. Follow every RED/GREEN step locally, preserve those local tests, and include their paths/results in evidence, but stage and commit only production code plus allowed documentation. A task's commit message therefore applies to its tracked implementation files, not to ignored local tests.
+
 **Execution order:** Complete this plan before the model-assist plan's real-SAM environment task. It uses only the existing project environment and produces the default Batch path independently of SAM.
 
 ---

@@ -10,6 +10,8 @@
 
 **Approved design:** `docs/model-assist-poly-edge-design.md`
 
+**Repository evidence policy:** `/tests/` is intentionally ignored and the repository layout gate rejects force-added test artifacts. Follow every RED/GREEN step locally, preserve those local tests, and include their paths/results in evidence, but stage and commit only production code plus allowed documentation. A task's commit message therefore applies to its tracked implementation files, not to ignored local tests.
+
 ---
 
 ## Task 1: Remove the abandoned Batch-SAM protocol and lock the new image protocol
