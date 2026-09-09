@@ -41,7 +41,7 @@ export PROJECT6_SAM2_DEVICE=auto
 
 `--positive-point` 和 `--negative-point` 可重复，总数不超过 64；`--box` 最多一个。全部坐标是原图像素坐标。未给任何提示时，驱动只添加一个图像中心正点。
 
-输出目录必须不存在；如果同名目录已有内容，驱动立即拒绝，不复用也不覆盖。它只在新目录中写入 `input.png`、`worker.stderr.log`、candidate PNG 和 `report.json`。运行时探针记录 Python/Torch/Torchvision/NumPy/OpenCV/SAM 2 版本、CUDA 状态；报告同时记录 config/checkpoint/图像 SHA-256、实际设备、提示坐标、阶段耗时、candidate score/ROI/SHA-256/前景像素数和 worker PID/会话所有权。
+输出目录必须不存在；如果同名目录已有内容，驱动立即拒绝，不复用也不覆盖。位于仓库内的输出还必须是 `.local-acceptance/` 的下级目录；仓库外的显式绝对路径也可使用。它只在新目录中写入 `input.png`、`worker.stderr.log`、candidate PNG 和 `report.json`。运行时探针记录 Python/Torch/Torchvision/NumPy/OpenCV/SAM 2 版本、CUDA 状态；报告同时记录 config/checkpoint/图像 SHA-256、实际设备、提示坐标、阶段耗时、candidate score/ROI/SHA-256/前景像素数和 worker PID/会话所有权。
 
 PASS 需要 `hello -> set_image -> predict -> shutdown` 全链路通过，candidate 为输出目录内的非链接二值 PNG，其尺寸、ROI 和 SHA-256 相互一致。smoke PASS 证明真实 SAM image predictor 协议闭环，不代替下面的 UI 验收。
 

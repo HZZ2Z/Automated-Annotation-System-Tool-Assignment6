@@ -23,6 +23,7 @@ import sys
 import time
 from typing import Any, BinaryIO, Callable
 import uuid
+import zlib
 
 import cv2
 import numpy as np
@@ -39,6 +40,7 @@ MAX_INPUT_BYTES = 64 * 1024 * 1024
 DEFAULT_LOAD_TIMEOUT_SECONDS = 180.0
 DEFAULT_PREDICT_TIMEOUT_SECONDS = 60.0
 _WORKER = Path(__file__).with_name("model_assist_worker.py")
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class SmokeFailure(RuntimeError):
@@ -77,15 +79,41 @@ def _regular_file(raw_path: str | Path, label: str, *, executable: bool = False)
 
 
 def png_size(payload: bytes) -> tuple[int, int]:
-    """Read only the canonical PNG signature and IHDR dimensions."""
-    if len(payload) < 24 or payload[:8] != b"\x89PNG\r\n\x1a\n":
+    """Validate a bounded PNG container and return its IHDR dimensions."""
+    if not payload.startswith(b"\x89PNG\r\n\x1a\n"):
         raise ValueError("image must be a PNG with a valid signature")
-    if payload[12:16] != b"IHDR" or struct.unpack(">I", payload[8:12])[0] != 13:
-        raise ValueError("image PNG must start with one canonical IHDR chunk")
-    width, height = struct.unpack(">II", payload[16:24])
-    if width <= 0 or height <= 0 or width * height > 32 * 1024 * 1024:
-        raise ValueError("image PNG dimensions are empty or too large")
-    return width, height
+    offset = 8
+    image_size: tuple[int, int] | None = None
+    saw_data = False
+    while offset < len(payload):
+        if offset + 12 > len(payload):
+            raise ValueError("image PNG has a truncated chunk")
+        length = struct.unpack(">I", payload[offset:offset + 4])[0]
+        kind = payload[offset + 4:offset + 8]
+        end = offset + 12 + length
+        if length > MAX_INPUT_BYTES or end > len(payload):
+            raise ValueError("image PNG has an invalid chunk length")
+        data = payload[offset + 8:offset + 8 + length]
+        checksum = struct.unpack(">I", payload[offset + 8 + length:end])[0]
+        if checksum != zlib.crc32(kind + data) & 0xFFFFFFFF:
+            raise ValueError("image PNG has a chunk checksum mismatch")
+        if image_size is None:
+            if kind != b"IHDR" or length != 13:
+                raise ValueError("image PNG must start with one canonical IHDR chunk")
+            width, height = struct.unpack(">II", data[:8])
+            if width <= 0 or height <= 0 or width * height > 32 * 1024 * 1024:
+                raise ValueError("image PNG dimensions are empty or too large")
+            image_size = (width, height)
+        elif kind == b"IHDR":
+            raise ValueError("image PNG contains more than one IHDR chunk")
+        elif kind == b"IDAT":
+            saw_data = True
+        elif kind == b"IEND":
+            if length != 0 or not saw_data or end != len(payload):
+                raise ValueError("image PNG has an invalid terminal chunk")
+            return image_size
+        offset = end
+    raise ValueError("image PNG is missing IEND")
 
 
 def _finite_pair(value: list[float], label: str) -> list[float]:
@@ -129,6 +157,18 @@ def normalize_prompts(
 def create_job_dir(raw_path: str | Path) -> Path:
     """Create one new evidence/job directory and refuse every collision."""
     path = Path(raw_path)
+    candidate = path.resolve(strict=False)
+    try:
+        repository_relative = candidate.relative_to(_REPO_ROOT)
+    except ValueError:
+        repository_relative = None
+    if repository_relative is not None and (
+        len(repository_relative.parts) < 2
+        or repository_relative.parts[0] != ".local-acceptance"
+    ):
+        raise ValueError(
+            "repository-local --output-dir must be below the ignored .local-acceptance directory"
+        )
     path.mkdir(parents=True, mode=0o700, exist_ok=False)
     resolved = path.resolve(strict=True)
     if path.is_symlink() or not resolved.is_dir():
@@ -170,6 +210,7 @@ def validate_candidate(
     digest = hashlib.sha256(payload).hexdigest()
     if not isinstance(descriptor["sha256"], str) or digest != descriptor["sha256"]:
         raise ValueError("candidate SHA-256 does not match its descriptor")
+    decoded_size = png_size(payload)
     mask = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_GRAYSCALE)
     if mask is None or mask.ndim != 2:
         raise ValueError("candidate PNG cannot be decoded as a mask")
@@ -192,6 +233,8 @@ def validate_candidate(
         raise ValueError("candidate ROI is outside the image")
     if mask.shape != (roi_height, roi_width):
         raise ValueError("candidate mask dimensions do not match its ROI")
+    if decoded_size != (roi_width, roi_height):
+        raise ValueError("candidate PNG IHDR dimensions do not match its ROI")
     score = descriptor["score"]
     if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(float(score)):
         raise ValueError("candidate score must be finite")
