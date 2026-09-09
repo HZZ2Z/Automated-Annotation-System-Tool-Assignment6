@@ -312,10 +312,18 @@ static func _validate_batch_operation(operation: Variant, frames: Dictionary, di
 	var errors := PackedStringArray()
 	if not operation is Dictionary:
 		return PackedStringArray(["batch_operations: expected objects"])
+	var schema_value: Variant = operation.get("schema_version")
+	var schema := int(schema_value) if _valid_frame_number(schema_value) else -1
+	var v1_fields := ["schema_version", "type", "mode", "keyframe", "start_frame", "end_frame", "affected_frames", "metric", "metric_id", "threshold", "max_frames", "keyframe_digest", "created_at", "start_index", "end_index", "left_stop", "right_stop", "changed_count", "covered_count"]
+	var v2_fields := ["schema_version", "type", "mode", "keyframe", "start_frame", "end_frame", "affected_frames", "metric_id", "threshold", "max_frames", "keyframe_digest", "created_at", "start_index", "end_index", "left_stop", "right_stop", "changed_count", "covered_count", "edge_refinement"]
 	for field: Variant in operation:
-		if field not in ["schema_version", "type", "mode", "keyframe", "start_frame", "end_frame", "affected_frames", "metric", "metric_id", "threshold", "max_frames", "keyframe_digest", "created_at", "start_index", "end_index", "left_stop", "right_stop", "changed_count", "covered_count"]:
+		if field not in (v2_fields if schema == 2 else v1_fields):
 			errors.append("batch_operations: unexpected field %s" % str(field))
-	if operation.get("type") != "range_propagate" or operation.get("mode") not in ["overwrite", "merge"] or not _valid_frame_number(operation.get("schema_version")) or operation.get("schema_version") != 1:
+	if schema == 2:
+		for field: String in v2_fields:
+			if not operation.has(field):
+				errors.append("batch_operations.%s: required for v2 Poly audit" % field)
+	if operation.get("type") != "range_propagate" or operation.get("mode") not in ["overwrite", "merge"] or schema not in [1, 2]:
 		errors.append("batch_operations: invalid operation type, mode or version")
 	var range_valid := true
 	for field: String in ["keyframe", "start_frame", "end_frame"]:
@@ -365,6 +373,97 @@ static func _validate_batch_operation(operation: Variant, frames: Dictionary, di
 			errors.append("batch_operations: inconsistent covered range")
 		if operation.changed_count != affected.size() or operation.changed_count >= operation.covered_count:
 			errors.append("batch_operations: inconsistent changed count")
+	if schema == 2:
+		errors.append_array(_validate_edge_refinement(operation, frames))
+	return errors
+
+
+static func _validate_edge_refinement(operation: Dictionary, frames: Dictionary) -> PackedStringArray:
+	var errors := PackedStringArray()
+	if operation.get("metric_id") != "poly-sim-flow-edge-v1":
+		errors.append("batch_operations.metric_id: invalid Poly edge algorithm")
+	if operation.get("max_frames") != 30:
+		errors.append("batch_operations.max_frames: Poly edge audit must use 30")
+	if _valid_frame_number(operation.get("start_frame")) and _valid_frame_number(operation.get("end_frame")) and _valid_frame_number(operation.get("covered_count")):
+		if int(operation.end_frame) - int(operation.start_frame) + 1 != int(operation.covered_count):
+			errors.append("batch_operations: real and playback ranges differ")
+	for field: String in ["left_stop", "right_stop"]:
+		if operation.get(field) is String and operation[field].length() > 512:
+			errors.append("batch_operations.%s: reason is too long" % field)
+	var summary: Variant = operation.get("edge_refinement")
+	if not summary is Dictionary or summary.size() != 4:
+		return PackedStringArray(["batch_operations.edge_refinement: expected exact summary fields"])
+	for field: String in ["attempted", "accepted", "fallback", "items"]:
+		if not summary.has(field):
+			errors.append("batch_operations.edge_refinement.%s: required" % field)
+	if not errors.is_empty():
+		return errors
+	for field: String in ["attempted", "accepted", "fallback"]:
+		if not _valid_frame_number(summary[field]):
+			errors.append("batch_operations.edge_refinement.%s: invalid count" % field)
+	var items: Variant = summary.items
+	if not items is Array:
+		return PackedStringArray(["batch_operations.edge_refinement.items: expected array"])
+	var keyframe: int = int(operation.get("keyframe", -1))
+	var reference_ids := {}
+	var reference: Variant = frames.get(keyframe)
+	if reference is Dictionary and reference.get("regions") is Array:
+		for region: Variant in reference.regions:
+			if region is Dictionary and region.has("polygon") and region.get("id") is String:
+				reference_ids[region.id] = true
+	if reference_ids.is_empty():
+		errors.append("batch_operations.edge_refinement: keyframe has no reference Poly")
+	var target_set := {}
+	if _valid_frame_number(operation.get("start_frame")) and _valid_frame_number(operation.get("end_frame")):
+		for frame_id: int in range(int(operation.start_frame), int(operation.end_frame) + 1):
+			if frame_id != keyframe and frames.has(frame_id):
+				target_set[frame_id] = true
+	var seen := {}
+	var accepted_count := 0
+	var fallback_count := 0
+	for item: Variant in items:
+		if not item is Dictionary or item.size() != 6:
+			errors.append("batch_operations.edge_refinement.items: invalid item shape")
+			continue
+		for field: String in ["frame_id", "region_id", "accepted", "reason", "raw_edge_score", "refined_edge_score"]:
+			if not item.has(field):
+				errors.append("batch_operations.edge_refinement.items: missing %s" % field)
+		if not _valid_frame_number(item.get("frame_id")) or not target_set.has(int(item.get("frame_id", -1))):
+			errors.append("batch_operations.edge_refinement.items: frame must be a covered target")
+		var region_id: Variant = item.get("region_id")
+		if not region_id is String or region_id.is_empty() or region_id.length() > 256 or not reference_ids.has(region_id):
+			errors.append("batch_operations.edge_refinement.items: invalid reference region ID")
+		var identity := "%s\u001f%s" % [str(item.get("frame_id")), str(region_id)]
+		if seen.has(identity):
+			errors.append("batch_operations.edge_refinement.items: duplicate frame/region")
+		seen[identity] = true
+		if not item.get("accepted") is bool:
+			errors.append("batch_operations.edge_refinement.items: accepted must be boolean")
+		elif item.accepted:
+			accepted_count += 1
+		else:
+			fallback_count += 1
+		var reason: Variant = item.get("reason")
+		if not reason is String or reason.is_empty() or reason.length() > 160:
+			errors.append("batch_operations.edge_refinement.items: invalid reason")
+		else:
+			for value: int in reason.to_utf8_buffer():
+				if value < 32:
+					errors.append("batch_operations.edge_refinement.items: reason contains control characters")
+					break
+		for field: String in ["raw_edge_score", "refined_edge_score"]:
+			var score: Variant = item.get(field)
+			if (typeof(score) != TYPE_INT and typeof(score) != TYPE_FLOAT) or not is_finite(float(score)) or float(score) < 0.0 or float(score) > 1.0:
+				errors.append("batch_operations.edge_refinement.items.%s: invalid score" % field)
+	var expected_items := target_set.size() * reference_ids.size()
+	if items.size() > 29 * reference_ids.size() or items.size() != expected_items:
+		errors.append("batch_operations.edge_refinement.items: inconsistent bounded item count")
+	if _valid_frame_number(summary.attempted) and int(summary.attempted) != items.size():
+		errors.append("batch_operations.edge_refinement.attempted: inconsistent count")
+	if _valid_frame_number(summary.accepted) and int(summary.accepted) != accepted_count:
+		errors.append("batch_operations.edge_refinement.accepted: inconsistent count")
+	if _valid_frame_number(summary.fallback) and int(summary.fallback) != fallback_count:
+		errors.append("batch_operations.edge_refinement.fallback: inconsistent count")
 	return errors
 
 

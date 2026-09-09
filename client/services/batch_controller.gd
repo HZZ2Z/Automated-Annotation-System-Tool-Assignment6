@@ -46,14 +46,15 @@ func start_analysis(index: int, threshold: float) -> PackedStringArray:
 		_key_record = _store.get_corrected_record(int(_entries[index].frame_id))
 	return errors
 
-func start_polygon_analysis(index: int) -> PackedStringArray:
+func start_polygon_analysis(index: int, similarity_threshold: float = 0.02) -> PackedStringArray:
 	cancel()
 	_strategy = "polygon_flow"
 	_active_provider = _providers.get(&"polygon_flow")
 	if _active_provider == null:
 		return PackedStringArray(["Poly propagation provider is not configured"])
 	var errors: PackedStringArray = _active_provider.begin({"source": _source, "store": _store,
-		"entries": _entries.duplicate(true), "key_index": index, "region_id": "", "max_entries": 30})
+		"entries": _entries.duplicate(true), "key_index": index, "region_id": "", "max_entries": 30,
+		"similarity_threshold": similarity_threshold})
 	if errors.is_empty():
 		_key_record = _store.get_corrected_record(int(_entries[index].frame_id))
 	return errors
@@ -139,8 +140,6 @@ func preview(first: int, last: int, mode: String) -> Dictionary:
 	_preview = {}
 	if _plan.is_empty() or first < int(_plan.start_index) or last > int(_plan.end_index) or first > int(_plan.key_index) or last < int(_plan.key_index) or mode not in ["overwrite", "merge"]:
 		return {"errors": PackedStringArray(["Analyze again; range must stay inside the candidate and contain the keyframe"])}
-	if _strategy == "polygon_flow" and mode != "merge":
-		return {"errors": PackedStringArray(["Poly propagation only merges matching polygon IDs"])}
 	var after := {}
 	var before := {}
 	var added := 0
@@ -209,7 +208,10 @@ func apply_preview() -> PackedStringArray:
 	for frame_id: int in _preview.before:
 		if _store.get_corrected_record(frame_id) != _preview.before[frame_id]:
 			return PackedStringArray(["Target changed; analyze again"])
-	var marker := {"metric_id": _plan.metric_id, "threshold": _plan.threshold,
+	var edge_refinement := _edge_refinement_summary(_preview.first, _preview.last)
+	if _strategy == "polygon_flow" and edge_refinement.is_empty():
+		return PackedStringArray(["Poly edge diagnostics are missing; analyze again"])
+	var marker := {"mode": _preview.mode, "metric_id": _plan.metric_id, "threshold": _plan.threshold,
 		"max_frames": _plan.max_frames, "start_index": _preview.first, "end_index": _preview.last,
 		"keyframe_digest": JSON.stringify(_key_record).sha256_text(),
 		"created_at": Time.get_datetime_string_from_system(true),
@@ -219,6 +221,7 @@ func apply_preview() -> PackedStringArray:
 	if _strategy == "polygon_flow":
 		marker["start_frame"] = int(_entries[_preview.first].frame_id)
 		marker["end_frame"] = int(_entries[_preview.last].frame_id)
+		marker["edge_refinement"] = edge_refinement
 		command = APPLY_PROPOSALS.new(_key_record, _preview.before, _preview.after, marker)
 	else:
 		command = PROPAGATE.new(_plan.keyframe, int(_entries[_preview.first].frame_id), int(_entries[_preview.last].frame_id), _preview.mode)
@@ -227,6 +230,34 @@ func apply_preview() -> PackedStringArray:
 		command.set_metadata(marker)
 	var errors: PackedStringArray = _history.execute(command, _store)
 	return errors
+
+func _edge_refinement_summary(first: int, last: int) -> Dictionary:
+	var items: Array = []
+	var accepted := 0
+	for index in range(first, last + 1):
+		if index == int(_plan.key_index):
+			continue
+		var frame_id := int(_entries[index].frame_id)
+		var frame_quality: Variant = _plan.get("quality", {}).get(frame_id)
+		if not frame_quality is Dictionary:
+			return {}
+		var region_ids: Array = frame_quality.keys()
+		region_ids.sort()
+		for region_id: Variant in region_ids:
+			var edge: Variant = frame_quality[region_id].get("edge") if frame_quality[region_id] is Dictionary else null
+			if not edge is Dictionary or edge.get("attempted") != true:
+				return {}
+			var was_accepted: Variant = edge.get("accepted")
+			if not was_accepted is bool:
+				return {}
+			if was_accepted:
+				accepted += 1
+			items.append({"frame_id": frame_id, "region_id": str(region_id),
+				"accepted": was_accepted, "reason": edge.get("reason"),
+				"raw_edge_score": edge.get("raw_edge_score"),
+				"refined_edge_score": edge.get("refined_edge_score")})
+	return {"attempted": items.size(), "accepted": accepted,
+		"fallback": items.size() - accepted, "items": items}
 
 func _invalidate(_frames: Variant = null) -> void:
 	cancel()

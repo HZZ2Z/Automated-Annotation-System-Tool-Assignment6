@@ -43,9 +43,16 @@ func _init(key_record: Dictionary, before: Dictionary, after: Dictionary, metada
 			_after[frame] = after[frame].duplicate(true)
 	if _after.is_empty():
 		_errors.append("Annotations already match; no batch was created")
-	_operation.merge({"schema_version": 1, "type": "range_propagate", "mode": "merge",
-		"keyframe": _key.get("frame", -1), "affected_frames": _after.keys(),
-		"changed_count": _after.size(), "created_at": Time.get_datetime_string_from_system(true)}, true)
+	var mode: Variant = _operation.get("mode")
+	if mode not in ["overwrite", "merge"]:
+		_errors.append("Poly preview: invalid apply mode")
+	var affected: Array = _after.keys()
+	affected.sort()
+	_operation.merge({"schema_version": 2, "type": "range_propagate", "mode": mode,
+		"keyframe": _key.get("frame", -1), "affected_frames": affected,
+		"changed_count": _after.size()}, true)
+	if not _operation.has("created_at"):
+		_operation["created_at"] = Time.get_datetime_string_from_system(true)
 
 func apply(store: Variant) -> PackedStringArray:
 	if not _errors.is_empty():
