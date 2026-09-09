@@ -66,3 +66,4 @@ docs/superpowers/
 /output/
 /test/
 /tests/
+/.local-acceptance/
