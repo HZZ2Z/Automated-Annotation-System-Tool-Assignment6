@@ -4,11 +4,15 @@ extends RefCounted
 
 const SIMILARITY := preload("res://client/services/frame_similarity_service.gd")
 const PROPAGATE := preload("res://client/domain/commands/propagate_range_command.gd")
+const POLYGON := preload("res://client/services/polygon_propagation_service.gd")
+const APPLY_PROPOSALS := preload("res://client/domain/commands/apply_propagation_command.gd")
 var _source: Variant
 var _store: Variant
 var _history: Variant
 var _entries: Array = []
 var _scanner = SIMILARITY.new()
+var _polygon = POLYGON.new()
+var _strategy := "copy"
 var _plan: Dictionary = {}
 var _preview: Dictionary = {}
 var _key_record: Dictionary = {}
@@ -32,21 +36,34 @@ func configure(source: Variant, store: Variant, history: Variant, entries: Array
 
 func start_analysis(index: int, threshold: float) -> PackedStringArray:
 	cancel()
+	_strategy = "copy"
 	var errors: PackedStringArray = _scanner.begin(_source, _store, _entries, index, threshold)
 	if errors.is_empty():
 		_key_record = _store.get_corrected_record(int(_entries[index].frame_id))
 	return errors
 
+func start_polygon_analysis(index: int) -> PackedStringArray:
+	cancel()
+	_strategy = "polygon_flow"
+	var errors: PackedStringArray = _polygon.begin(_source, _store, _entries, index)
+	if errors.is_empty():
+		_key_record = _store.get_corrected_record(int(_entries[index].frame_id))
+	return errors
+
 func is_analyzing() -> bool:
-	return _scanner.running
+	return _polygon.running if _strategy == "polygon_flow" else _scanner.running
+
+func progress_text() -> String:
+	return _polygon.progress_text() if _strategy == "polygon_flow" else "正在查找相似帧…"
 
 func step_analysis() -> void:
-	_scanner.step()
-	if not _scanner.running and not _scanner.result.is_empty():
-		if not _scanner.result.errors.is_empty():
-			last_error = _scanner.result.errors[0]
+	var worker = _polygon if _strategy == "polygon_flow" else _scanner
+	worker.step()
+	if not worker.running and not worker.result.is_empty():
+		if not worker.result.errors.is_empty():
+			last_error = worker.result.errors[0]
 			return
-		_plan = _scanner.result.duplicate(true)
+		_plan = worker.result.duplicate(true)
 		_plan["keyframe"] = int(_key_record.frame)
 
 func get_plan() -> Dictionary:
@@ -54,6 +71,7 @@ func get_plan() -> Dictionary:
 
 func cancel() -> void:
 	_scanner.cancel()
+	_polygon.cancel()
 	_plan.clear()
 	_preview.clear()
 	_key_record.clear()
@@ -63,6 +81,8 @@ func preview(first: int, last: int, mode: String) -> Dictionary:
 	_preview = {}
 	if _plan.is_empty() or first < int(_plan.start_index) or last > int(_plan.end_index) or first > int(_plan.key_index) or last < int(_plan.key_index) or mode not in ["overwrite", "merge"]:
 		return {"errors": PackedStringArray(["Analyze again; range must stay inside the candidate and contain the keyframe"])}
+	if _strategy == "polygon_flow" and mode != "merge":
+		return {"errors": PackedStringArray(["Poly propagation only merges matching polygon IDs"])}
 	var after := {}
 	var before := {}
 	var added := 0
@@ -78,13 +98,22 @@ func preview(first: int, last: int, mode: String) -> Dictionary:
 			return {"errors": PackedStringArray(["Missing target or duplicate region ID"])}
 		before[frame_id] = record.duplicate(true)
 		var proposed := record.duplicate(true)
+		var source_regions: Array = _key_record.regions.duplicate(true)
+		if _strategy == "polygon_flow":
+			source_regions = _plan.target_regions.get(frame_id, []).duplicate(true)
+			if source_regions.is_empty():
+				return {"errors": PackedStringArray(["Poly candidate is missing a target frame"])}
+			for region: Dictionary in source_regions:
+				for original: Dictionary in _key_record.regions:
+					if original.id == region.id and original.has("filled"):
+						region["filled"] = original.filled
 		var source_ids := {}
 		var target_ids := {}
-		for region: Dictionary in _key_record.regions:
+		for region: Dictionary in source_regions:
 			source_ids[region.id] = true
 		for region: Dictionary in record.regions:
 			target_ids[region.id] = true
-		proposed.regions = _key_record.regions.duplicate(true) if mode == "overwrite" else _merge(record.regions, _key_record.regions)
+		proposed.regions = source_regions.duplicate(true) if mode == "overwrite" else _merge(record.regions, source_regions)
 		if proposed.regions != record.regions:
 			changed += 1
 		for id: String in source_ids:
@@ -113,6 +142,10 @@ func apply_preview() -> PackedStringArray:
 		return PackedStringArray(["Preview expired; analyze again"])
 	if int(_preview.changed_count) == 0:
 		return PackedStringArray(["Annotations already match; no batch was created"])
+	if _strategy == "polygon_flow":
+		var source_errors: PackedStringArray = _polygon.validate_source()
+		if not source_errors.is_empty():
+			return source_errors
 	for frame_id: int in _preview.before:
 		if _store.get_corrected_record(frame_id) != _preview.before[frame_id]:
 			return PackedStringArray(["Target changed; analyze again"])
@@ -122,7 +155,13 @@ func apply_preview() -> PackedStringArray:
 		"created_at": Time.get_datetime_string_from_system(true),
 		"left_stop": _plan.left_stop, "right_stop": _plan.right_stop,
 		"changed_count": _preview.changed_count, "covered_count": _preview.covered_count}
-	var command = PROPAGATE.new(_plan.keyframe, int(_entries[_preview.first].frame_id), int(_entries[_preview.last].frame_id), _preview.mode)
+	var command: Variant
+	if _strategy == "polygon_flow":
+		marker["start_frame"] = int(_entries[_preview.first].frame_id)
+		marker["end_frame"] = int(_entries[_preview.last].frame_id)
+		command = APPLY_PROPOSALS.new(_key_record, _preview.before, _preview.after, marker)
+	else:
+		command = PROPAGATE.new(_plan.keyframe, int(_entries[_preview.first].frame_id), int(_entries[_preview.last].frame_id), _preview.mode)
 	# 命令提供附加标记入口；基础四参数接口仍供已有编辑插件使用。
 	if command.has_method("set_metadata"):
 		command.set_metadata(marker)

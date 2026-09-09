@@ -15,6 +15,8 @@ var _first: SpinBox
 var _last: SpinBox
 var _threshold: SpinBox
 var _mode: OptionButton
+var _algorithm: OptionButton
+var _algorithm_hint: Label
 var _show_preview: CheckButton
 var _auto: CheckButton
 var _apply: Button
@@ -82,6 +84,11 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_preview_note.visible = false
 	_section("1  选择参考帧")
 	_key_label = _label("在播放器中选一帧，先修正它的标注。")
+	_algorithm = OptionButton.new()
+	_algorithm.add_item("固定坐标复制")
+	_algorithm.add_item("Poly 轮廓运动")
+	_panel.add_child(_algorithm)
+	_algorithm.item_selected.connect(_select_algorithm)
 	_analyze = _button("以当前帧查找相似段", analyze)
 	_section("2  应用标注")
 	var range_row := HBoxContainer.new()
@@ -164,7 +171,7 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_auto.text = "确认后自动前进"
 	_auto.button_pressed = true
 	_panel.add_child(_auto)
-	_label("固定坐标复制，不跟随物体运动。")
+	_algorithm_hint = _label("固定坐标复制，不跟随物体运动。")
 	_details = _label("分析后可在此查看范围停止原因。")
 	_label("时间轴：斜线为待检查，勾号为已确认。\n蓝色为候选段，金色为已应用批次。")
 	_advanced.visible = false
@@ -244,11 +251,11 @@ func analyze() -> void:
 	if not _ready_for_action():
 		return
 	cancel()
-	var errors: PackedStringArray = controller.start_analysis(_host.get_current_frame(), _threshold.value)
+	var errors: PackedStringArray = controller.start_polygon_analysis(_host.get_current_frame()) if _algorithm.selected == 1 else controller.start_analysis(_host.get_current_frame(), _threshold.value)
 	if not errors.is_empty():
 		_status(errors[0])
 		return
-	_info.text = "正在查找相似段…"
+	_info.text = controller.progress_text()
 	_info.visible = true
 	set_process(true)
 	refresh_current()
@@ -256,6 +263,7 @@ func analyze() -> void:
 func _process(_delta: float) -> void:
 	controller.step_analysis()
 	if controller.is_analyzing():
+		_info.text = controller.progress_text()
 		return
 	set_process(false)
 	var plan: Dictionary = controller.get_plan()
@@ -281,7 +289,7 @@ func _process(_delta: float) -> void:
 func _update_preview() -> void:
 	if _setting or _store == null:
 		return
-	_mode_hint.text = "替换目标帧的全部标注。" if _mode.selected == 0 else "同 ID 更新，保留目标帧独有区域。"
+	_mode_hint.text = "更新同 ID 的 Poly，保留其他标注。" if _algorithm.selected == 1 else ("替换目标帧的全部标注。" if _mode.selected == 0 else "同 ID 更新，保留目标帧独有区域。")
 	var plan: Dictionary = controller.get_plan()
 	if plan.is_empty():
 		return
@@ -294,7 +302,7 @@ func _update_preview() -> void:
 	_range = Vector2i(first, last)
 	_summary.text = "%d 帧 · 将修改 %d 帧" % [preview.covered_count, preview.changed_count]
 	if preview.changed_count == 0:
-		_summary.text = "标注已一致，无需应用。"
+		_summary.text = "没有可传播的可靠相邻帧，详见高级设置。" if _algorithm.selected == 1 and preview.covered_count == 1 else "标注已一致，无需应用。"
 	_summary.tooltip_text = "新增 %d 个区域，替换 %d 个，删除 %d 个" % [preview.added, preview.replaced, preview.removed]
 	_apply.text = "应用到 %d 帧" % preview.changed_count
 	if _host._store.get_corrected_record(plan.keyframe).regions.is_empty() and _mode.selected == 0:
@@ -444,6 +452,10 @@ func refresh_current() -> void:
 		return
 	var active := available()
 	var enabled: bool = active and not controller.is_analyzing() and not _host._is_class_dialog_active()
+	_mode.disabled = not enabled or _algorithm.selected == 1
+	_threshold.editable = enabled and _algorithm.selected == 0
+	_threshold.get_parent().visible = _algorithm.selected == 0
+	_algorithm.disabled = not active
 	for button: Button in _guarded_buttons:
 		button.disabled = not enabled
 	_apply.disabled = not enabled or not controller.can_apply()
@@ -504,6 +516,9 @@ func _status(message: String) -> void:
 			"review: no changed review state": "这些帧已处于所选确认状态。",
 			"Target changed; analyze again": "目标标注已变化，请重新查找。",
 			"Keyframe image could not be loaded": "参考帧加载失败，请重新选择。",
+			"The reference frame has no polygon; draw or correct a polygon first": "参考帧没有 Poly，请先绘制或修正轮廓。",
+			"Source frame mapping changed; analyze again": "帧来源已变化，请重新分析。",
+			"Keyframe changed; analyze again": "参考帧已变化，请重新分析。",
 		}.get(message, "操作未完成，请重试；详细原因见高级设置。")
 	_info.text = text
 	_info.visible = text.contains("失败") or text.contains("请") or text.contains("失效")
@@ -538,6 +553,18 @@ func _spin(parent: Node, minimum: float, maximum: float, value: float, increment
 
 func _frame_id(index: int) -> int:
 	return int(_host._frame_entries[index].frame_id)
+
+func _select_algorithm(index: int) -> void:
+	cancel()
+	if index == 1:
+		_mode.select(1)
+	_analyze.text = "分析 Poly 轮廓运动" if index == 1 else "以当前帧查找相似段"
+	_algorithm_hint.text = "只传播参考帧的 Poly；运动不可靠即停止，每批最多 30 帧。结果需人工检查。" if index == 1 else "固定坐标复制，不跟随物体运动。"
+	_mode_hint.text = "更新同 ID 的 Poly，保留其他标注。" if index == 1 else "同 ID 更新，保留目标帧独有区域。"
+	refresh_current()
+
+func _exit_tree() -> void:
+	controller.cancel()
 
 func _stop_reason(reason: String) -> String:
 	if reason.begins_with("difference "):
