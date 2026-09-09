@@ -4,7 +4,7 @@ extends RefCounted
 const EXACT_JSON := preload("res://client/domain/exact_json.gd")
 const VALIDATOR := preload("res://client/domain/model_output_validator.gd")
 const POLYGONS := preload("res://client/domain/polygon_ops.gd")
-const METRIC_ID := "poly-flow-mask-v1"
+const METRIC_ID := "poly-sim-flow-edge-v1"
 const MAX_FRAMES := 30
 var python_path := "res://.venv/bin/python"
 var cli_path := "res://python/propagate_polygons.py"
@@ -17,7 +17,7 @@ var _store: Variant
 var _entries: Array = []
 var _regions: Array = []
 var _frames: Array = []
-var _checked: Array[int] = []
+var _snapshots: Dictionary = {}
 var _size := Vector2i.ZERO
 var _key := -1
 var _left := -1
@@ -25,7 +25,7 @@ var _right := -1
 var _left_stop := ""
 var _right_stop := ""
 var _direction := -1
-var _threshold := 0.65
+var _threshold := 0.02
 var _pid := -1
 var _job_dir := ""
 var _job_parent := ""
@@ -33,9 +33,9 @@ var _started := 0
 var _message := ""
 var _retired: Array = []
 
-func begin(source: Variant, store: Variant, entries: Array, key: int, threshold: float = 0.65) -> PackedStringArray:
+func begin(source: Variant, store: Variant, entries: Array, key: int, similarity_threshold: float = 0.02) -> PackedStringArray:
 	cancel()
-	if source == null or store == null or key < 0 or key >= entries.size() or not is_finite(threshold) or threshold <= 0.0 or threshold > 1.0:
+	if source == null or store == null or key < 0 or key >= entries.size() or not is_finite(similarity_threshold) or similarity_threshold <= 0.0 or similarity_threshold > 1.0:
 		return PackedStringArray(["Select a source frame with polygon annotations"])
 	var record: Dictionary = store.get_corrected_record(int(entries[key].frame_id))
 	for region: Dictionary in record.get("regions", []):
@@ -60,7 +60,7 @@ func begin(source: Variant, store: Variant, entries: Array, key: int, threshold:
 	_key = key
 	_left = key - 1
 	_right = key + 1
-	_threshold = threshold
+	_threshold = similarity_threshold
 	_started = Time.get_ticks_msec()
 	_message = "正在准备参考帧"
 	running = true
@@ -92,8 +92,7 @@ func step() -> void:
 			_fail(errors[0])
 			return
 		running = false
-		_cleanup(_job_dir, _job_parent)
-		_job_dir = ""
+		# 快照保留到 apply/cancel；validate_source() 会在提交前再次核验同一批文件。
 		return
 	if _frames.is_empty():
 		_capture(_key)
@@ -133,13 +132,25 @@ func progress_text() -> String:
 	return _message
 
 func validate_source() -> PackedStringArray:
-	if _source == null:
+	if _source == null or _store == null:
 		return PackedStringArray(["Source is no longer available; analyze again"])
-	for index: int in _checked:
-		var actual: Dictionary = _source.get_frame_entry(index)
+	for index: Variant in _snapshots:
+		var snapshot: Dictionary = _snapshots[index]
+		var actual: Dictionary = _source.get_frame_entry(int(index))
 		actual["frame_id"] = int(actual.get("frame_id", actual.get("frame", -1)))
-		if actual != _entries[index]:
+		if _digest(actual) != snapshot.entry_digest:
 			return PackedStringArray(["Source frame mapping changed; analyze again"])
+		var frame_id := int(snapshot.frame_id)
+		if _store.record_digest(frame_id) != snapshot.record_digest:
+			return PackedStringArray(["Annotation content changed; analyze again"])
+		if _review_digest(frame_id) != snapshot.review_digest or _store.is_verified(frame_id) != snapshot.verified:
+			return PackedStringArray(["Verification state changed; analyze again"])
+		var texture: Variant = _source.load_texture(int(index))
+		var image: Image = texture.get_image() if texture is Texture2D else null
+		if image == null or image.is_empty() or _image_digest(image) != snapshot.source_image_digest:
+			return PackedStringArray(["Source image changed; analyze again"])
+		if not FileAccess.file_exists(snapshot.image_path) or FileAccess.get_sha256(snapshot.image_path) != snapshot.image_sha256:
+			return PackedStringArray(["PNG snapshot changed; analyze again"])
 	return PackedStringArray()
 
 func cancel() -> void:
@@ -152,7 +163,7 @@ func cancel() -> void:
 	_entries.clear()
 	_regions.clear()
 	_frames.clear()
-	_checked.clear()
+	_snapshots.clear()
 	_size = Vector2i.ZERO
 	_left_stop = ""
 	_right_stop = ""
@@ -160,10 +171,12 @@ func cancel() -> void:
 	_message = ""
 
 func _capture(index: int) -> String:
-	_checked.append(index)
-	var errors := validate_source()
-	if not errors.is_empty():
-		_fail(errors[0])
+	var entry: Dictionary = _source.get_frame_entry(index)
+	entry["frame_id"] = int(entry.get("frame_id", entry.get("frame", -1)))
+	var expected_entry: Dictionary = _entries[index].duplicate(true)
+	expected_entry["frame_id"] = int(expected_entry.get("frame_id", expected_entry.get("frame", -1)))
+	if _digest(entry) != _digest(expected_entry):
+		_fail("Source frame mapping changed; analyze again")
 		return "source changed"
 	var texture: Variant = _source.load_texture(index)
 	var image: Image = texture.get_image() if texture is Texture2D else null
@@ -178,7 +191,16 @@ func _capture(index: int) -> String:
 	if image.save_png(path) != OK:
 		_fail("Could not write Poly image snapshot")
 		return "snapshot failed"
-	_frames.append({"index": index, "frame_id": int(_entries[index].frame_id), "image_path": path})
+	var frame_id := int(_entries[index].frame_id)
+	var image_sha256 := FileAccess.get_sha256(path)
+	var snapshot := {"index": index, "frame_id": frame_id, "image_path": path,
+		"image_sha256": image_sha256, "entry_digest": _digest(entry),
+		"record_digest": _store.record_digest(frame_id), "verified": _store.is_verified(frame_id),
+		"review_digest": _review_digest(frame_id), "source_image_digest": _image_digest(image)}
+	_snapshots[index] = snapshot
+	_frames.append({"index": index, "frame_id": frame_id, "image_path": path,
+		"image_sha256": image_sha256, "entry_digest": snapshot.entry_digest,
+		"record_digest": snapshot.record_digest, "verified": snapshot.verified})
 	_message = "已准备 %d / %d 帧" % [_frames.size(), MAX_FRAMES]
 	return ""
 
@@ -188,7 +210,8 @@ func _launch() -> void:
 	if file == null:
 		_fail("Could not write Poly request")
 		return
-	file.store_string(JSON.stringify({"schema_version": 1, "key_index": _key, "threshold": _threshold, "frames": _frames, "regions": _regions}))
+	file.store_string(JSON.stringify({"schema_version": 2, "key_index": _key,
+		"similarity_threshold": _threshold, "frames": _frames, "regions": _regions}))
 	file.close()
 	_pid = OS.create_process(ProjectSettings.globalize_path(python_path), PackedStringArray([
 		ProjectSettings.globalize_path(cli_path), "--request", _job_dir.path_join("request.json"),
@@ -207,9 +230,9 @@ func _accept(payload: Dictionary) -> PackedStringArray:
 	for field: String in fields:
 		if not payload.has(field):
 			return invalid
-	if payload.schema_version != 1 or payload.success != true or payload.cancelled != false or payload.metric_id != METRIC_ID or payload.threshold != _threshold or payload.key_index != _key:
+	if payload.schema_version != 2 or payload.success != true or payload.cancelled != false or payload.metric_id != METRIC_ID or payload.threshold != _threshold or payload.key_index != _key:
 		return invalid
-	if not _integer(payload.start_index) or not _integer(payload.end_index) or not payload.proposals is Array or not payload.left_stop is String or not payload.right_stop is String:
+	if not _integer(payload.start_index) or not _integer(payload.end_index) or not payload.proposals is Array or not payload.left_stop is String or not payload.right_stop is String or payload.left_stop.is_empty() or payload.right_stop.is_empty() or payload.left_stop.length() > 512 or payload.right_stop.length() > 512:
 		return invalid
 	var first := int(payload.start_index)
 	var last := int(payload.end_index)
@@ -225,7 +248,7 @@ func _accept(payload: Dictionary) -> PackedStringArray:
 		if not proposal is Dictionary or proposal.size() != 4 or not _integer(proposal.get("index")) or not _integer(proposal.get("frame_id")) or not proposal.get("regions") is Array or not proposal.get("quality") is Dictionary:
 			return invalid
 		var index := int(proposal.index)
-		if index < first or index > last or index == _key or seen.has(index) or int(proposal.frame_id) != int(_entries[index].frame_id) or proposal.regions.size() != expected.size():
+		if index < first or index > last or index == _key or seen.has(index) or not _snapshots.has(index) or int(proposal.frame_id) != int(_entries[index].frame_id) or proposal.regions.size() != expected.size() or proposal.quality.size() != expected.size():
 			return invalid
 		seen[index] = true
 		var ids := {}
@@ -249,6 +272,8 @@ func _accept(payload: Dictionary) -> PackedStringArray:
 			for point: Array in region.polygon:
 				if float(point[0]) > _size.x - 1 or float(point[1]) > _size.y - 1:
 					return invalid
+			if not proposal.quality.has(region.id) or not _valid_quality(proposal.quality[region.id]):
+				return invalid
 		proposals[int(proposal.frame_id)] = proposal.regions.duplicate(true)
 		quality[int(proposal.frame_id)] = proposal.quality.duplicate(true)
 	result = {"strategy": "polygon_flow", "key_index": _key, "start_index": first, "end_index": last,
@@ -260,6 +285,81 @@ func _accept(payload: Dictionary) -> PackedStringArray:
 
 func _integer(value: Variant) -> bool:
 	return (typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT) and is_finite(float(value)) and float(value) == floorf(float(value))
+
+func _valid_quality(value: Variant) -> bool:
+	if not value is Dictionary:
+		return false
+	var fields := ["appearance", "fb_consistency", "support", "texture", "texture_std",
+		"largest_unsupported_fraction", "area_ratio", "anchor_area_ratio", "anchor_iou",
+		"anchor_quality", "adjacent_mad", "keyframe_mad", "raw_flow", "edge", "score"]
+	if value.size() != fields.size():
+		return false
+	for field: String in fields:
+		if not value.has(field):
+			return false
+	for field: String in fields:
+		if field in ["raw_flow", "edge"]:
+			continue
+		if not _finite_nonnegative(value[field]):
+			return false
+	if float(value.adjacent_mad) >= _threshold or float(value.keyframe_mad) >= _threshold or float(value.score) < 0.65:
+		return false
+	var raw: Variant = value.raw_flow
+	var raw_fields := ["appearance", "fb_consistency", "support", "texture", "texture_std",
+		"largest_unsupported_fraction", "area_ratio", "anchor_area_ratio", "anchor_iou",
+		"anchor_quality", "score"]
+	if not raw is Dictionary or raw.size() != raw_fields.size():
+		return false
+	for field: String in raw_fields:
+		if not raw.has(field) or not _finite_nonnegative(raw[field]):
+			return false
+	var edge: Variant = value.edge
+	var edge_fields := ["attempted", "accepted", "reason", "raw_edge_score",
+		"refined_edge_score", "raw_iou", "area_ratio", "hausdorff"]
+	if not edge is Dictionary or edge.size() != edge_fields.size():
+		return false
+	for field: String in edge_fields:
+		if not edge.has(field):
+			return false
+	if edge.attempted != true or not edge.accepted is bool or not edge.reason is String or edge.reason.is_empty() or edge.reason.length() > 160:
+		return false
+	for field: String in ["raw_edge_score", "refined_edge_score", "raw_iou", "area_ratio", "hausdorff"]:
+		if not _finite_nonnegative(edge[field]):
+			return false
+	return float(edge.raw_edge_score) <= 1.0 and float(edge.refined_edge_score) <= 1.0 and float(edge.raw_iou) <= 1.0
+
+func _finite_nonnegative(value: Variant) -> bool:
+	return (typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT) and is_finite(float(value)) and float(value) >= 0.0
+
+func _review_digest(frame_id: int) -> String:
+	return _digest(_store.snapshot_review_state().get(str(frame_id), null))
+
+func _digest(value: Variant) -> String:
+	return JSON.stringify(_canonicalize(value), "", true, true).sha256_text()
+
+func _canonicalize(value: Variant) -> Variant:
+	if value is Dictionary:
+		var keys: Array = value.keys()
+		keys.sort()
+		var mapped := {}
+		for key: Variant in keys:
+			mapped[key] = _canonicalize(value[key])
+		return mapped
+	if value is Array:
+		var mapped: Array = []
+		for item: Variant in value:
+			mapped.append(_canonicalize(item))
+		return mapped
+	if typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT:
+		return float(value)
+	return value
+
+func _image_digest(image: Image) -> String:
+	var context := HashingContext.new()
+	context.start(HashingContext.HASH_SHA256)
+	context.update(JSON.stringify([image.get_width(), image.get_height(), image.get_format()]).to_utf8_buffer())
+	context.update(image.get_data())
+	return context.finish().hex_encode()
 
 func _read_json(name: String) -> Variant:
 	var path := _job_dir.path_join(name)

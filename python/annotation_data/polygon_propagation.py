@@ -94,9 +94,10 @@ def _validate_request(request: object) -> tuple[list[dict], list[dict], int, flo
     frames = request.get("frames")
     if not isinstance(frames, list) or not 1 <= len(frames) <= MAX_FRAMES:
         raise ValueError("frames must contain 1 to 30 consecutive snapshots")
+    frame_fields = {"index", "frame_id", "image_path", "image_sha256", "entry_digest", "record_digest", "verified"}
     for i, frame in enumerate(frames):
-        if not isinstance(frame, dict) or set(frame) != {"index", "frame_id", "image_path"}:
-            raise ValueError("each frame must contain index, frame_id and image_path")
+        if not isinstance(frame, dict) or set(frame) != frame_fields:
+            raise ValueError("each frame must contain only the v2 snapshot identity fields")
         index = _integer(frame["index"], "frame index")
         frame_id = _integer(frame["frame_id"], "frame_id")
         if i and (index != frames[i - 1]["index"] + 1 or frame_id != frames[i - 1]["frame_id"] + 1):
@@ -104,6 +105,12 @@ def _validate_request(request: object) -> tuple[list[dict], list[dict], int, flo
         path = frame["image_path"]
         if not isinstance(path, str) or not path or not Path(path).is_absolute():
             raise ValueError("image_path must be an absolute PNG snapshot path")
+        for field in ("image_sha256", "entry_digest", "record_digest"):
+            value = frame[field]
+            if not isinstance(value, str) or len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+                raise ValueError(f"{field} must be a lowercase SHA-256 digest")
+        if type(frame["verified"]) is not bool:
+            raise ValueError("verified must be a boolean snapshot")
     if key not in [frame["index"] for frame in frames]:
         raise ValueError("key_index is not present in frames")
     regions = request.get("regions")
@@ -289,6 +296,8 @@ def propagate(request: dict, *, cancelled: Callable[[], bool] | None = None,
         for frame in frames:
             check_cancel()
             image, snapshot = _load_image(Path(frame["image_path"]))
+            if snapshot.digest.hex() != frame["image_sha256"]:
+                raise ValueError("image_sha256 differs from the PNG snapshot")
             snapshots.append(snapshot)
             if frame["index"] == key:
                 anchor = image
@@ -348,10 +357,10 @@ def propagate(request: dict, *, cancelled: Callable[[], bool] | None = None,
             raise ValueError("image snapshot changed during analysis")
         proposals.sort(key=lambda proposal: proposal["index"])
         indices = [key] + [proposal["index"] for proposal in proposals]
-        return {"schema_version": 1, "success": True, "cancelled": False, "metric_id": METRIC_ID,
+        return {"schema_version": 2, "success": True, "cancelled": False, "metric_id": METRIC_ID,
                 "threshold": threshold, "key_index": key, "start_index": min(indices), "end_index": max(indices),
                 "left_stop": stops["left"], "right_stop": stops["right"], "proposals": proposals}
     except Cancelled as error:
-        return {"schema_version": 1, "success": False, "cancelled": True, "error": str(error)}
+        return {"schema_version": 2, "success": False, "cancelled": True, "error": str(error)}
     except (ValueError, TypeError, OSError, OverflowError, cv2.error) as error:
-        return {"schema_version": 1, "success": False, "cancelled": False, "error": str(error)}
+        return {"schema_version": 2, "success": False, "cancelled": False, "error": str(error)}

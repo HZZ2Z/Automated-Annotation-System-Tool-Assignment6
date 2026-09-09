@@ -80,7 +80,7 @@ def main(argv=None) -> int:
         request = json.loads(args.request.read_text(encoding="utf-8"), parse_constant=_reject_constant, object_pairs_hook=_unique_fields)
         _check_output_paths(args, request)
         if args.cancel_file.exists():
-            result = {"schema_version": 1, "success": False, "cancelled": True, "error": "polygon analysis cancelled"}
+            result = {"schema_version": 2, "success": False, "cancelled": True, "error": "polygon analysis cancelled"}
         else:
             result = propagate(request, cancelled=args.cancel_file.exists,
                                progress=lambda payload: atomic_json(args.progress_file, payload))
@@ -89,7 +89,7 @@ def main(argv=None) -> int:
         return 1
     except (ValueError, OSError, UnicodeError, RecursionError) as error:
         is_cancelled = args.cancel_file.exists()
-        result = {"schema_version": 1, "success": False, "cancelled": is_cancelled,
+        result = {"schema_version": 2, "success": False, "cancelled": is_cancelled,
                   "error": "polygon analysis cancelled" if is_cancelled else str(error)}
     try:
         atomic_json(args.result, result)
