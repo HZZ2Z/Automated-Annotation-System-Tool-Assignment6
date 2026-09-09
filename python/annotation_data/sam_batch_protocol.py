@@ -74,7 +74,10 @@ def _require_int(value: Any, label: str, *, minimum: int | None = None) -> int:
 def _require_number(value: Any, label: str, *, minimum: float | None = None) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{label} must be a number")
-    number = float(value)
+    try:
+        number = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise ValueError(f"{label} must be finite") from exc
     if not math.isfinite(number):
         raise ValueError(f"{label} must be finite")
     if minimum is not None and number < minimum:
@@ -85,6 +88,10 @@ def _require_number(value: Any, label: str, *, minimum: float | None = None) -> 
 def _require_text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{label} must be a non-empty string")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{label} must be UTF-8 encodable") from exc
     return value
 
 
@@ -96,14 +103,15 @@ def _require_digest(value: Any, label: str) -> str:
 
 
 def _reject_non_finite(value: Any) -> None:
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError("JSON contains a non-finite number")
-    if isinstance(value, dict):
-        for child in value.values():
-            _reject_non_finite(child)
-    elif isinstance(value, list):
-        for child in value:
-            _reject_non_finite(child)
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, float) and not math.isfinite(current):
+            raise ValueError("JSON contains a non-finite number")
+        if isinstance(current, dict):
+            pending.extend(current.values())
+        elif isinstance(current, list):
+            pending.extend(current)
 
 
 def _sha256_file(path: Path) -> str:
@@ -289,7 +297,7 @@ def parse_request(line: bytes, *, job_dir: Path | None = None) -> SamBatchReques
     try:
         decoded = line[:-1].decode("utf-8")
         payload = json.loads(decoded, parse_constant=_reject_constant, object_pairs_hook=_reject_duplicate_keys)
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, OverflowError, RecursionError) as exc:
         raise ValueError(f"invalid JSON request: {exc}") from exc
     _reject_non_finite(payload)
     request = _require_exact_keys(payload, _REQUEST_KEYS, "request")

@@ -51,7 +51,9 @@ def _load_factory(specification: str):
     if not separator or not module_name or not factory_name or ":" in factory_name:
         raise ValueError("backend must use MODULE:FACTORY")
     try:
-        factory = getattr(importlib.import_module(module_name), factory_name)
+        with contextlib.redirect_stdout(sys.stderr):
+            module = importlib.import_module(module_name)
+        factory = getattr(module, factory_name)
     except (ImportError, AttributeError) as exc:
         raise ValueError(f"cannot load backend factory {specification}: {exc}") from exc
     if not callable(factory):
@@ -67,34 +69,86 @@ def _create_backend(factory: Any, job_dir: Path) -> Any:
     accepts_job_dir = signature is None or "job_dir" in signature.parameters or any(
         parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in (signature.parameters.values() if signature else ())
     )
-    with contextlib.redirect_stdout(sys.stderr):
-        backend = factory(job_dir=job_dir) if accepts_job_dir else factory()
-    for method in ("hello", "open_batch", "propagate", "reanchor", "close"):
-        if not callable(getattr(backend, method, None)):
-            raise ValueError(f"backend is missing {method}()")
-    return backend
+    backend = None
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            backend = factory(job_dir=job_dir) if accepts_job_dir else factory()
+        for method in ("hello", "open_batch", "propagate", "reanchor", "close"):
+            if not callable(getattr(backend, method, None)):
+                raise ValueError(f"backend is missing {method}()")
+        return backend
+    except Exception:
+        if backend is not None and callable(getattr(backend, "close", None)):
+            try:
+                with contextlib.redirect_stdout(sys.stderr):
+                    backend.close()
+            except Exception as exc:
+                print(f"sam-batch-worker: partial backend close failed: {exc}", file=sys.stderr)
+        raise
 
 
 def _recover_request_id(line: bytes) -> int | None:
     """Recover only an unambiguous positive ID from malformed JSON input."""
     if not isinstance(line, bytes) or not line.endswith(b"\n") or line.count(b"\n") != 1:
         return None
-    try:
-        import json
-
-        pairs: list[tuple[str, Any]] = []
-
-        def remember(items: list[tuple[str, Any]]) -> dict[str, Any]:
-            pairs.extend(items)
-            return dict(items)
-
-        payload = json.loads(line[:-1].decode("utf-8"), object_pairs_hook=remember)
-    except (UnicodeDecodeError, ValueError):
-        return None
-    if not isinstance(payload, dict) or sum(key == "request_id" for key, _ in pairs) != 1:
-        return None
-    request_id = payload.get("request_id")
-    return request_id if isinstance(request_id, int) and not isinstance(request_id, bool) and request_id >= 1 else None
+    value = line[:-1]
+    depth = 0
+    index = 0
+    recovered: int | None = None
+    seen = 0
+    while index < len(value):
+        token = value[index]
+        if token == 0x22:  # A JSON string; scan without recursively parsing nested data.
+            start = index
+            index += 1
+            escaped = False
+            while index < len(value):
+                current = value[index]
+                index += 1
+                if escaped:
+                    escaped = False
+                elif current == 0x5C:
+                    escaped = True
+                elif current == 0x22:
+                    break
+            else:
+                return None
+            if depth != 1 or value[start:index] != b'"request_id"':
+                continue
+            cursor = index
+            while cursor < len(value) and value[cursor] in b" \t\r":
+                cursor += 1
+            if cursor >= len(value) or value[cursor] != 0x3A:
+                continue
+            cursor += 1
+            while cursor < len(value) and value[cursor] in b" \t\r":
+                cursor += 1
+            number_start = cursor
+            while cursor < len(value) and 0x30 <= value[cursor] <= 0x39:
+                cursor += 1
+            if number_start == cursor or value[number_start] == 0x30:
+                return None
+            if cursor < len(value) and value[cursor] not in b" \t\r,}":
+                return None
+            if cursor - number_start > 18:
+                return None
+            try:
+                candidate = int(value[number_start:cursor])
+            except ValueError:
+                return None
+            seen += 1
+            if seen > 1:
+                return None
+            recovered = candidate
+            continue
+        if token in (0x7B, 0x5B):
+            depth += 1
+        elif token in (0x7D, 0x5D):
+            depth -= 1
+            if depth < 0:
+                return None
+        index += 1
+    return recovered if depth == 0 and seen == 1 else None
 
 
 def _backend_call(backend: Any, method: str, *args: Any) -> dict[str, Any]:
@@ -136,7 +190,7 @@ def run(input_stream: BinaryIO, output_stream: BinaryIO, backend: Any, job_dir: 
     for line in input_stream:
         try:
             request = parse_request(line, job_dir=job_dir)
-        except ValueError as exc:
+        except (ValueError, OverflowError, RecursionError) as exc:
             request_id = _recover_request_id(line)
             if request_id is not None:
                 if request_id <= last_request_id:
