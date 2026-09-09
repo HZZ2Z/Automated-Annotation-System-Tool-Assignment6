@@ -7,8 +7,8 @@ import cv2
 import numpy as np
 
 
-def normalized_mad(left: np.ndarray, right: np.ndarray) -> float:
-    """Return a bounded grayscale mean absolute difference for two images."""
+def gray64_area_mad(left: np.ndarray, right: np.ndarray) -> float:
+    """Return gray64-area-mad-v1 for two uint8 images."""
     _validate_image(left, "left")
     _validate_image(right, "right")
     if left.ndim != right.ndim or _channel_count(left) != _channel_count(right):
@@ -18,6 +18,28 @@ def normalized_mad(left: np.ndarray, right: np.ndarray) -> float:
     right_gray = _to_gray(right)
     difference = float(np.mean(np.abs(left_gray - right_gray)) / 255.0)
     return float(np.clip(difference, 0.0, 1.0))
+
+
+def normalized_mad(left: np.ndarray, right: np.ndarray) -> float:
+    """Compatibility name for the versioned gray64 metric."""
+    return gray64_area_mad(left, right)
+
+
+def similarity_gate(
+    previous: np.ndarray,
+    target: np.ndarray,
+    keyframe: np.ndarray,
+    threshold: float,
+) -> dict[str, float | bool]:
+    """Require both adjacent and fixed-keyframe distances below threshold."""
+    _validate_score(threshold, "threshold")
+    adjacent = gray64_area_mad(previous, target)
+    fixed = gray64_area_mad(keyframe, target)
+    return {
+        "accepted": adjacent < threshold and fixed < threshold,
+        "adjacent_mad": adjacent,
+        "keyframe_mad": fixed,
+    }
 
 
 def contiguous_run(

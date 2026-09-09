@@ -17,10 +17,12 @@ import numpy as np
 from .contracts import validate_instance
 from .polygon_flow import MotionPair
 from .polygon_geometry import mask_iou, mask_to_polygon, polygon_to_mask, single_mask_contour, validate_polygon
+from .similarity import similarity_gate
 
 
 METRIC_ID = "poly-flow-mask-v1"
-DEFAULT_THRESHOLD = 0.65
+DEFAULT_SIMILARITY_THRESHOLD = 0.02
+FLOW_QUALITY_THRESHOLD = 0.65
 MAX_FRAMES = 30
 MAX_ANALYSIS_SIDE = 1024
 MAX_IMAGE_PIXELS = 32_000_000
@@ -80,14 +82,14 @@ def _integer(value: object, name: str) -> int:
 
 
 def _validate_request(request: object) -> tuple[list[dict], list[dict], int, float]:
-    if not isinstance(request, dict) or set(request) - {"schema_version", "key_index", "threshold", "frames", "regions"}:
+    if not isinstance(request, dict) or set(request) - {"schema_version", "key_index", "similarity_threshold", "frames", "regions"}:
         raise ValueError("request must be an object with only the versioned protocol fields")
-    if _integer(request.get("schema_version"), "schema_version") != 1:
+    if _integer(request.get("schema_version"), "schema_version") != 2:
         raise ValueError("unsupported schema_version")
     key = _integer(request.get("key_index"), "key_index")
-    threshold = request.get("threshold", DEFAULT_THRESHOLD)
-    if type(threshold) not in (int, float) or not math.isfinite(threshold) or not 0 <= threshold <= 1:
-        raise ValueError("threshold must be a finite quality score from 0 to 1")
+    threshold = request.get("similarity_threshold", DEFAULT_SIMILARITY_THRESHOLD)
+    if type(threshold) not in (int, float) or not math.isfinite(threshold) or not 0 < threshold <= 1:
+        raise ValueError("similarity_threshold must be a finite score in (0, 1]")
     frames = request.get("frames")
     if not isinstance(frames, list) or not 1 <= len(frames) <= MAX_FRAMES:
         raise ValueError("frames must contain 1 to 30 consecutive snapshots")
@@ -116,8 +118,8 @@ def _validate_request(request: object) -> tuple[list[dict], list[dict], int, flo
     return frames, regions, key, float(threshold)
 
 
-def _analyse_pair(source, target, masks, check_cancel):
-    motion = MotionPair(source, target, check_cancel)
+def _analyse_pair(source, target, masks, check_cancel, motion_factory):
+    motion = motion_factory(source, target, check_cancel)
     warped, evidence = [], []
     for region, mask in masks:
         check_cancel()
@@ -129,10 +131,11 @@ def _analyse_pair(source, target, masks, check_cancel):
     return warped, evidence
 
 
-def _candidate_frame(previous, target, anchor, masks, anchor_masks, frame, size, threshold, adjacent, check_cancel):
+def _candidate_frame(previous, target, anchor, masks, anchor_masks, frame, size,
+                     adjacent, check_cancel, motion_factory, similarity):
     """局部作用域释放临时光流；同时持有关键帧、上一步和当前 mask 状态。"""
-    warped, qualities = _analyse_pair(previous, target, masks, check_cancel)
-    anchor_motion = None if adjacent else MotionPair(anchor, target, check_cancel)
+    warped, qualities = _analyse_pair(previous, target, masks, check_cancel, motion_factory)
+    anchor_motion = None if adjacent else motion_factory(anchor, target, check_cancel)
     output_regions, quality_by_id = [], {}
     for i, ((region, prior), candidate) in enumerate(zip(masks, warped)):
         check_cancel()
@@ -152,8 +155,10 @@ def _candidate_frame(previous, target, anchor, masks, anchor_masks, frame, size,
                        "anchor_area_ratio": anchor_ratio}
             quality["anchor_quality"] = min(anchor_evidence[field] for field in ("appearance", "fb_consistency", "texture"))
             quality["score"] = min(quality[field] for field in ("appearance", "fb_consistency", "texture", "anchor_iou", "anchor_quality"))
-            if quality["score"] < threshold:
-                raise ValueError(f"quality {quality['score']:.3f} below threshold {threshold:.3f}")
+            quality["adjacent_mad"] = similarity["adjacent_mad"]
+            quality["keyframe_mad"] = similarity["keyframe_mad"]
+            if quality["score"] < FLOW_QUALITY_THRESHOLD:
+                raise ValueError(f"quality {quality['score']:.3f} below threshold {FLOW_QUALITY_THRESHOLD:.3f}")
             updated = deepcopy(region)
             updated["polygon"] = polygon
             if "box" in updated:
@@ -169,7 +174,8 @@ def _candidate_frame(previous, target, anchor, masks, anchor_masks, frame, size,
 
 
 def propagate(request: dict, *, cancelled: Callable[[], bool] | None = None,
-              progress: Callable[[dict], None] | None = None) -> dict:
+              progress: Callable[[dict], None] | None = None,
+              motion_factory=MotionPair) -> dict:
     """消耗独立图像快照，返回连续候选闭区间；失败/取消丢弃全部临时结果。"""
     def check_cancel():
         if cancelled is not None and cancelled():
@@ -221,10 +227,20 @@ def propagate(request: dict, *, cancelled: Callable[[], bool] | None = None,
                     stops[name] = f"frame {frame['index']}: image dimensions changed"
                     break
                 target, _ = _load_image(snapshots[position].path, snapshots[position])
+                similarity = similarity_gate(previous, target, anchor, threshold)
+                if not similarity["accepted"]:
+                    stops[name] = (
+                        f"frame {frame['index']}: similarity adjacent "
+                        f"{similarity['adjacent_mad']:.6f} / keyframe "
+                        f"{similarity['keyframe_mad']:.6f} >= threshold {threshold:.6f}"
+                    )
+                    completed += 1
+                    report(completed, total, stops[name])
+                    break
                 try:
                     proposal, next_masks = _candidate_frame(previous, target, anchor, masks, anchor_masks,
-                                                            frame, size, threshold, abs(position - key_position) == 1,
-                                                            check_cancel)
+                                                            frame, size, abs(position - key_position) == 1,
+                                                            check_cancel, motion_factory, similarity)
                     proposals.append(proposal)
                 except ValueError as error:
                     stops[name] = f"frame {frame['index']}: {error}"
