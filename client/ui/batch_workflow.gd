@@ -90,10 +90,19 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_key_label = _label("在播放器中选一帧，先修正它的标注。")
 	_algorithm = OptionButton.new()
 	_algorithm.add_item("固定坐标复制")
-	_algorithm.add_item("Poly 轮廓运动")
+	_algorithm.add_item("Poly 光流 + 边缘精修")
+	_algorithm.select(1)
 	_panel.add_child(_algorithm)
 	_algorithm.item_selected.connect(_select_algorithm)
-	_analyze = _button("以当前帧查找相似段", analyze)
+	var threshold_row := HBoxContainer.new()
+	_panel.add_child(threshold_row)
+	var caption := Label.new()
+	caption.text = "相似帧差异阈值"
+	threshold_row.add_child(caption)
+	_threshold = _spin(threshold_row, 0.001, 1.0, 0.02, 0.001)
+	_threshold.tooltip_text = "只控制相邻/关键帧相似度；越小越保守。光流质量门固定，每批最多 30 帧。"
+	_threshold.value_changed.connect(func(_value: float): cancel())
+	_analyze = _button("分析 Poly 光流与边缘", analyze)
 	_section("2  应用标注")
 	_range_controls = HBoxContainer.new()
 	_panel.add_child(_range_controls)
@@ -122,9 +131,10 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_mode = OptionButton.new()
 	_mode.add_item("覆盖目标标注")
 	_mode.add_item("合并，保留其他标注")
+	_mode.select(1)
 	_panel.add_child(_mode)
-	_mode.item_selected.connect(func(_index: int): _update_preview())
-	_mode_hint = _label("替换目标帧的全部标注。")
+	_mode.item_selected.connect(_select_mode)
+	_mode_hint = _label("更新同 ID 的 Poly，保留目标帧独有区域。")
 	_mode_hint.add_theme_color_override("font_color", Color("#b4bac5"))
 	_summary = _label("尚未选择范围")
 	_next_contiguous = _button("跳到下一段连续帧", _jump_to_next_contiguous, false)
@@ -170,19 +180,11 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_advanced.add_theme_constant_override("separation", 8)
 	_content.add_child(_advanced)
 	_panel = _advanced
-	var threshold_row := HBoxContainer.new()
-	_panel.add_child(threshold_row)
-	var caption := Label.new()
-	caption.text = "差异阈值"
-	threshold_row.add_child(caption)
-	_threshold = _spin(threshold_row, 0.001, 1.0, 0.02, 0.001)
-	_threshold.tooltip_text = "数值越小，范围越保守；每批最多 30 帧。修改后需重新查找。"
-	_threshold.value_changed.connect(func(_value: float): cancel())
 	_auto = CheckButton.new()
 	_auto.text = "确认后自动前进"
 	_auto.button_pressed = true
 	_panel.add_child(_auto)
-	_algorithm_hint = _label("固定坐标复制，不跟随物体运动。")
+	_algorithm_hint = _label("只传播参考帧的 Poly；先验相似、再做光流和有界边缘精修，结果需人工检查。")
 	_details = _label("分析后可在此查看范围停止原因。")
 	_label("时间轴：斜线为待检查，勾号为已确认。\n蓝色为候选段，金色为已应用批次。")
 	_advanced.visible = false
@@ -216,6 +218,15 @@ func _toggle_current_verification() -> void:
 		verify_current()
 
 func _show_tab(batch: bool) -> void:
+	if batch and (_host._is_class_dialog_active() or not _host._prepare_edit_navigation()):
+		_scroll.visible = false
+		_annotation_tab.set_pressed_no_signal(true)
+		_batch_tab.set_pressed_no_signal(false)
+		_host._annotation_sidebar.visible = true
+		_host._tool_panel.visible = true
+		_host._tool_panel.get_parent().get_node("Separator").visible = true
+		_host._set_status("请先应用或取消当前编辑，再进入批量标注。")
+		return
 	_scroll.visible = batch
 	_annotation_tab.set_pressed_no_signal(not batch)
 	_batch_tab.set_pressed_no_signal(batch)
@@ -263,7 +274,7 @@ func analyze() -> void:
 	if not _ready_for_action():
 		return
 	cancel()
-	var errors: PackedStringArray = controller.start_polygon_analysis(_host.get_current_frame()) if _algorithm.selected == 1 else controller.start_analysis(_host.get_current_frame(), _threshold.value)
+	var errors: PackedStringArray = controller.start_polygon_analysis(_host.get_current_frame(), _threshold.value) if _algorithm.selected == 1 else controller.start_analysis(_host.get_current_frame(), _threshold.value)
 	if not errors.is_empty():
 		_status(errors[0])
 		return
@@ -312,14 +323,14 @@ func _process(_delta: float) -> void:
 	_setting = false
 	_info.visible = false
 	_key_label.text = "参考帧 %d · %d 个区域" % [plan.keyframe, _host._store.get_corrected_record(plan.keyframe).regions.size()]
-	_details.text = "左侧：%s\n右侧：%s" % [_stop_reason(plan.left_stop), _stop_reason(plan.right_stop)]
+	_details.text = _advanced_diagnostics(plan)
 	_update_preview()
 	refresh_current()
 
 func _update_preview() -> void:
 	if _setting or _store == null:
 		return
-	_mode_hint.text = "更新同 ID 的 Poly，保留其他标注。" if _algorithm.selected == 1 else ("替换目标帧的全部标注。" if _mode.selected == 0 else "同 ID 更新，保留目标帧独有区域。")
+	_mode_hint.text = ("只保留传播得到的参考 Poly。" if _mode.selected == 0 else "更新同 ID 的 Poly，保留目标帧独有区域。") if _algorithm.selected == 1 else ("替换目标帧的全部标注。" if _mode.selected == 0 else "同 ID 更新，保留目标帧独有区域。")
 	var plan: Dictionary = controller.get_plan()
 	if plan.is_empty():
 		return
@@ -333,9 +344,14 @@ func _update_preview() -> void:
 		_apply.disabled = true
 		return
 	_range = Vector2i(first, last)
-	_summary.text = "%d 帧 · 将修改 %d 帧" % [preview.covered_count, preview.changed_count]
+	var counts := _edge_frame_counts(plan, first, last)
+	_summary.text = "候选 %d 帧 · 将修改 %d 帧 · 边缘精修 %d 帧，光流回退 %d 帧\n相似度停止：%s；光流停止：%s" % [
+		maxi(0, preview.covered_count - 1), preview.changed_count, counts.x, counts.y,
+		_stop_category(plan, true), _stop_category(plan, false)]
 	if preview.changed_count == 0:
-		_summary.text = _no_poly_candidate_summary(plan) if _algorithm.selected == 1 and preview.covered_count == 1 else "标注已一致，无需应用。"
+		var empty_text := _no_poly_candidate_summary(plan) if _algorithm.selected == 1 and preview.covered_count == 1 else "标注已一致，无需应用。"
+		_summary.text = "%s\n候选 0 帧 · 边缘精修 %d 帧，光流回退 %d 帧\n相似度停止：%s；光流停止：%s" % [
+			empty_text, counts.x, counts.y, _stop_category(plan, true), _stop_category(plan, false)]
 	_summary.tooltip_text = "新增 %d 个区域，替换 %d 个，删除 %d 个" % [preview.added, preview.replaced, preview.removed]
 	_apply.text = "应用到 %d 帧" % preview.changed_count
 	if _host._store.get_corrected_record(plan.keyframe).regions.is_empty() and _mode.selected == 0:
@@ -487,9 +503,9 @@ func refresh_current() -> void:
 		return
 	var active := available()
 	var enabled: bool = active and not controller.is_analyzing() and not _host._is_class_dialog_active()
-	_mode.disabled = not enabled or _algorithm.selected == 1
-	_threshold.editable = enabled and _algorithm.selected == 0
-	_threshold.get_parent().visible = _algorithm.selected == 0
+	_mode.disabled = not enabled
+	_threshold.editable = enabled
+	_threshold.get_parent().visible = true
 	_algorithm.disabled = not active
 	for button: Button in _guarded_buttons:
 		button.disabled = not enabled
@@ -645,15 +661,74 @@ func _select_algorithm(index: int) -> void:
 	cancel()
 	if index == 1:
 		_mode.select(1)
-	_analyze.text = "分析 Poly 轮廓运动" if index == 1 else "以当前帧查找相似段"
-	_algorithm_hint.text = "只传播参考帧的 Poly；运动不可靠即停止，每批最多 30 帧。结果需人工检查。" if index == 1 else "固定坐标复制，不跟随物体运动。"
-	_mode_hint.text = "更新同 ID 的 Poly，保留其他标注。" if index == 1 else "同 ID 更新，保留目标帧独有区域。"
+	_analyze.text = "分析 Poly 光流与边缘" if index == 1 else "以当前帧查找相似段"
+	_algorithm_hint.text = "只传播参考帧的 Poly；先验相似、再做光流和有界边缘精修，结果需人工检查。" if index == 1 else "固定坐标复制，不跟随物体运动。"
+	_mode_hint.text = "更新同 ID 的 Poly，保留目标帧独有区域。" if index == 1 else "同 ID 更新，保留目标帧独有区域。"
 	refresh_current()
+
+func _select_mode(_index: int) -> void:
+	cancel()
+	_mode_hint.text = ("只保留传播得到的参考 Poly。" if _mode.selected == 0 else "更新同 ID 的 Poly，保留目标帧独有区域。") if _algorithm.selected == 1 else ("替换目标帧的全部标注。" if _mode.selected == 0 else "同 ID 更新，保留目标帧独有区域。")
+	refresh_current()
+
+func _edge_frame_counts(plan: Dictionary, first: int, last: int) -> Vector2i:
+	var refined := {}
+	var fallback := {}
+	for index in range(first, last + 1):
+		if index == int(plan.get("key_index", -1)):
+			continue
+		var frame_id := _frame_id(index)
+		var frame_quality: Variant = plan.get("quality", {}).get(frame_id)
+		if not frame_quality is Dictionary:
+			continue
+		for quality: Variant in frame_quality.values():
+			var edge: Variant = quality.get("edge") if quality is Dictionary else null
+			if edge is Dictionary and edge.get("attempted") == true:
+				if edge.get("accepted") == true:
+					refined[frame_id] = true
+				else:
+					fallback[frame_id] = true
+	return Vector2i(refined.size(), fallback.size())
+
+func _stop_category(plan: Dictionary, similarity: bool) -> String:
+	var reasons: Array[String] = []
+	for side: String in ["left_stop", "right_stop"]:
+		var reason := str(plan.get(side, ""))
+		var is_similarity := "similarity" in reason.to_lower()
+		var is_flow := reason.begins_with("frame ") and not is_similarity
+		if (similarity and is_similarity) or (not similarity and is_flow):
+			reasons.append(_stop_reason(reason))
+	return "无" if reasons.is_empty() else "；".join(reasons)
+
+func _advanced_diagnostics(plan: Dictionary) -> String:
+	var lines: Array[String] = ["左侧：%s" % _stop_reason(str(plan.left_stop)),
+		"右侧：%s" % _stop_reason(str(plan.right_stop))]
+	var frame_ids: Array = plan.get("quality", {}).keys()
+	frame_ids.sort()
+	for frame_id: Variant in frame_ids:
+		var frame_quality: Variant = plan.quality[frame_id]
+		if not frame_quality is Dictionary:
+			continue
+		var region_ids: Array = frame_quality.keys()
+		region_ids.sort()
+		for region_id: Variant in region_ids:
+			var quality: Variant = frame_quality[region_id]
+			var edge: Variant = quality.get("edge") if quality is Dictionary else null
+			if not edge is Dictionary:
+				continue
+			lines.append("帧 %s · %s：MAD %.6f / %.6f，光流 %.3f，边缘 %.3f → %.3f（%s）" % [
+				str(frame_id), str(region_id), float(quality.adjacent_mad),
+				float(quality.keyframe_mad), float(quality.score),
+				float(edge.raw_edge_score), float(edge.refined_edge_score),
+				"接受" if edge.accepted else "回退：%s" % str(edge.reason)])
+	return "\n".join(lines)
 
 func _exit_tree() -> void:
 	controller.cancel()
 
 func _stop_reason(reason: String) -> String:
+	if ": similarity adjacent " in reason:
+		return reason.replace(": similarity adjacent ", "：相邻差异 ").replace(" / keyframe ", "，关键帧差异 ").replace(" >= threshold ", "，达到阈值 ")
 	if reason.begins_with("difference "):
 		var pieces := reason.trim_prefix("difference ").split(" / keyframe ")
 		return "差异 %s，参考帧差异 %s" % [pieces[0], pieces[1]] if pieces.size() == 2 else "图像差异超过阈值"
