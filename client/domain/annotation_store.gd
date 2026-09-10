@@ -404,15 +404,10 @@ static func _validate_edge_refinement(operation: Dictionary, frames: Dictionary)
 	var items: Variant = summary.items
 	if not items is Array:
 		return PackedStringArray(["batch_operations.edge_refinement.items: expected array"])
-	var keyframe: int = int(operation.get("keyframe", -1))
+	# Historical audit identity is self-contained in the immutable item matrix.
+	# It must not depend on later edits to the current keyframe geometry.
 	var reference_ids := {}
-	var reference: Variant = frames.get(keyframe)
-	if reference is Dictionary and reference.get("regions") is Array:
-		for region: Variant in reference.regions:
-			if region is Dictionary and region.has("polygon") and region.get("id") is String:
-				reference_ids[region.id] = true
-	if reference_ids.is_empty():
-		errors.append("batch_operations.edge_refinement: keyframe has no reference Poly")
+	var keyframe: int = int(operation.get("keyframe", -1))
 	var target_set := {}
 	if _valid_frame_number(operation.get("start_frame")) and _valid_frame_number(operation.get("end_frame")):
 		for frame_id: int in range(int(operation.start_frame), int(operation.end_frame) + 1):
@@ -431,8 +426,10 @@ static func _validate_edge_refinement(operation: Dictionary, frames: Dictionary)
 		if not _valid_frame_number(item.get("frame_id")) or not target_set.has(int(item.get("frame_id", -1))):
 			errors.append("batch_operations.edge_refinement.items: frame must be a covered target")
 		var region_id: Variant = item.get("region_id")
-		if not region_id is String or region_id.is_empty() or region_id.length() > 256 or not reference_ids.has(region_id):
+		if not region_id is String or region_id.is_empty() or region_id.length() > 256:
 			errors.append("batch_operations.edge_refinement.items: invalid reference region ID")
+		else:
+			reference_ids[region_id] = true
 		var identity := "%s\u001f%s" % [str(item.get("frame_id")), str(region_id)]
 		if seen.has(identity):
 			errors.append("batch_operations.edge_refinement.items: duplicate frame/region")
@@ -455,6 +452,8 @@ static func _validate_edge_refinement(operation: Dictionary, frames: Dictionary)
 			var score: Variant = item.get(field)
 			if (typeof(score) != TYPE_INT and typeof(score) != TYPE_FLOAT) or not is_finite(float(score)) or float(score) < 0.0 or float(score) > 1.0:
 				errors.append("batch_operations.edge_refinement.items.%s: invalid score" % field)
+	if reference_ids.is_empty():
+		errors.append("batch_operations.edge_refinement: audit has no reference Poly IDs")
 	var expected_items := target_set.size() * reference_ids.size()
 	if items.size() > 29 * reference_ids.size() or items.size() != expected_items:
 		errors.append("batch_operations.edge_refinement.items: inconsistent bounded item count")

@@ -2823,6 +2823,17 @@ func _on_model_service_state_changed(snapshot: Dictionary) -> void:
 		_model_preflight = snapshot.duplicate(true)
 		if _active and _active_tool == &"model_assist" and not bool(_model_session.snapshot().get("draft_active", false)):
 			_begin_model_session()
+	elif status == "failed" and _active and _active_tool == &"model_assist" and _model_latest_token > 0:
+		var token := _model_latest_token
+		var reason := str(snapshot.get("message", "Model Assist worker failed"))
+		if reason.is_empty() and snapshot.get("errors") is Array:
+			reason = "; ".join(snapshot.errors)
+		_model_latest_token = -1
+		_model_latest_context.clear()
+		if _model_session.fail(token, reason):
+			_push_model_overlay()
+		else:
+			_emit_edit_state()
 	elif _active and _active_tool == &"model_assist":
 		_emit_edit_state()
 
