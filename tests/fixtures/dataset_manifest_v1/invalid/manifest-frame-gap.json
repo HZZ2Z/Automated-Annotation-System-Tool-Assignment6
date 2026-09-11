@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "dataset_id": "fixture-v1",
+  "source_name": "fixture.mp4",
+  "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "width": 640,
+  "height": 360,
+  "frame_count": 2,
+  "nominal_fps": 30.0,
+  "frames": [
+    {"frame": 0, "time_s": 0.0, "image_path": "frames/frame_000000.png"},
+    {"frame": 2, "time_s": 0.03333333333333333, "image_path": "frames/frame_000001.png"}
+  ],
+  "model_version": "model-v1",
+  "taxonomy_version": "sample-taxonomy-v1"
+}

@@ -8,6 +8,7 @@ const DOCUMENT = preload("res://client/workspace/atomic_document.gd")
 const PACKAGE = preload("res://client/feedback/training_package.gd")
 const STORE = preload("res://client/domain/annotation_store.gd")
 const VALIDATOR = preload("res://client/domain/model_output_validator.gd")
+const BASELINE_RESOLVER = preload("res://client/workspace/export_baseline_resolver.gd")
 
 static func prepare_round(context: Dictionary, input_path: String, token = null) -> Dictionary:
 	return _prepare(context,input_path,false,token)
@@ -21,9 +22,59 @@ static func commit_round(context: Dictionary, prepared: Dictionary, token = null
 static func commit_baseline_binding(context: Dictionary, prepared: Dictionary, token = null) -> Dictionary:
 	return _commit(context,prepared,true,token)
 
+static func prepare_auto_baseline_binding(context: Dictionary, descriptor: Dictionary, token = null) -> Dictionary:
+	return _prepare_auto_baseline_binding(context,descriptor,token)
+
+static func commit_auto_baseline_binding(context: Dictionary, prepared: Dictionary, descriptor: Dictionary, token = null) -> Dictionary:
+	if not prepared.get("success",false) or prepared.get("operation") != "auto_binding":
+		return _failure("Expected a successfully prepared automatic baseline candidate")
+	var fresh = _prepare_auto_baseline_binding(context,descriptor,token)
+	if not fresh.success: return fresh
+	if fresh.source_sha256 != prepared.get("source_sha256"):
+		return _failure("Original baseline changed before binding")
+	return _commit_prepared_binding(
+		context,
+		prepared,
+		fresh,
+		token,
+		["path","source_sha256","descriptor","active_sha256","candidate_sha256"],
+	)
+
 static func import_round(context: Dictionary, input_path: String, token = null) -> Dictionary:
 	var prepared = prepare_round(context,input_path,token)
 	return commit_round(context,prepared,token) if prepared.success else prepared
+
+static func _prepare_auto_baseline_binding(context: Dictionary, descriptor: Dictionary, token) -> Dictionary:
+	if PACKAGE.cancelled(token): return _failure("Round operation cancelled")
+	if not context.get("snapshot") is Dictionary or not context.get("save_options") is Dictionary:
+		return _failure("Round context requires frozen snapshot and save_options")
+	var snapshot = context.snapshot
+	var errors = PACKAGE.validate_snapshot(snapshot)
+	if not errors.is_empty(): return _failure("Invalid current session: " + "; ".join(errors))
+	if snapshot.baseline_kind != "unknown": return _failure("Only an unknown legacy baseline can be bound")
+	var document = DOCUMENT.new()
+	var path = String(context.save_options.get("path",""))
+	var read = document.read_document(path)
+	if not read.success: return read
+	if read.sha256 != context.save_options.get("expected_sha256") or not PACKAGE.DIFF.equivalent(read.payload,CODEC.new().encode(snapshot)):
+		return _failure("Save the complete current session successfully before importing; active document changed or has unsaved edits")
+	var resolved = BASELINE_RESOLVER.new().resolve(snapshot,descriptor,token)
+	if not resolved.success:
+		return _failure("Cannot resolve original baseline: " + "; ".join(resolved.errors))
+	var binding = _prepare_binding_candidate(snapshot,resolved.records,"imported_labels",token)
+	if not binding.success: return binding
+	return {
+		"success":true,
+		"errors":[],
+		"snapshot":binding.snapshot,
+		"store":binding.store,
+		"source_sha256":resolved.source_sha256,
+		"descriptor":resolved.descriptor,
+		"active_sha256":read.sha256,
+		"candidate_sha256":_snapshot_digest(binding.snapshot),
+		"operation":"auto_binding",
+		"path":path,
+	}
 
 static func _prepare(context: Dictionary, input_path: String, binding: bool, token) -> Dictionary:
 	if PACKAGE.cancelled(token): return _failure("Round operation cancelled")
@@ -72,19 +123,18 @@ static func _prepare(context: Dictionary, input_path: String, binding: bool, tok
 	if not loaded.success: return loaded
 	if not binding and (loaded.sha256 != manifest.annotations.sha256 or loaded.bytes != manifest.annotations.bytes):
 		return _failure("Returned model annotation bytes/SHA256 mismatch")
-	var candidate = snapshot.duplicate(true)
-	candidate.baseline_kind = "model"
-	candidate.baseline_records = loaded.records
-	candidate.records = snapshot.records if binding else loaded.records
+	var candidate: Dictionary
+	var store
 	if binding:
-		candidate.revision = int(snapshot.revision) + 1
-		# Implicit unknown display empties were never annotation evidence. Bind them
-		# to raw model predictions while preserving only explicit human corrections.
-		var corrected = PACKAGE.DIFF.records_by_frame(snapshot.records)
-		candidate.records = []
-		for record in loaded.records:
-			candidate.records.append(corrected[int(record.frame)] if int(record.frame) in snapshot.explicit_frames else record)
+		var binding_candidate = _prepare_binding_candidate(snapshot,loaded.records,"model",token)
+		if not binding_candidate.success: return binding_candidate
+		candidate = binding_candidate.snapshot
+		store = binding_candidate.store
 	else:
+		candidate = snapshot.duplicate(true)
+		candidate.baseline_kind = "model"
+		candidate.baseline_records = loaded.records
+		candidate.records = loaded.records
 		candidate.round_id = manifest.round_id
 		candidate.model_revision = manifest.model_revision
 		candidate.session_id = (snapshot.session_id + "|" + manifest.round_id + "|" + loaded.sha256).sha256_text()
@@ -93,15 +143,15 @@ static func _prepare(context: Dictionary, input_path: String, binding: bool, tok
 		candidate.batch_operations = []
 		candidate.explicit_frames = []
 		for record in loaded.records: candidate.explicit_frames.append(int(record.frame))
-	var store = STORE.new()
-	errors = store.load_model_records(loaded.records)
-	if errors.is_empty(): errors = store.configure_session(candidate)
-	if errors.is_empty(): errors = store.restore_corrected(candidate.records,candidate.review_state,candidate.batch_operations)
-	if not errors.is_empty():
-		return _failure(("Baseline binding requires identical source/frame and optional timestamp presence in original and corrected records: " if binding else "Invalid complete model coverage/source/time: ") + "; ".join(errors))
-	candidate = store.freeze_snapshot()
-	errors = PACKAGE.validate_snapshot(candidate)
-	if not errors.is_empty(): return _failure("Invalid candidate: " + "; ".join(errors))
+		store = STORE.new()
+		errors = store.load_model_records(loaded.records)
+		if errors.is_empty(): errors = store.configure_session(candidate)
+		if errors.is_empty(): errors = store.restore_corrected(candidate.records,candidate.review_state,candidate.batch_operations)
+		if not errors.is_empty():
+			return _failure("Invalid complete model coverage/source/time: " + "; ".join(errors))
+		candidate = store.freeze_snapshot()
+		errors = PACKAGE.validate_snapshot(candidate)
+		if not errors.is_empty(): return _failure("Invalid candidate: " + "; ".join(errors))
 	if PACKAGE.cancelled(token): return _failure("Round operation cancelled")
 	return {"success":true,"errors":[],"snapshot":candidate,"store":store,"input_path":input_path,"input_sha256":loaded.sha256 if binding else input_sha,"annotation_sha256":loaded.sha256,"parent_sha256":parent_sha,"active_sha256":read.sha256,"candidate_sha256":_snapshot_digest(candidate),"operation":"binding" if binding else "round","path":path}
 
@@ -111,6 +161,14 @@ static func _commit(context: Dictionary, prepared: Dictionary, binding: bool, to
 	# Revalidate all inputs at commit. Never trust a staged Store or mutable metadata.
 	var fresh = _prepare(context,String(prepared.get("input_path","")),binding,token)
 	if not fresh.success: return fresh
+	if binding:
+		return _commit_prepared_binding(
+			context,
+			prepared,
+			fresh,
+			token,
+			["path","input_sha256","annotation_sha256","parent_sha256","active_sha256","candidate_sha256"],
+		)
 	for field in ["path","input_sha256","annotation_sha256","parent_sha256","active_sha256","candidate_sha256"]:
 		if fresh[field] != prepared.get(field): return _failure("Prepared candidate changed before commit: " + field)
 	if not prepared.get("snapshot") is Dictionary or _snapshot_digest(prepared.snapshot) != fresh.candidate_sha256:
@@ -132,6 +190,38 @@ static func _commit(context: Dictionary, prepared: Dictionary, binding: bool, to
 	if not saved.success: return saved
 	return {"success":true,"errors":[],"path":saved.path,"disk_sha256":saved.sha256,"sha256":saved.sha256,"snapshot":fresh.snapshot,"store":fresh.store,"session_id":fresh.snapshot.session_id,"revision":fresh.snapshot.revision,"needs_save":false,"backup_existing":false,"archive_path":archive}
 
+static func _prepare_binding_candidate(snapshot: Dictionary, records: Array, kind: String, token) -> Dictionary:
+	var candidate = snapshot.duplicate(true)
+	candidate.baseline_kind = kind
+	candidate.baseline_records = records
+	candidate.revision = int(snapshot.revision) + 1
+	# Implicit unknown display empties were never annotation evidence. Bind them
+	# to original predictions while preserving only explicit human corrections.
+	var corrected = PACKAGE.DIFF.records_by_frame(snapshot.records)
+	candidate.records = []
+	for record in records:
+		candidate.records.append(corrected[int(record.frame)] if int(record.frame) in snapshot.explicit_frames else record)
+	var store = STORE.new()
+	var errors = store.load_model_records(records)
+	if errors.is_empty(): errors = store.configure_session(candidate)
+	if errors.is_empty(): errors = store.restore_corrected(candidate.records,candidate.review_state,candidate.batch_operations)
+	if not errors.is_empty():
+		return _failure("Baseline binding requires identical source/frame and optional timestamp presence in original and corrected records: " + "; ".join(errors))
+	candidate = store.freeze_snapshot()
+	errors = PACKAGE.validate_snapshot(candidate,token)
+	if not errors.is_empty(): return _failure("Invalid candidate: " + "; ".join(errors))
+	return {"success":true,"errors":[],"snapshot":candidate,"store":store}
+
+static func _commit_prepared_binding(context: Dictionary, prepared: Dictionary, fresh: Dictionary, token, fields: Array) -> Dictionary:
+	for field: String in fields:
+		if not PACKAGE.DIFF.equivalent(fresh.get(field),prepared.get(field)):
+			return _failure("Prepared candidate changed before commit: " + field)
+	if not prepared.get("snapshot") is Dictionary or _snapshot_digest(prepared.snapshot) != fresh.candidate_sha256:
+		return _failure("Prepared snapshot changed before commit")
+	var saved = REPO.new().save_snapshot(fresh.snapshot,context.save_options,token)
+	if not saved.success: return saved
+	return {"success":true,"errors":[],"path":saved.path,"disk_sha256":saved.sha256,"sha256":saved.sha256,"snapshot":fresh.snapshot,"store":fresh.store,"session_id":fresh.snapshot.session_id,"revision":fresh.snapshot.revision,"needs_save":false,"backup_existing":false,"archive_path":""}
+
 static func _read_records(path: String) -> Dictionary:
 	var document = DOCUMENT.new()
 	if document._is_link(path) or document._has_link_ancestor(path.get_base_dir()): return _failure("Model annotation path must not traverse symbolic links")
@@ -141,10 +231,12 @@ static func _read_records(path: String) -> Dictionary:
 	var error = file.get_error()
 	file.close()
 	if error != OK: return _failure("Cannot read complete model annotation bytes")
+	var decoded = document.decode_utf8(bytes,path)
+	if not decoded.success: return decoded
 	var records = []
 	var validator = VALIDATOR.new()
 	var line_number = 0
-	for line in bytes.get_string_from_utf8().split("\n"):
+	for line in decoded.text.split("\n"):
 		line_number += 1
 		if line.strip_edges().is_empty(): continue
 		var parser = EXACT_JSON.new()

@@ -38,6 +38,13 @@ custom_minimum_size = Vector2(50, 0)
 layout_mode = 2
 text = "Open"
 
+[node name="CancelWorkspaceScan" type="Button" parent="MainVBox/TopToolbar"]
+visible = false
+custom_minimum_size = Vector2(92, 0)
+layout_mode = 2
+tooltip_text = "Cancel workspace discovery and keep the current workspace"
+text = "Cancel scan"
+
 [node name="Save" type="Button" parent="MainVBox/TopToolbar" unique_id=1378491866]
 custom_minimum_size = Vector2(50, 0)
 layout_mode = 2
@@ -51,11 +58,11 @@ layout_mode = 2
 text = "Redo"
 
 [node name="Export" type="Button" parent="MainVBox/TopToolbar" unique_id=496921619]
-custom_minimum_size = Vector2(50, 0)
+custom_minimum_size = Vector2(104, 0)
 layout_mode = 2
-tooltip_text = "Export verified training data or a full review snapshot"
+tooltip_text = "检查范围后生成可用于训练的标注文件"
 disabled = true
-text = "Export"
+text = "导出训练包"
 
 [node name="PlaybackSpeed" parent="MainVBox/TopToolbar" instance=ExtResource("9_speed")]
 layout_mode = 2
@@ -186,11 +193,6 @@ title = "Open a File or Directory"
 file_mode = 3
 access = 2
 filters = PackedStringArray("*.png ; PNG Images", "*.jpg, *.jpeg ; JPEG Images", "*.mp4, *.mov, *.avi, *.mkv, *.m4v, *.mpeg, *.mpg, *.webm ; Common Video Files", "*.* ; Other FFmpeg-readable video")
-
-[node name="ExportDialog" type="FileDialog" parent="." unique_id=726271485]
-title = "Open a Directory"
-file_mode = 2
-access = 2
 
 [node name="VideoImportController" type="Node" parent="." unique_id=371555567]
 script = ExtResource("7_video_import")

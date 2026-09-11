@@ -72,11 +72,12 @@ func demo(options: Dictionary) -> Dictionary:
 	var save_options = label.save_options()
 	session.unbind()
 	session.free()
-	var result = await dispatch("finish_demo",[snapshot,save_options,options.output])
+	var result = await dispatch("finish_demo",[snapshot,save_options,options.output,bool(options.get("prepare_only",false))])
 	if result.success:
-		history = HISTORY.new()
-		if history.can_undo() or history.can_redo(): return worker.failure("Fresh round history is not empty")
-		result["new_round_history_empty"] = true
+		if not options.get("prepare_only",false):
+			history = HISTORY.new()
+			if history.can_undo() or history.can_redo(): return worker.failure("Fresh round history is not empty")
+			result["new_round_history_empty"] = true
 		result["autosave_ms"] = autosave_ms
 		result["real_command_count"] = 8
 	return result

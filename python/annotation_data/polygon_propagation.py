@@ -22,8 +22,8 @@ from .similarity import similarity_gate
 
 
 METRIC_ID = "poly-sim-flow-edge-v1"
-DEFAULT_SIMILARITY_THRESHOLD = 0.02
-FLOW_QUALITY_THRESHOLD = 0.65
+DEFAULT_SIMILARITY_THRESHOLD = 0.10
+FLOW_QUALITY_THRESHOLD = 0.25
 MAX_FRAMES = 30
 MAX_ANALYSIS_SIDE = 1024
 MAX_IMAGE_PIXELS = 32_000_000
@@ -82,15 +82,20 @@ def _integer(value: object, name: str) -> int:
     return int(value)
 
 
-def _validate_request(request: object) -> tuple[list[dict], list[dict], int, float]:
-    if not isinstance(request, dict) or set(request) - {"schema_version", "key_index", "similarity_threshold", "frames", "regions"}:
+def _validate_request(request: object) -> tuple[list[dict], list[dict], int, float, int]:
+    allowed = {"schema_version", "key_index", "similarity_threshold", "frame_step", "frames", "regions"}
+    required = allowed - {"similarity_threshold"}
+    if not isinstance(request, dict) or set(request) - allowed or not required <= set(request):
         raise ValueError("request must be an object with only the versioned protocol fields")
-    if _integer(request.get("schema_version"), "schema_version") != 2:
+    if _integer(request.get("schema_version"), "schema_version") != 3:
         raise ValueError("unsupported schema_version")
     key = _integer(request.get("key_index"), "key_index")
     threshold = request.get("similarity_threshold", DEFAULT_SIMILARITY_THRESHOLD)
     if type(threshold) not in (int, float) or not math.isfinite(threshold) or not 0 < threshold <= 1:
         raise ValueError("similarity_threshold must be a finite score in (0, 1]")
+    frame_step = _integer(request.get("frame_step"), "frame_step")
+    if frame_step < 1:
+        raise ValueError("frame_step must be a positive integer")
     frames = request.get("frames")
     if not isinstance(frames, list) or not 1 <= len(frames) <= MAX_FRAMES:
         raise ValueError("frames must contain 1 to 30 consecutive snapshots")
@@ -100,8 +105,8 @@ def _validate_request(request: object) -> tuple[list[dict], list[dict], int, flo
             raise ValueError("each frame must contain only the v2 snapshot identity fields")
         index = _integer(frame["index"], "frame index")
         frame_id = _integer(frame["frame_id"], "frame_id")
-        if i and (index != frames[i - 1]["index"] + 1 or frame_id != frames[i - 1]["frame_id"] + 1):
-            raise ValueError("frame indices and original frame IDs must be sorted and consecutive")
+        if i and (index != frames[i - 1]["index"] + 1 or frame_id != frames[i - 1]["frame_id"] + frame_step):
+            raise ValueError("frame indices and sampled original frame IDs must match frame_step")
         path = frame["image_path"]
         if not isinstance(path, str) or not path or not Path(path).is_absolute():
             raise ValueError("image_path must be an absolute PNG snapshot path")
@@ -123,7 +128,7 @@ def _validate_request(request: object) -> tuple[list[dict], list[dict], int, flo
         raise ValueError("every region must contain a polygon")
     if len({region["id"] for region in regions}) != len(regions):
         raise ValueError("polygon region IDs must be unique")
-    return frames, regions, key, float(threshold)
+    return frames, regions, key, float(threshold), frame_step
 
 
 def _analyse_pair(source, target, masks, check_cancel, motion_factory):
@@ -181,6 +186,105 @@ def _run_edge_refinement(edge_refiner, target: np.ndarray,
     except ValueError as error:
         raise TypeError("edge refinement rejected its internal inputs") from error
     return _validated_edge_result(result, raw_mask)
+
+
+def _bright_template_mask(source: np.ndarray, target: np.ndarray,
+                          prior: np.ndarray) -> tuple[np.ndarray, str, float]:
+    """弱纹理时只估计局部平移；亮度证据不足便保持原坐标。"""
+    binary = np.asarray(prior >= 128, np.uint8)
+    ys, xs = np.where(binary > 0)
+    if not len(xs):
+        raise ValueError("reference mask is empty")
+    x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
+    height, width = source.shape
+    padding = max(12, x1 - x0, y1 - y0)
+    sx0, sx1 = max(0, x0 - padding), min(width, x1 + padding)
+    sy0, sy1 = max(0, y0 - padding), min(height, y1 + padding)
+    local = np.zeros_like(binary)
+    local[sy0:sy1, sx0:sx1] = 1
+    outside = (local > 0) & (binary == 0)
+    inside_level = float(np.median(source[binary > 0]))
+    outside_level = float(np.median(source[outside])) if outside.any() else inside_level
+    source_contrast = inside_level - outside_level
+    if source_contrast < 12:
+        return prior.copy(), "fixed fallback", 0.0
+    template = source[y0:y1, x0:x1]
+    template_mask = binary[y0:y1, x0:x1] * 255
+    search = target[sy0:sy1, sx0:sx1]
+    if search.shape[0] < template.shape[0] or search.shape[1] < template.shape[1]:
+        return prior.copy(), "fixed fallback", 0.0
+    scores = cv2.matchTemplate(search, template, cv2.TM_SQDIFF_NORMED,
+                               mask=template_mask)
+    finite = np.isfinite(scores)
+    if not finite.any():
+        return prior.copy(), "fixed fallback", 0.0
+    safe_scores = np.where(finite, scores, np.inf)
+    best_y, best_x = np.unravel_index(int(np.argmin(safe_scores)), safe_scores.shape)
+    score = float(max(0.0, 1.0 - safe_scores[best_y, best_x]))
+    dx, dy = sx0 + best_x - x0, sy0 + best_y - y0
+    candidate = cv2.warpAffine(prior, np.float32([[1, 0, dx], [0, 1, dy]]),
+                               (width, height), flags=cv2.INTER_NEAREST,
+                               borderMode=cv2.BORDER_CONSTANT)
+    candidate_binary = candidate >= 128
+    target_level = float(np.median(target[candidate_binary])) if candidate_binary.any() else 0.0
+    if target_level - outside_level < max(10.0, source_contrast * 0.25):
+        return prior.copy(), "fixed fallback", 0.0
+    return candidate, "bright-template fallback", score
+
+
+def _fallback_candidate_frame(previous, target, masks, anchor_masks, frame, size,
+                              check_cancel, edge_refiner, similarity, reason):
+    output_regions, quality_by_id, next_masks = [], {}, []
+    for i, (region, prior) in enumerate(masks):
+        check_cancel()
+        raw_candidate, mode, match_score = _bright_template_mask(previous, target, prior)
+        try:
+            candidate, edge = _run_edge_refinement(edge_refiner, target, raw_candidate)
+            polygon, geometry = candidate_mask_geometry(
+                candidate, prior, anchor_masks[i][1], size
+            )
+        except ValueError:
+            raw_candidate = prior.copy()
+            mode, match_score = "fixed fallback", 0.0
+            candidate, edge = _run_edge_refinement(edge_refiner, target, raw_candidate)
+            polygon, geometry = candidate_mask_geometry(
+                candidate, prior, anchor_masks[i][1], size
+            )
+        texture_std = float(np.std(previous[prior >= 128]))
+        evidence = {
+            "appearance": match_score, "fb_consistency": 0.0, "support": 0.0,
+            "texture": min(1.0, texture_std / 8.0), "texture_std": texture_std,
+            "largest_unsupported_fraction": 1.0,
+        }
+        anchor_iou = mask_iou(candidate, anchor_masks[i][1])
+        raw_quality = {**evidence, **geometry, "anchor_iou": anchor_iou,
+                       "anchor_quality": 0.0, "score": match_score}
+        quality = {
+            **evidence, **geometry, "anchor_iou": anchor_iou,
+            "anchor_quality": 0.0, "adjacent_mad": similarity["adjacent_mad"],
+            "keyframe_mad": similarity["keyframe_mad"], "raw_flow": raw_quality,
+            "edge": edge, "score": match_score, "propagation_mode": mode,
+            "fallback_reason": str(reason)[:160],
+        }
+        updated = deepcopy(region)
+        updated["polygon"] = polygon
+        if "box" in updated:
+            vertices = np.asarray(polygon)
+            updated["box"] = [*vertices.min(axis=0).tolist(), *np.ptp(vertices, axis=0).tolist()]
+        output_regions.append(updated)
+        quality_by_id[region["id"]] = quality
+        next_masks.append((region, candidate))
+    return {"index": int(frame["index"]), "frame_id": int(frame["frame_id"]),
+            "regions": output_regions, "quality": quality_by_id}, next_masks
+
+
+def _allows_approximate_fallback(error: ValueError) -> bool:
+    message = str(error).lower()
+    return any(fragment in message for fragment in (
+        "weak texture", "insufficient forward/backward", "local evidence",
+        "quality", "fixed anchor disagreement", "area changed", "mask contains a hole",
+        "mask contains multiple components", "polygon approximation",
+    ))
 
 
 def _candidate_frame(previous, target, anchor, masks, anchor_masks, frame, size,
@@ -247,6 +351,7 @@ def _candidate_frame(previous, target, anchor, masks, anchor_masks, frame, size,
                 "anchor_quality": anchor_quality, "adjacent_mad": similarity["adjacent_mad"],
                 "keyframe_mad": similarity["keyframe_mad"], "raw_flow": raw_quality,
                 "edge": edge,
+                "propagation_mode": "flow", "fallback_reason": "",
             }
             quality["score"] = min(
                 quality[field] for field in
@@ -287,7 +392,7 @@ def propagate(request: dict, *, cancelled: Callable[[], bool] | None = None,
 
     try:
         check_cancel()
-        frames, regions, key, threshold = _validate_request(request)
+        frames, regions, key, threshold, frame_step = _validate_request(request)
         key_position = next(i for i, frame in enumerate(frames) if frame["index"] == key)
         total, completed = len(frames) - 1, 0
         report(0, total, "Validating immutable PNG snapshots")
@@ -343,10 +448,16 @@ def propagate(request: dict, *, cancelled: Callable[[], bool] | None = None,
                                                             check_cancel, motion_factory, edge_refiner, similarity)
                     proposals.append(proposal)
                 except ValueError as error:
-                    stops[name] = f"frame {frame['index']}: {error}"
-                    completed += 1
-                    report(completed, total, stops[name])
-                    break
+                    if not _allows_approximate_fallback(error):
+                        stops[name] = f"frame {frame['index']}: {error}"
+                        completed += 1
+                        report(completed, total, stops[name])
+                        break
+                    proposal, next_masks = _fallback_candidate_frame(
+                        previous, target, masks, anchor_masks, frame, size,
+                        check_cancel, edge_refiner, similarity, error,
+                    )
+                    proposals.append(proposal)
                 completed += 1
                 report(completed, total, f"Analysed frame {frame['index']}")
                 previous = target
@@ -357,10 +468,10 @@ def propagate(request: dict, *, cancelled: Callable[[], bool] | None = None,
             raise ValueError("image snapshot changed during analysis")
         proposals.sort(key=lambda proposal: proposal["index"])
         indices = [key] + [proposal["index"] for proposal in proposals]
-        return {"schema_version": 2, "success": True, "cancelled": False, "metric_id": METRIC_ID,
-                "threshold": threshold, "key_index": key, "start_index": min(indices), "end_index": max(indices),
+        return {"schema_version": 3, "success": True, "cancelled": False, "metric_id": METRIC_ID,
+                "threshold": threshold, "frame_step": frame_step, "key_index": key, "start_index": min(indices), "end_index": max(indices),
                 "left_stop": stops["left"], "right_stop": stops["right"], "proposals": proposals}
     except Cancelled as error:
-        return {"schema_version": 2, "success": False, "cancelled": True, "error": str(error)}
+        return {"schema_version": 3, "success": False, "cancelled": True, "error": str(error)}
     except (ValueError, TypeError, OSError, OverflowError, cv2.error) as error:
-        return {"schema_version": 2, "success": False, "cancelled": False, "error": str(error)}
+        return {"schema_version": 3, "success": False, "cancelled": False, "error": str(error)}

@@ -59,13 +59,13 @@ func create_demo(options: Dictionary, token) -> Dictionary:
 	errors = PACKAGE.write_text(source.path_join("manifest.json"),JSON.stringify(manifest,"",true,true)+"\n")
 	errors.append_array(PACKAGE.write_text(source.path_join("model_output_v1.jsonl"),PACKAGE.jsonl(records)))
 	if not errors.is_empty(): return failure("; ".join(errors))
-	var opened = REPO.new().open_session({"path":workspace.path_join("label/demo.json"),"media_id":"demo","media_type":"image_sequence","source":"demo","source_relative_path":"demo","source_sha256":null,"source_root":workspace,"frame_entries":entries,"seed_records":records,"baseline_kind":"model","round_id":"round1","model_revision":"model_output_v1","taxonomy_version":"sample-taxonomy-v1"},token)
+	var opened = REPO.new().open_session({"path":workspace.path_join("label/demo.json"),"media_id":"demo","media_type":"image_sequence","source":"demo","source_relative_path":"demo","source_sha256":manifest.source_sha256,"source_root":workspace,"frame_entries":entries,"seed_records":records,"baseline_kind":"model","round_id":"round1","model_revision":"model_output_v1","taxonomy_version":"sample-taxonomy-v1"},token)
 	if opened.success:
 		opened["workspace"] = workspace
 		opened["source_path"] = source
 	return opened
 
-func finish_demo(snapshot: Dictionary, save_options: Dictionary, output: String, token) -> Dictionary:
+func finish_demo(snapshot: Dictionary, save_options: Dictionary, output: String, prepare_only: bool, token) -> Dictionary:
 	var expected = {"geometry_changed":2,"label_changed":1,"added":1,"deleted":1,"attributes_changed":2,"changed_frames":6,"changed_regions":7}
 	var ids = [12,13,24,36,72,90]
 	var diff = PACKAGE.DIFF.build_diff(snapshot,ids)
@@ -97,6 +97,9 @@ func finish_demo(snapshot: Dictionary, save_options: Dictionary, output: String,
 	var manifest_path = round_directory.path_join("manifest.json")
 	errors = PACKAGE.write_text(manifest_path,JSON.stringify(manifest,"",true,true)+"\n")
 	if not errors.is_empty(): return failure("; ".join(errors))
+	# UI 复跑保留已保存的第一轮；返回文件与本次父训练包保持一致。
+	if prepare_only:
+		return {"success":true,"errors":[],"prepared_only":true,"training_simulated":true,"summary":diff.summary,"training_coverage":6,"training_excluded":114,"review_coverage":120,"reopen_stable":true,"training_package":training.output_path,"review_package":review.output_path,"training_package_id":training.package_id,"review_package_id":review.package_id,"active_session":save_options.path,"round_manifest":manifest_path,"workspace":output.path_join("workspace"),"source_path":output.path_join("workspace/demo"),"current_round_id":snapshot.round_id,"returned_round_id":"round2","autosaved_revision":snapshot.revision}
 	var imported = ROUNDS.import_round({"snapshot":reopened.snapshot,"save_options":save_options,"parent_package_path":training.output_path},manifest_path,token)
 	if not imported.success: return imported
 	if imported.snapshot.revision != 0 or not imported.snapshot.review_state.is_empty() or not imported.snapshot.batch_operations.is_empty() or imported.snapshot.session_id == snapshot.session_id or FileAccess.get_sha256(imported.archive_path) != save_options.expected_sha256:

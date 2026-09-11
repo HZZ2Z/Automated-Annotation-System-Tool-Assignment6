@@ -27,6 +27,7 @@ def parse_args(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
     demo = sub.add_parser("demo", help="Run synthetic edits, autosave, reopen, packages and simulated round import")
     demo.add_argument("--output", type=Path, required=True, help="New output directory; existing content is preserved")
+    demo.add_argument("--prepare-only", action="store_true", help="Keep saved round1 and prepare a simulated round2 return for UI replay")
     export = sub.add_parser("export", help="Export a saved V3 session through the GUI package service")
     export.add_argument("--session", type=Path, required=True)
     export.add_argument("--output", type=Path, required=True)

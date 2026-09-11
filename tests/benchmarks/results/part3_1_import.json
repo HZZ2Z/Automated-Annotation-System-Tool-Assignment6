@@ -1,0 +1,30 @@
+{
+  "benchmark": "Part 3.1 real background video import",
+  "cancelled": false,
+  "completed_paths": [
+    "/tmp/annotool-part3-real-output4"
+  ],
+  "failures": [],
+  "godot_version": "4.7.2-stable (official)",
+  "import_and_open_seconds": 0.789,
+  "input_bytes": 615423,
+  "input_path": "/tmp/annotool-part3-real-input.mkv",
+  "loaded_frame": 0,
+  "loaded_frame_count": 90,
+  "loaded_source_name": "annotool-part3-real-input.mkv",
+  "observed_progress_stages": [
+    "probe",
+    "extract",
+    "validate",
+    "publish"
+  ],
+  "old_dataset_preserved_during_import": true,
+  "output_bytes": 1012265,
+  "output_path": "/tmp/annotool-part3-real-output4",
+  "pass": true,
+  "processor": "AMD Ryzen 9 7945HX with Radeon Graphics",
+  "progress_event_count": 30,
+  "progress_monotonic": true,
+  "timestamp_utc": "2026-09-04T07:33:21",
+  "ui_process_heartbeats": 107
+}

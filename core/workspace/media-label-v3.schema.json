@@ -115,7 +115,10 @@
         ],
         "properties": {
           "schema_version": {
-            "const": 1
+            "enum": [
+              1,
+              2
+            ]
           },
           "type": {
             "const": "range_propagate"
@@ -173,6 +176,10 @@
             "type": "integer",
             "minimum": 1
           },
+          "frame_step": {
+            "type": "integer",
+            "minimum": 1
+          },
           "start_index": {
             "type": "integer",
             "minimum": 0
@@ -203,6 +210,75 @@
             "type": "string",
             "minLength": 1,
             "pattern": "\\S"
+          },
+          "edge_refinement": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "attempted",
+              "accepted",
+              "fallback",
+              "items"
+            ],
+            "properties": {
+              "attempted": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "accepted": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "fallback": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "frame_id",
+                    "region_id",
+                    "accepted",
+                    "reason",
+                    "raw_edge_score",
+                    "refined_edge_score"
+                  ],
+                  "properties": {
+                    "frame_id": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 999999
+                    },
+                    "region_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 256
+                    },
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 160
+                    },
+                    "raw_edge_score": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "refined_edge_score": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "dependentRequired": {
@@ -219,6 +295,57 @@
             "covered_count"
           ]
         },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "schema_version": {
+                  "const": 2
+                }
+              },
+              "required": [
+                "schema_version"
+              ]
+            },
+            "then": {
+              "required": [
+                "metric_id",
+                "threshold",
+                "max_frames",
+                "keyframe_digest",
+                "created_at",
+                "start_index",
+                "end_index",
+                "left_stop",
+                "right_stop",
+                "changed_count",
+                "covered_count",
+                "edge_refinement"
+              ],
+              "not": {
+                "required": [
+                  "metric"
+                ]
+              }
+            },
+            "else": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "frame_step"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "edge_refinement"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ],
         "additionalProperties": false
       }
     },

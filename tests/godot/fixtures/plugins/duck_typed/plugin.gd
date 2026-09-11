@@ -1,0 +1,11 @@
+extends RefCounted
+
+func can_open(_locator: String) -> bool: return true
+func open(_locator: String) -> PackedStringArray: return PackedStringArray()
+func get_frame_count() -> int: return 1
+func get_frame_entry(_index: int) -> Dictionary: return {}
+func get_model_records() -> Array[Dictionary]: return []
+func get_manifest() -> Dictionary: return {}
+func get_presentation() -> Dictionary: return {}
+func load_texture(_index: int) -> Texture2D: return null
+func close() -> void: pass

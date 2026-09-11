@@ -22,6 +22,7 @@ const MODEL_ASSIST_CANDIDATE := preload("res://client/domain/model_assist_candid
 const FILL_SOLVER := preload("res://client/domain/fill_region_solver.gd")
 const BRUSH_BUFFER := preload("res://client/domain/brush_stroke_buffer.gd")
 const VERTEX_EDITOR := preload("res://client/plugins/edit/basic_edit_tools/polygon_vertex_editor.gd")
+const MATCH_CONTROLLER := preload("res://client/plugins/edit/basic_edit_tools/region_match_controller.gd")
 const HANDLE_TOLERANCE_VIEWPORT_PX := 8.0
 const EDGE_TOLERANCE_VIEWPORT_PX := 6.0
 const FREEHAND_SAMPLE_DISTANCE := 0.75
@@ -36,7 +37,7 @@ const PAINT_OVERLAY_COLOR := Color("#22d3ee")
 const ERASER_OVERLAY_COLOR := Color("#a855f7")
 const TOOL_IDS: Array[StringName] = [
 	&"box", &"subtract", &"lasso", &"fill",
-	&"paint", &"eraser", &"select",
+	&"paint", &"eraser", &"select", &"match_region",
 	&"model_assist",
 ]
 const BRUSH_OPTION := {
@@ -56,12 +57,14 @@ const TOOL_DESCRIPTORS: Array[Dictionary] = [
 	{"id": &"paint", "node_name": "Paint", "label": "Paint", "implemented": true, "tooltip": "Repair one overlapped region, or paint a new object", "icon_path": "res://client/ui/icons/tools/paint.svg", "options": [BRUSH_OPTION]},
 	{"id": &"eraser", "node_name": "Eraser", "label": "Eraser", "implemented": true, "tooltip": "Erase every region touched by the stroke; no selection needed", "icon_path": "res://client/ui/icons/tools/erase.svg", "options": [BRUSH_OPTION]},
 	{"id": &"select", "node_name": "Select", "label": "Selection", "implemented": true, "default": true, "tooltip": "Select, move, or resize a region", "icon_path": "res://client/ui/icons/tools/selection.svg"},
+	{"id": &"match_region", "node_name": "Match", "label": "Match", "implemented": true, "tooltip": "先点待修正区域，再点参考区域；同步 class / kind，间隙不超过 1 个图像像素时尝试合并", "icon_path": "res://client/ui/icons/tools/match_region.svg"},
 	{"id": &"model_assist", "node_name": "ModelAssist", "label": "Model Assist", "presentation_text": "Model\nAssist", "implemented": true, "tooltip": "Prompt SAM2 on the current frame; click +, Shift-click -, Ctrl-drag a box", "icon_path": "res://client/ui/icons/tools/model_assist.svg"},
 ]
 
 var model_assist_service_factory: Callable
 
 var _vertex_editor = VERTEX_EDITOR.new()
+var _matcher = MATCH_CONTROLLER.new()
 var _vertex_mode_requested := false
 var _store: Variant
 var _history: Variant
@@ -145,7 +148,7 @@ func get_edit_state() -> Dictionary:
 			"session_panel": model.session_panel.duplicate(true),
 			"message": str(model.message),
 		}.duplicate(true)
-	return {
+	var state := {
 		"phase": _session.phase,
 		"gesture_active": _has_transient_edit() or _add_pointer_mode,
 		"navigation_blocked": _session.has_working_mask() or _session.has_pending_class_assignment() or _session.has_fill_repair(),
@@ -153,7 +156,11 @@ func get_edit_state() -> Dictionary:
 		"draft_history": _session.draft_counts(),
 		"session_panel": _fill_session_panel(),
 		"message": String(_session.message),
-	}.duplicate(true)
+	}
+	if _active_tool == &"match_region":
+		state.phase = _matcher.phase()
+		state.message = _matcher.message
+	return state.duplicate(true)
 
 
 func _fill_session_panel() -> Dictionary:
@@ -393,6 +400,7 @@ func set_active_tool(tool_id: StringName) -> PackedStringArray:
 	if tool_id == &"model_assist":
 		_begin_model_session()
 	refresh_edit_overlay()
+	_emit_edit_state()
 	return PackedStringArray()
 
 
@@ -401,8 +409,16 @@ func get_active_tool() -> StringName:
 
 
 func refresh_edit_overlay() -> void:
+	if _active and _active_tool == &"match_region":
+		_matcher.refresh(self)
+		return
 	if _active and _active_tool == &"lasso" and _vertex_mode_requested and not _has_transient_edit():
 		_vertex_editor.refresh(self)
+
+
+func clear_pointer_hover() -> void:
+	if _active and _active_tool == &"match_region":
+		_matcher.clear_hover(self)
 
 
 func handle_pointer(event: InputEvent, image_position: Vector2) -> void:
@@ -416,6 +432,9 @@ func handle_pointer(event: InputEvent, image_position: Vector2) -> void:
 		return
 	_last_pointer_image_position = image_position
 	_has_last_pointer_image_position = true
+	if _active_tool == &"match_region":
+		_matcher.pointer(self, event, image_position)
+		return
 	if _active_tool == &"model_assist":
 		_handle_model_pointer(event, image_position)
 		return
@@ -446,6 +465,10 @@ func handle_key(event: InputEvent) -> bool:
 		return false
 	var key: Key = event.keycode if event.keycode != KEY_NONE else event.physical_keycode
 	if key == KEY_ESCAPE:
+		if _active_tool == &"match_region":
+			cancel()
+			_set_selected_region("")
+			return true
 		if not _vertex_editor.region_id.is_empty():
 			_vertex_editor.clear()
 			_set_selected_region("")
@@ -501,6 +524,8 @@ func handle_key(event: InputEvent) -> bool:
 		return true
 	if _drag_kind == "keyboard_add":
 		return _handle_keyboard_add_key(event, key)
+	if _active_tool == &"match_region" and key in [KEY_BRACKETLEFT, KEY_BRACKETRIGHT]:
+		return true
 	if key == KEY_BRACKETLEFT or key == KEY_BRACKETRIGHT:
 		_cycle_selection(-1 if key == KEY_BRACKETLEFT else 1)
 		return true
@@ -600,6 +625,8 @@ func cancel() -> void:
 	_clear_transient()
 	_vertex_mode_requested = keep_vertex_mode
 	_show_idle_brush_cursor()
+	if _active_tool == &"match_region":
+		_matcher.refresh(self)
 
 
 func _await_class_for_box(frame: int, before: Dictionary, box: Array, image_size: Vector2) -> void:
@@ -3190,8 +3217,9 @@ func _push_session_overlay() -> void:
 
 
 func _clear_transient() -> void:
-	var state_changed: bool = _session.phase != EDIT_SESSION.IDLE or _vertex_editor.dragging
+	var state_changed: bool = _session.phase != EDIT_SESSION.IDLE or _vertex_editor.dragging or _active_tool == &"match_region"
 	_vertex_editor.clear()
+	_matcher.clear()
 	_vertex_mode_requested = false
 	_add_pointer_mode = false
 	_clear_pointer_drag_state()
@@ -3238,7 +3266,7 @@ func _is_pointer_drag() -> bool:
 
 func _has_transient_edit() -> bool:
 	return (
-		_vertex_editor.dragging
+		_vertex_editor.dragging or _matcher.has_pending()
 		or _session.phase not in [EDIT_SESSION.IDLE, EDIT_SESSION.BRUSH_CURSOR]
 		or not _drag_kind.is_empty()
 		or not _lasso_mode.is_empty()
@@ -3258,7 +3286,6 @@ func _disconnect_viewport_cancel() -> void:
 		var callback := Callable(self, "cancel")
 		if _viewport.is_connected("edit_cancel_requested", callback):
 			_viewport.disconnect("edit_cancel_requested", callback)
-
 
 func _report_errors(errors: PackedStringArray) -> void:
 	if not errors.is_empty():

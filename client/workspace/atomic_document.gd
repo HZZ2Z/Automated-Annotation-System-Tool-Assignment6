@@ -3,8 +3,11 @@
 extends RefCounted
 
 const EXACT_JSON := preload("res://client/domain/exact_json.gd")
+const STREAM_JSON := preload("res://client/domain/stream_json.gd")
 
 const CHUNK_BYTES := 65536
+var _stream_file: FileAccess
+var _stream_write_us := 0
 
 func read_document(path: String) -> Dictionary:
 	if _is_link(path) or _has_link_ancestor(path.get_base_dir()):
@@ -17,12 +20,22 @@ func read_document(path: String) -> Dictionary:
 	file.close()
 	if error != OK:
 		return _failure("Cannot read complete document %s: %s" % [path, error_string(error)])
+	var decoded := decode_utf8(bytes, path)
+	if not decoded.success:
+		return decoded
 	var parser := EXACT_JSON.new()
-	if parser.parse(bytes.get_string_from_utf8()) != OK or not parser.data is Dictionary:
+	if parser.parse(decoded.text) != OK or not parser.data is Dictionary:
 		return _failure("Invalid JSON object in %s at line %d: %s" % [path, parser.get_error_line(), parser.get_error_message()])
 	return {"success": true, "errors": [], "payload": parser.data, "sha256": _digest(bytes)}
 
+func decode_utf8(bytes: PackedByteArray, path: String) -> Dictionary:
+	var text := bytes.get_string_from_utf8()
+	if text.to_utf8_buffer() != bytes:
+		return _failure("Invalid UTF-8 in %s" % path)
+	return {"success": true, "errors": [], "text": text}
+
 func write_document(payload: Dictionary, options: Dictionary, token: Variant = null) -> Dictionary:
+	var timings := {"serialize":0,"write":0,"serialize_write":0,"readback":0,"equivalence":0,"validate":0,"publish":0}
 	var path := ProjectSettings.globalize_path(String(options.get("path", ""))).simplify_path()
 	if String(options.get("path", "")).is_empty():
 		return _failure("A document path is required")
@@ -52,35 +65,72 @@ func write_document(payload: Dictionary, options: Dictionary, token: Variant = n
 	var temporary := _temporary_path(path)
 	if FileAccess.file_exists(temporary) or DirAccess.dir_exists_absolute(temporary) or _is_link(temporary):
 		return _failure("Temporary path already exists: %s" % temporary)
-	var bytes := (JSON.stringify(payload, "", true, true) + "\n").to_utf8_buffer()
-	var write_error := _write_bytes(temporary, bytes, token)
+	var phase_start := Time.get_ticks_usec()
+	var write_error := _begin_stream(temporary)
+	var streamed := {}
+	if write_error.is_empty():
+		_stream_write_us = 0
+		streamed = STREAM_JSON.new().write(payload,Callable(self,"_stream_chunk").bind(temporary,token),token,{"trailing_newline":true,"full_precision":true})
+		write_error = _end_stream(temporary)
+		if not streamed.get("success",false) and write_error.is_empty(): write_error = String(streamed.get("errors",["Cannot serialize JSON"])[0])
+	timings.serialize_write = Time.get_ticks_usec()-phase_start
+	timings.write = _stream_write_us
+	timings.serialize = maxi(0,timings.serialize_write-timings.write)
 	if not write_error.is_empty():
 		_remove_owned_temp(temporary)
 		return _cancel_result() if _cancelled(token) else _failure(write_error)
+	phase_start = Time.get_ticks_usec()
 	var round_trip := read_document(temporary)
+	timings.readback = Time.get_ticks_usec()-phase_start
 	if not round_trip.get("success", false):
 		_remove_owned_temp(temporary)
 		return round_trip
 	# Validate the exact document that will be published once. Equality with the
 	# frozen input also rejects JSON coercion (for example NaN becoming null).
 	# A second full V3 decode before serialization adds another entire Store.
-	if not _json_equivalent(round_trip.payload,payload):
+	phase_start = Time.get_ticks_usec()
+	var equivalent := _json_equivalent(round_trip.payload,payload)
+	timings.equivalence = Time.get_ticks_usec()-phase_start
+	if not equivalent:
 		_remove_owned_temp(temporary)
 		return _failure("Temporary document differs from the frozen input")
+	phase_start = Time.get_ticks_usec()
 	var validation: Variant = validator.call(round_trip.payload)
-	if not validation is PackedStringArray or not validation.is_empty() or round_trip.sha256 != _digest(bytes):
+	timings.validate = Time.get_ticks_usec()-phase_start
+	if not validation is PackedStringArray or not validation.is_empty() or round_trip.sha256 != streamed.get("sha256",""):
 		_remove_owned_temp(temporary)
 		return _failure("Temporary document failed round-trip validation: %s" % str(validation))
 	conflict = _check_expected(path, expected)
 	if not conflict.is_empty() or _cancelled(token):
 		_remove_owned_temp(temporary)
 		return _cancel_result() if _cancelled(token) else _failure(conflict)
+	phase_start = Time.get_ticks_usec()
 	error = _replace_file(temporary, path)
+	timings.publish = Time.get_ticks_usec()-phase_start
 	if error != OK:
 		_remove_owned_temp(temporary)
 		return _failure("Cannot atomically publish %s: %s" % [path, error_string(error)])
 	# Once published, cancellation cannot undo a completed save.
-	return {"success": true, "errors": [], "path": path, "sha256": round_trip.sha256, "backup_path": backup}
+	return {"success": true, "errors": [], "path": path, "sha256": round_trip.sha256, "backup_path": backup,"bytes":streamed.get("bytes",0),"max_buffer_bytes":streamed.get("max_buffer_bytes",0),"timings_us":timings}
+
+func _begin_stream(path: String) -> String:
+	if FileAccess.file_exists(path) or DirAccess.dir_exists_absolute(path): return "Temporary path already exists: %s" % path
+	_stream_file = FileAccess.open(path,FileAccess.WRITE)
+	return "" if _stream_file != null else "Cannot create %s: %s" % [path,error_string(FileAccess.get_open_error())]
+
+func _stream_chunk(bytes: PackedByteArray,path: String,token: Variant) -> String:
+	var started := Time.get_ticks_usec()
+	var result := _write_bytes(path,bytes,token)
+	_stream_write_us += Time.get_ticks_usec()-started
+	return result
+
+func _end_stream(path: String) -> String:
+	if _stream_file == null: return "Cannot create %s" % path
+	_stream_file.flush()
+	var error := _stream_file.get_error()
+	_stream_file.close()
+	_stream_file = null
+	return "" if error == OK else "Cannot flush %s: %s" % [path,error_string(error)]
 
 func _json_equivalent(left: Variant,right: Variant) -> bool:
 	if left is Dictionary and right is Dictionary:
@@ -112,6 +162,11 @@ func _check_expected(path: String, expected: String) -> String:
 	return ""
 
 func _write_bytes(path: String, bytes: PackedByteArray, token: Variant) -> String:
+	# During streaming this remains the fault-injection seam used by crash tests.
+	if _stream_file != null:
+		if _cancelled(token): return "Save cancelled"
+		_stream_file.store_buffer(bytes)
+		return "" if _stream_file.get_error() == OK else "Cannot write %s: %s" % [path,error_string(_stream_file.get_error())]
 	if FileAccess.file_exists(path) or DirAccess.dir_exists_absolute(path):
 		return "Temporary path already exists: %s" % path
 	var file := FileAccess.open(path, FileAccess.WRITE)

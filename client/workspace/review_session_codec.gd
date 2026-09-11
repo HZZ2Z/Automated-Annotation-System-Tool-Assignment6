@@ -1,6 +1,7 @@
 class_name ReviewSessionCodec
 extends RefCounted
 
+const STREAM_JSON := preload("res://client/domain/stream_json.gd")
 const STORE := preload("res://client/domain/annotation_store.gd")
 const VALIDATOR := preload("res://client/domain/model_output_validator.gd")
 const FIELDS := ["schema_version", "session_id", "media_id", "media_type", "source_relative_path", "source", "source_sha256", "round_id", "model_revision", "taxonomy_version", "revision", "baseline_kind", "baseline_digest", "baseline_records", "frame_entries", "explicit_frames", "review_state", "batch_operations", "frame_digits", "frames"]
@@ -12,7 +13,7 @@ func encode(snapshot: Dictionary) -> Dictionary:
 	for field: String in FIELDS:
 		if snapshot.has(field):
 			var value: Variant = snapshot[field]
-			payload[field] = value.duplicate(true) if value is Dictionary or value is Array else value
+			payload[field] = STORE._immutable_copy(value)
 	payload["schema_version"] = 3
 	payload["frame_digits"] = 6
 	var explicit := {}
@@ -21,16 +22,23 @@ func encode(snapshot: Dictionary) -> Dictionary:
 	var frames := {}
 	for record: Dictionary in snapshot.get("records", []):
 		if explicit.has(int(record.frame)):
-			var projected := record.duplicate(true)
+			var projected: Dictionary = STORE._model_output_projection(record)
 			projected.source = "human_corrected"
-			for region: Dictionary in projected.regions:
-				region.erase("filled")
-			frames[str(int(record.frame))] = projected
+			frames[str(int(record.frame))] = STORE._immutable_copy(projected)
 	payload["frames"] = frames
 	return payload
 
 
-func decode(payload: Variant) -> Dictionary:
+func decode(payload: Variant, token: Variant = null) -> Dictionary:
+	return _decode(payload, token, true)
+
+
+func validate_v3(payload: Variant, token: Variant = null) -> PackedStringArray:
+	return _decode(payload, token, false).errors
+
+
+func _decode(payload: Variant, token: Variant, materialize: bool) -> Dictionary:
+	if token != null and token.is_cancelled(): return _failure("Session validation cancelled")
 	var errors := PackedStringArray()
 	if not payload is Dictionary:
 		return _failure("$: expected V3 session object")
@@ -48,6 +56,7 @@ func decode(payload: Variant) -> Dictionary:
 	var baseline := {}
 	var validator = VALIDATOR.new()
 	for record: Variant in payload.baseline_records:
+		if token != null and token.is_cancelled(): return _failure("Session validation cancelled")
 		errors.append_array(validator.validate_record(record))
 		if record is Dictionary and STORE._valid_frame_number(record.get("frame")):
 			if baseline.has(int(record.frame)): errors.append("baseline_records: duplicate frame")
@@ -69,28 +78,39 @@ func decode(payload: Variant) -> Dictionary:
 		var frame := int(entry.frame_id)
 		frame_map[frame] = true
 		if known and not baseline.has(frame): return _failure("baseline_records: incomplete frame set")
-		var record: Dictionary = baseline[frame].duplicate(true) if known else _empty_display_record(payload.source, entry, payload.frames.get(str(frame)))
+		var record: Dictionary = baseline[frame] if known else _empty_display_record(payload.source, entry, payload.frames.get(str(frame)))
 		display.append(record)
 	if known and baseline.size() != frame_map.size(): return _failure("baseline_records: unexpected frame")
-	var store = STORE.new()
-	errors.append_array(store.load_model_records(display))
-	if errors.is_empty(): errors.append_array(store.configure_session(payload))
+	var models := {}
+	for record: Dictionary in display:
+		if models.has(int(record.frame)): errors.append("records: duplicate frame")
+		models[int(record.frame)] = record
+		errors.append_array(validator.validate_record(record))
+	var order: Array = models.keys()
+	order.sort()
+	if errors.is_empty(): errors.append_array(STORE.validate_session_context(payload, models, models, order))
 	if not errors.is_empty(): return {"snapshot": {}, "errors": errors}
-	var expected_digest: Variant = store.freeze_snapshot().baseline_digest
+	var expected_digest: Variant = null
+	if known:
+		var ordered: Array = []
+		for frame: int in order: ordered.append(models[frame])
+		expected_digest = STREAM_JSON.record_digests(ordered).current
 	if payload.baseline_digest != expected_digest: return _failure("baseline_digest: differs from immutable baseline")
 	var explicit := {}
 	for frame: Variant in payload.explicit_frames: explicit[int(frame)] = true
 	if payload.frames.size() != explicit.size(): return _failure("frames: must exactly match explicit_frames")
 	var corrections := {}
 	for key: Variant in payload.frames:
+		if token != null and token.is_cancelled(): return _failure("Session validation cancelled")
 		if not key is String or not key.is_valid_int() or str(int(key)) != key or not explicit.has(int(key)):
 			return _failure("frames: invalid or unexpected original frame key")
 		var record: Variant = payload.frames[key]
-		errors.append_array(validator.validate_record(record))
-		if not record is Dictionary: continue
+		var record_errors: PackedStringArray = validator.validate_record(record)
+		errors.append_array(record_errors)
+		if not record_errors.is_empty(): continue
 		if record.get("source") != "human_corrected" or record.get("frame") != int(key):
 			errors.append("frames.%s: wrong projection or frame identity" % key)
-		var internal: Dictionary = record.duplicate(true)
+		var internal: Dictionary = record.duplicate()
 		internal.source = payload.source
 		corrections[int(key)] = internal
 	if not errors.is_empty(): return {"snapshot": {}, "errors": errors}
@@ -102,9 +122,79 @@ func decode(payload: Variant) -> Dictionary:
 			if not key is String or not key.is_valid_int() or not explicit.has(int(key)):
 				errors.append("review_state: reviewed frames must be explicit")
 	if not errors.is_empty(): return {"snapshot": {}, "errors": errors}
-	errors.append_array(store.restore_corrected(display, payload.review_state, payload.batch_operations))
+	for record: Dictionary in display:
+		errors.append_array(STORE.validate_replacement(int(record.frame), record, models, models, payload, validator))
+	errors.append_array(STORE.validate_workflow_state(payload.review_state, payload.batch_operations, models, payload.frame_entries))
 	if not errors.is_empty(): return {"snapshot": {}, "errors": errors}
-	return {"snapshot": store.freeze_snapshot(), "errors": errors}
+	if not materialize: return {"snapshot": {}, "errors": errors}
+	# 输入 JSON 只在发布快照时隔离一次；未修改帧复用冻结后的 baseline。
+	var immutable_baseline: Array = []
+	var immutable_models := {}
+	for frame: int in order:
+		immutable_models[frame] = STORE._immutable_copy(models[frame])
+		if known: immutable_baseline.append(immutable_models[frame])
+	var corrected: Array = []
+	var by_frame := {}
+	for record: Dictionary in display: by_frame[int(record.frame)] = record
+	for frame: int in order:
+		corrected.append(immutable_models[frame] if by_frame[frame] == models[frame] else STORE._immutable_copy(by_frame[frame]))
+	var snapshot := {}
+	for field: String in FIELDS:
+		if field not in ["frames", "frame_digits"]: snapshot[field] = payload[field]
+	snapshot.schema_version = 1
+	snapshot.revision = int(payload.revision)
+	var explicit_order: Array = explicit.keys()
+	explicit_order.sort()
+	snapshot.explicit_frames = explicit_order
+	snapshot.baseline_records = immutable_baseline
+	snapshot["records"] = corrected
+	return {"snapshot": STORE._immutable_copy(snapshot), "errors": errors}
+
+
+# 验证内部快照及其可持久化投影；不构造 Store，也不复制整组几何。
+func validate_snapshot(snapshot: Dictionary, token: Variant = null) -> PackedStringArray:
+	if token != null and token.is_cancelled(): return PackedStringArray(["Snapshot validation cancelled"])
+	var errors := PackedStringArray()
+	# 编码前先校验容器与显式帧元素，避免迭代/整数转换触发运行时错误。
+	for field: String in ["records", "baseline_records", "frame_entries", "explicit_frames", "batch_operations"]:
+		if not snapshot.get(field) is Array: errors.append("snapshot.%s: expected Array" % field)
+	if not snapshot.get("review_state") is Dictionary: errors.append("snapshot.review_state: expected Dictionary")
+	if not errors.is_empty(): return errors
+	for frame: Variant in snapshot.explicit_frames:
+		if not STORE._valid_frame_number(frame): errors.append("explicit_frames: invalid frame")
+	if not errors.is_empty(): return errors
+	var records: Array = snapshot.records
+	var record_map := {}
+	var validator = VALIDATOR.new()
+	for record: Variant in records:
+		if token != null and token.is_cancelled(): return PackedStringArray(["Snapshot validation cancelled"])
+		errors.append_array(validator.validate_record(STORE._model_output_projection(record)))
+		if record is Dictionary and STORE._valid_frame_number(record.get("frame")):
+			if record_map.has(int(record.frame)): errors.append("records: duplicate frame")
+			record_map[int(record.frame)] = record
+	if not errors.is_empty(): return errors
+	# encode 只创建显式帧的浅投影；共享已冻结的大型几何容器。
+	var payload := encode(snapshot)
+	errors = validate_v3(payload, token)
+	if not errors.is_empty(): return errors
+	var known: bool = snapshot.baseline_kind in ["model", "imported_labels"]
+	var baseline := {}
+	for record: Dictionary in snapshot.baseline_records: baseline[int(record.frame)] = record
+	var explicit := {}
+	for frame: Variant in snapshot.explicit_frames: explicit[int(frame)] = true
+	if record_map.size() != snapshot.frame_entries.size(): errors.append("records: incomplete reconstructed frame set")
+	for entry: Dictionary in snapshot.frame_entries:
+		var frame := int(entry.frame_id)
+		if not record_map.has(frame):
+			errors.append("records: missing reconstructed frame")
+			continue
+		if record_map[frame].source != snapshot.source:
+			errors.append("records: source differs from reconstructed content")
+		if not explicit.has(frame):
+			var expected: Dictionary = baseline[frame] if known else _empty_display_record(snapshot.source, entry)
+			if STORE._canonicalize(STORE._model_output_projection(record_map[frame])) != STORE._canonicalize(expected):
+				errors.append("records: implicit frame differs from reconstructed content")
+	return errors
 
 
 static func _failure(message: String) -> Dictionary:
@@ -115,7 +205,7 @@ static func _failure(message: String) -> Dictionary:
 # need complete empty display records without inventing a baseline or timestamp.
 static func baseline_display_records(snapshot: Dictionary) -> Array:
 	if snapshot.get("baseline_kind") in ["model", "imported_labels"]:
-		return snapshot.baseline_records.duplicate(true)
+		return snapshot.baseline_records
 	var annotations := {}
 	for record: Dictionary in snapshot.get("records", []):
 		annotations[int(record.frame)] = record

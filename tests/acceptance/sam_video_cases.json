@@ -1,0 +1,10 @@
+{
+  "schema": "project6-sam-video-cases-v1",
+  "required_tags": [
+    "stable",
+    "fast_motion",
+    "low_contrast_or_glare",
+    "occlusion_or_disappearance"
+  ],
+  "cases": []
+}

@@ -1,0 +1,40 @@
+{
+  "accepted_indices": [
+    0,
+    5000,
+    9999,
+    137,
+    8765
+  ],
+  "benchmark": "Part 3.1 10000-frame bounded-source stress",
+  "client_open_ms": 1048.448,
+  "explorer_materialized_frame_items": 1,
+  "explorer_tree_items": 5,
+  "frame_count": 10000,
+  "godot_version": "4.7.2-stable (official)",
+  "mean_seek_ms": 1.652,
+  "p95_seek_ms": 2.691,
+  "pass": true,
+  "processor": "AMD Ryzen 9 7945HX with Radeon Graphics",
+  "seek_targets": [
+    0,
+    5000,
+    9999,
+    137,
+    8765
+  ],
+  "seek_times_ms": [
+    0.064,
+    2.691,
+    1.591,
+    1.758,
+    2.156
+  ],
+  "static_memory_after_bytes": 113992419.0,
+  "static_memory_before_bytes": 26945209.0,
+  "texture_cache_limit": 12,
+  "texture_cache_size": 5,
+  "timeline_child_nodes": 1,
+  "timeline_frame_buttons": 0,
+  "timestamp_utc": "2026-09-04T06:58:06"
+}

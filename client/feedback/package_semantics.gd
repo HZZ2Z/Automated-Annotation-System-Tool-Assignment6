@@ -37,14 +37,19 @@ static func validate(manifest: Dictionary, texts: Dictionary, diff: Dictionary) 
 	var excluded = _ids(coverage.excluded_frame_ids)
 	var verified = _ids(coverage.verified_frame_ids)
 	var explicit = _ids(coverage.explicit_frame_ids)
+	# Schema 先检查重复项；集合只加速查询，原数组仍用于顺序与计数校验。
+	var included_set = _id_set(included)
+	var excluded_set = _id_set(excluded)
+	var verified_set = _id_set(verified)
+	var explicit_set = _id_set(explicit)
 	if not DIFF.equivalent(coverage.source_frame_ids,source_ids): errors.append("coverage source frame identity mismatch")
-	if not _subset(verified,explicit) or not _subset(explicit,source_ids) or not _subset(included,source_ids) or not _subset(excluded,source_ids): errors.append("coverage references invalid source/explicit/verified frames")
+	if not _subset(verified,explicit_set) or not _subset(explicit,entry_map) or not _subset(included,entry_map) or not _subset(excluded,entry_map): errors.append("coverage references invalid source/explicit/verified frames")
 	var ordered_included = []
 	var ordered_excluded = []
 	for frame in source_ids:
-		if (frame in included) == (frame in excluded): errors.append("invalid coverage partition")
-		if frame in included: ordered_included.append(frame)
-		if frame in excluded: ordered_excluded.append(frame)
+		if included_set.has(frame) == excluded_set.has(frame): errors.append("invalid coverage partition")
+		if included_set.has(frame): ordered_included.append(frame)
+		if excluded_set.has(frame): ordered_excluded.append(frame)
 	if not DIFF.equivalent(included,ordered_included) or not DIFF.equivalent(excluded,ordered_excluded): errors.append("coverage order differs from Source")
 	var counts = {"total_frames":source_ids.size(),"included_frames":included.size(),"excluded_frames":excluded.size()}
 	for key in counts:
@@ -65,15 +70,15 @@ static func validate(manifest: Dictionary, texts: Dictionary, diff: Dictionary) 
 		if DIFF.regions_by_id(record.regions).size() != record.regions.size(): errors.append("duplicate corrected region ID")
 		if record.has("time_s") and (not entry.has("time_s") or record.time_s != entry.time_s): errors.append("provided annotation time differs from Source")
 		var expected = entry.duplicate(true)
-		expected.merge({"sample_id":"%s_%06d" % [manifest.media.media_id,frame],"explicit":frame in explicit,"verified":frame in verified,"review_status":"verified" if frame in verified else "unverified","annotation_status":("negative" if record.regions.is_empty() else "annotated") if frame in explicit else "unannotated"})
+		expected.merge({"sample_id":"%s_%06d" % [manifest.media.media_id,frame],"explicit":explicit_set.has(frame),"verified":verified_set.has(frame),"review_status":"verified" if verified_set.has(frame) else "unverified","annotation_status":("negative" if record.regions.is_empty() else "annotated") if explicit_set.has(frame) else "unannotated"})
 		if not DIFF.equivalent(mapped,expected): errors.append("frame map/sample ID/status differs from Source and coverage")
 		var internal = record.duplicate(true)
 		internal.source = manifest.media.source
 		var accepted = manifest.review_state.get(str(frame),{}).get("accepted_digest")
 		var digest = JSON.stringify(DIFF.normalize(internal),"",true,true).sha256_text()
-		if (accepted == digest) != (frame in verified): errors.append("current content verification mismatch")
+		if (accepted == digest) != verified_set.has(frame): errors.append("current content verification mismatch")
 	for frame in manifest.review_state:
-		if int(frame) not in explicit: errors.append("review state must refer to explicit source frames")
+		if not explicit_set.has(int(frame)): errors.append("review state must refer to explicit source frames")
 	for operation in manifest.batch_operations:
 		for field in ["keyframe","start_frame","end_frame"]:
 			if not entry_map.has(int(operation[field])): errors.append("batch provenance contains unknown source frame")
@@ -83,12 +88,54 @@ static func validate(manifest: Dictionary, texts: Dictionary, diff: Dictionary) 
 			if operation.start_index > operation.end_index or operation.covered_count != operation.end_index-operation.start_index+1 or operation.covered_count > operation.max_frames or operation.changed_count != operation.affected_frames.size() or operation.changed_count >= operation.covered_count: errors.append("batch metric counts/range inconsistent")
 		for frame in operation.affected_frames:
 			if not entry_map.has(int(frame)) or frame == operation.keyframe or frame < operation.start_frame or frame > operation.end_frame: errors.append("batch contains invalid target")
+		if int(operation.schema_version) == 1:
+			if operation.has("frame_step") or operation.has("edge_refinement"):
+				errors.append("legacy batch provenance cannot claim Poly V2 audit fields")
+			continue
+		var required = ["metric_id","threshold","max_frames","keyframe_digest","created_at","start_index","end_index","left_stop","right_stop","changed_count","covered_count","edge_refinement"]
+		var missing = false
+		for field in required:
+			if not operation.has(field): missing = true
+		if missing:
+			errors.append("Poly V2 batch provenance is missing required audit fields")
+			continue
+		var step = int(operation.get("frame_step",1))
+		var covered = int(operation.covered_count)
+		var expected = {}
+		for offset in range(covered): expected[int(operation.start_frame) + offset * step] = true
+		var targets = expected.duplicate()
+		targets.erase(int(operation.keyframe))
+		var summary = operation.edge_refinement
+		var items = summary.items
+		var reference_ids = {}
+		var identities = {}
+		var accepted = 0
+		var invalid_item_frame = false
+		for item in items:
+			reference_ids[item.region_id] = true
+			identities["%s\u001f%s" % [str(item.frame_id),item.region_id]] = true
+			accepted += 1 if item.accepted else 0
+			if not targets.has(int(item.frame_id)): invalid_item_frame = true
+		var invalid_expected_frame = false
+		for frame in expected:
+			if not entry_map.has(int(frame)): invalid_expected_frame = true
+		var invalid_affected = false
+		for frame in operation.affected_frames:
+			if not expected.has(int(frame)): invalid_affected = true
+		if operation.metric_id != "poly-sim-flow-edge-v1" \
+			or int(operation.end_frame) - int(operation.start_frame) != (covered - 1) * step \
+			or not expected.has(int(operation.keyframe)) or invalid_expected_frame or invalid_affected \
+			or invalid_item_frame or reference_ids.is_empty() or identities.size() != items.size() \
+			or items.size() != targets.size() * reference_ids.size() \
+			or int(summary.attempted) != items.size() or int(summary.accepted) != accepted \
+			or int(summary.fallback) != items.size() - accepted:
+			errors.append("Poly V2 batch provenance audit is inconsistent")
 	if manifest.summary.verified_frames != verified.size(): errors.append("verified frame count mismatch")
 	if not errors.is_empty(): return errors
-	errors.append_array(_validate_diff(manifest,records,diff,texts))
+	errors.append_array(_validate_diff(manifest,records,diff,texts,validator))
 	return errors
 
-static func _validate_diff(manifest: Dictionary, records: Array, diff: Dictionary, texts: Dictionary) -> PackedStringArray:
+static func _validate_diff(manifest: Dictionary, records: Array, diff: Dictionary, texts: Dictionary, validator) -> PackedStringArray:
 	var errors = PackedStringArray()
 	var available = manifest.baseline.kind != "unknown"
 	if diff.available != available or manifest.summary.audit_available != available: errors.append("audit availability inconsistent with baseline kind")
@@ -99,7 +146,6 @@ static func _validate_diff(manifest: Dictionary, records: Array, diff: Dictionar
 	if not DIFF.equivalent(actual_ids,expected_ids): return PackedStringArray(["audit frame coverage mismatch"])
 	var current = DIFF.records_by_frame(records)
 	var baseline = []
-	var validator = V1.new()
 	for frame in diff.frames:
 		var after = DIFF.regions_by_id(current[int(frame.frame_id)].regions)
 		var before = {} if manifest.baseline.kind == "empty" else after.duplicate(true)
@@ -182,9 +228,14 @@ static func _jsonl(text: String, errors: PackedStringArray) -> Array:
 static func _ids(values: Array) -> Array:
 	return values.map(func(value): return int(value))
 
-static func _subset(values: Array, container: Array) -> bool:
+static func _id_set(values: Array) -> Dictionary:
+	var result = {}
+	for value in values: result[int(value)] = true
+	return result
+
+static func _subset(values: Array, container: Dictionary) -> bool:
 	for value in values:
-		if value not in container: return false
+		if not container.has(value): return false
 	return true
 
 static func _csv(text: String, errors: PackedStringArray) -> Array:

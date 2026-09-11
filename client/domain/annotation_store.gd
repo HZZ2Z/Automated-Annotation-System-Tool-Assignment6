@@ -6,6 +6,7 @@ signal corrected_records_replaced(frames: PackedInt64Array)
 signal review_state_changed()
 
 
+const STREAM_JSON := preload("res://client/domain/stream_json.gd")
 const VALIDATOR_SCRIPT := preload("res://client/domain/model_output_validator.gd")
 
 var _review_state: Dictionary = {}
@@ -63,8 +64,12 @@ func load_model_records(records: Variant) -> PackedStringArray:
 	_explicit_frames = {}
 	for frame: int in _frame_order:
 		_explicit_frames[frame] = true
-	_baseline_digest = JSON.stringify(_canonicalize(_sorted_record_copies(_model_records))).sha256_text()
-	_snapshot_baseline_digest = JSON.stringify(_canonicalize(_sorted_record_copies(_model_records)), "", true, true).sha256_text()
+	var ordered: Array = []
+	for frame: int in _frame_order:
+		ordered.append(_model_records[frame])
+	var digests: Dictionary = STREAM_JSON.record_digests(ordered)
+	_baseline_digest = digests.legacy
+	_snapshot_baseline_digest = digests.current
 	_dirty_frames.clear()
 	_batch_operations.clear()
 	_review_state.clear()
@@ -85,15 +90,19 @@ func get_corrected_record(frame: int) -> Dictionary:
 	return record.duplicate(true)
 
 
-func _model_output_projection(record: Variant) -> Variant:
+static func _model_output_projection(record: Variant) -> Variant:
 	if not record is Dictionary:
 		return record
-	var result: Dictionary = record.duplicate(true)
+	var result: Dictionary = record.duplicate()
 	var regions: Variant = result.get("regions")
 	if regions is Array:
+		var projected: Array = []
 		for value: Variant in regions:
-			if value is Dictionary:
+			if value is Dictionary and value.has("filled"):
+				value = value.duplicate()
 				value.erase("filled")
+			projected.append(value)
+		result["regions"] = projected
 	return result
 
 
@@ -117,6 +126,106 @@ func restore_corrected_records(replacements: Dictionary, operation_count: int) -
 	return _replace_corrected_records(replacements, {}, clampi(operation_count, 0, _batch_operations.size()))
 
 
+func replace_corrected_records_with_reviews(replacements: Dictionary, operation: Dictionary,
+		verified_frame_ids: Variant) -> PackedStringArray:
+	var errors := PackedStringArray()
+	var frames: Array[int] = []
+	if replacements.is_empty():
+		return PackedStringArray(["replacements: expected at least one frame"])
+	for frame_value: Variant in replacements:
+		if not _is_logical_integer(frame_value):
+			errors.append("replacements.%s: frame key must be an integer" % str(frame_value))
+		else:
+			frames.append(int(frame_value))
+	frames.sort()
+	var verified: Array[int] = []
+	var seen := {}
+	if not (verified_frame_ids is Array or verified_frame_ids is PackedInt64Array or verified_frame_ids is PackedInt32Array):
+		errors.append("verified_frame_ids: expected frame array")
+	else:
+		for frame_value: Variant in verified_frame_ids:
+			if typeof(frame_value) != TYPE_INT or seen.has(frame_value):
+				errors.append("verified_frame_ids: invalid or duplicate frame ID")
+			else:
+				seen[frame_value] = true
+				verified.append(int(frame_value))
+	verified.sort()
+	if verified != frames:
+		errors.append("verified_frame_ids: must exactly match changed frames")
+	if operation.is_empty():
+		errors.append("operation: expected batch audit marker")
+	if operation.get("schema_version") == 3:
+		if not _same_frame_set(operation.get("affected_frames"), frames) or operation.get("generated_count") != frames.size():
+			errors.append("SAM operation: audit must exactly name the generated target frames")
+		for frame: int in frames:
+			if frame == operation.get("keyframe"):
+				errors.append("SAM operation: generated targets must exclude the keyframe")
+	var candidate_records := _corrected_records.duplicate()
+	for frame: int in frames:
+		for error: String in _validate_replacement(frame, replacements[frame]):
+			errors.append("replacements.%d.%s" % [frame, error])
+		if not errors.is_empty():
+			continue
+		candidate_records[frame] = _immutable_copy(replacements[frame])
+	if not errors.is_empty():
+		return errors
+	var candidate_reviews := _review_state.duplicate(true)
+	for frame: int in verified:
+		candidate_reviews[str(frame)] = {"accepted_digest": _record_digest_value(candidate_records[frame])}
+	var candidate_operations := _batch_operations.duplicate(true)
+	candidate_operations.append(operation.duplicate(true))
+	errors.append_array(validate_workflow_state(candidate_reviews, candidate_operations, candidate_records, _session.get("frame_entries")))
+	if not errors.is_empty():
+		return errors
+	_install_corrected_records_with_reviews(candidate_records, candidate_reviews, candidate_operations, frames)
+	return errors
+
+
+func restore_corrected_records_with_reviews(replacements: Dictionary, operation_count: int,
+		review_state: Dictionary) -> PackedStringArray:
+	var errors := PackedStringArray()
+	if replacements.is_empty():
+		return PackedStringArray(["replacements: expected at least one frame"])
+	if operation_count < 0 or operation_count > _batch_operations.size():
+		return PackedStringArray(["operation_count: outside current batch history"])
+	var frames: Array[int] = []
+	var candidate_records := _corrected_records.duplicate()
+	for frame_value: Variant in replacements:
+		if not _is_logical_integer(frame_value):
+			errors.append("replacements.%s: frame key must be an integer" % str(frame_value))
+			continue
+		var frame := int(frame_value)
+		frames.append(frame)
+		for error: String in _validate_replacement(frame, replacements[frame_value]):
+			errors.append("replacements.%d.%s" % [frame, error])
+		if errors.is_empty():
+			candidate_records[frame] = _immutable_copy(replacements[frame_value])
+	if not errors.is_empty():
+		return errors
+	frames.sort()
+	var candidate_reviews := review_state.duplicate(true)
+	var candidate_operations := _batch_operations.duplicate(true)
+	candidate_operations.resize(operation_count)
+	errors.append_array(validate_workflow_state(candidate_reviews, candidate_operations, candidate_records, _session.get("frame_entries")))
+	if not errors.is_empty():
+		return errors
+	_install_corrected_records_with_reviews(candidate_records, candidate_reviews, candidate_operations, frames)
+	return errors
+
+
+func _install_corrected_records_with_reviews(candidate_records: Dictionary, candidate_reviews: Dictionary,
+		candidate_operations: Array, frames: Array[int]) -> void:
+	_corrected_records = candidate_records
+	_review_state = candidate_reviews
+	_batch_operations.assign(candidate_operations)
+	for frame: int in frames:
+		_dirty_frames[frame] = true
+		_explicit_frames[frame] = true
+	_revision += 1
+	corrected_records_replaced.emit(PackedInt64Array(frames))
+	review_state_changed.emit()
+
+
 func _replace_corrected_records(replacements: Dictionary, operation: Dictionary, restore_operation_count: int) -> PackedStringArray:
 	var errors := PackedStringArray()
 	if replacements.is_empty():
@@ -136,7 +245,7 @@ func _replace_corrected_records(replacements: Dictionary, operation: Dictionary,
 	if not errors.is_empty():
 		return errors
 	if not operation.is_empty():
-		errors.append_array(validate_workflow_state(_review_state, [operation], _corrected_records))
+		errors.append_array(validate_workflow_state(_review_state, [operation], _corrected_records, _session.get("frame_entries")))
 		if not errors.is_empty():
 			return errors
 	for frame: int in frames:
@@ -186,14 +295,19 @@ func model_digest() -> String:
 
 
 func _validate_replacement(frame: int, record: Variant) -> PackedStringArray:
-	var errors: PackedStringArray = _validator.validate_record(_model_output_projection(record))
-	if not _corrected_records.has(frame):
+	return validate_replacement(frame, record, _model_records, _corrected_records, _session, _validator)
+
+
+static func validate_replacement(frame: int, record: Variant, model_records: Dictionary, corrected_records: Dictionary, session: Dictionary, validator: Variant = null) -> PackedStringArray:
+	if validator == null: validator = VALIDATOR_SCRIPT.new()
+	var errors: PackedStringArray = validator.validate_record(_model_output_projection(record))
+	if not corrected_records.has(frame):
 		errors.append("frame: frame %d does not exist" % frame)
 	if record is Dictionary:
-		if not _session.is_empty():
-			if record.get("source") != _session.source:
+		if not session.is_empty():
+			if record.get("source") != session.source:
 				errors.append("source: must match session source")
-			var original: Dictionary = _model_records.get(frame, {})
+			var original: Dictionary = model_records.get(frame, {})
 			if record.has("time_s") != original.has("time_s") or record.get("time_s") != original.get("time_s"):
 				errors.append("time_s: must preserve source timestamp including absence")
 		var seen_ids := {}
@@ -222,7 +336,7 @@ func _sorted_record_copies(records: Dictionary) -> Array:
 	return result
 
 
-func _canonicalize(value: Variant) -> Variant:
+static func _canonicalize(value: Variant) -> Variant:
 	if value is Dictionary:
 		var keys: Array = value.keys()
 		keys.sort()
@@ -246,7 +360,7 @@ func _prefix_record_error(index: int, error: String) -> String:
 	return "records.%d.%s" % [index, error]
 
 
-func _is_logical_integer(value: Variant) -> bool:
+static func _is_logical_integer(value: Variant) -> bool:
 	if typeof(value) != TYPE_INT and typeof(value) != TYPE_FLOAT:
 		return false
 	return is_finite(float(value)) and float(value) == floorf(float(value))
@@ -254,7 +368,11 @@ func _is_logical_integer(value: Variant) -> bool:
 
 func record_digest(frame: int) -> String:
 	# Normalize numeric JSON values so saved/reopened geometry hashes identically.
-	return JSON.stringify(_canonicalize(_model_output_projection(get_corrected_record(frame))), "", true, true).sha256_text()
+	return _record_digest_value(get_corrected_record(frame))
+
+
+static func _record_digest_value(record: Variant) -> String:
+	return JSON.stringify(_canonicalize(_model_output_projection(record)), "", true, true).sha256_text()
 
 
 func legacy_record_digest(frame: int) -> String:
@@ -271,9 +389,10 @@ func snapshot_review_state() -> Dictionary:
 
 
 func load_workflow_state(review_state: Variant, batch_operations: Variant) -> PackedStringArray:
-	var errors := validate_workflow_state(review_state, batch_operations, _corrected_records)
+	var errors := validate_workflow_state(review_state, batch_operations, _corrected_records, _session.get("frame_entries"))
 	if not errors.is_empty():
 		return errors
+	batch_operations = _normalize_sam_operations(batch_operations)
 	if _review_state != review_state or _batch_operations != batch_operations:
 		_revision += 1
 	_review_state = review_state.duplicate(true)
@@ -284,7 +403,21 @@ func load_workflow_state(review_state: Variant, batch_operations: Variant) -> Pa
 	return errors
 
 
-static func validate_workflow_state(reviews: Variant, operations: Variant, frames: Dictionary) -> PackedStringArray:
+## JSON 数字读取为 float；v3 已验证的整数恢复为原始类型，旧版审计保持原样。
+static func _normalize_sam_operations(operations: Array) -> Array:
+	var normalized := operations.duplicate(true)
+	for operation: Dictionary in normalized:
+		if operation.get("schema_version") != 3: continue
+		for field: String in ["schema_version", "keyframe", "keyframe_playback_index", "requested_count", "generated_count", "start_frame", "end_frame", "elapsed_ms"]:
+			operation[field] = int(operation[field])
+		if operation.stop_frame != null: operation.stop_frame = int(operation.stop_frame)
+		for field: String in ["affected_frames", "target_playback_indices"]:
+			for index in range(operation[field].size()): operation[field][index] = int(operation[field][index])
+		for item: Dictionary in operation.risk_summary: item.frame_id = int(item.frame_id)
+	return normalized
+
+
+static func validate_workflow_state(reviews: Variant, operations: Variant, frames: Dictionary, frame_entries: Variant = null) -> PackedStringArray:
 	var errors := PackedStringArray()
 	if not reviews is Dictionary or not operations is Array:
 		return PackedStringArray(["workflow: expected review object and batch array"])
@@ -300,7 +433,7 @@ static func validate_workflow_state(reviews: Variant, operations: Variant, frame
 		elif digest_pattern.search(value["accepted_digest"]) == null:
 			errors.append("review_state.%s: expected SHA256 digest" % key)
 	for operation: Variant in operations:
-		errors.append_array(_validate_batch_operation(operation, frames, digest_pattern))
+		errors.append_array(_validate_batch_operation(operation, frames, digest_pattern, frame_entries))
 	return errors
 
 
@@ -308,16 +441,19 @@ static func _valid_frame_number(value: Variant) -> bool:
 	return (typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT) and is_finite(float(value)) and float(value) == floorf(float(value)) and float(value) >= 0.0
 
 
-static func _validate_batch_operation(operation: Variant, frames: Dictionary, digest_pattern: RegEx) -> PackedStringArray:
+static func _validate_batch_operation(operation: Variant, frames: Dictionary, digest_pattern: RegEx, frame_entries: Variant = null) -> PackedStringArray:
 	var errors := PackedStringArray()
 	if not operation is Dictionary:
 		return PackedStringArray(["batch_operations: expected objects"])
 	var schema_value: Variant = operation.get("schema_version")
 	var schema := int(schema_value) if _valid_frame_number(schema_value) else -1
+	if schema == 3:
+		return _validate_sam_video_operation(operation, frames, digest_pattern, frame_entries)
 	var v1_fields := ["schema_version", "type", "mode", "keyframe", "start_frame", "end_frame", "affected_frames", "metric", "metric_id", "threshold", "max_frames", "keyframe_digest", "created_at", "start_index", "end_index", "left_stop", "right_stop", "changed_count", "covered_count"]
 	var v2_fields := ["schema_version", "type", "mode", "keyframe", "start_frame", "end_frame", "affected_frames", "metric_id", "threshold", "max_frames", "keyframe_digest", "created_at", "start_index", "end_index", "left_stop", "right_stop", "changed_count", "covered_count", "edge_refinement"]
+	var allowed_fields: Array = (v2_fields + ["frame_step"]) if schema == 2 else v1_fields
 	for field: Variant in operation:
-		if field not in (v2_fields if schema == 2 else v1_fields):
+		if field not in allowed_fields:
 			errors.append("batch_operations: unexpected field %s" % str(field))
 	if schema == 2:
 		for field: String in v2_fields:
@@ -361,6 +497,16 @@ static func _validate_batch_operation(operation: Variant, frames: Dictionary, di
 	for field: String in ["max_frames", "start_index", "end_index", "changed_count", "covered_count"]:
 		if operation.has(field) and (not _valid_frame_number(operation[field]) or (field in ["max_frames", "changed_count", "covered_count"] and operation[field] == 0)):
 			errors.append("batch_operations.%s: invalid integer" % field)
+	var frame_step := 1
+	if operation.has("frame_step"):
+		if not _valid_frame_number(operation.frame_step) or int(operation.frame_step) < 1:
+			errors.append("batch_operations.frame_step: expected positive integer")
+		else:
+			frame_step = int(operation.frame_step)
+	if schema == 2 and range_valid and affected is Array:
+		for frame: Variant in affected:
+			if _valid_frame_number(frame) and (int(frame) - int(operation.start_frame)) % frame_step != 0:
+				errors.append("batch_operations.affected_frames: target must match frame_step")
 	if operation.has("keyframe_digest") and (not operation.keyframe_digest is String or digest_pattern.search(operation.keyframe_digest) == null):
 		errors.append("batch_operations.keyframe_digest: expected SHA256")
 	if operation.has("created_at"):
@@ -374,18 +520,139 @@ static func _validate_batch_operation(operation: Variant, frames: Dictionary, di
 		if operation.changed_count != affected.size() or operation.changed_count >= operation.covered_count:
 			errors.append("batch_operations: inconsistent changed count")
 	if schema == 2:
-		errors.append_array(_validate_edge_refinement(operation, frames))
+		errors.append_array(_validate_edge_refinement(operation, frames, frame_step))
 	return errors
 
 
-static func _validate_edge_refinement(operation: Dictionary, frames: Dictionary) -> PackedStringArray:
+## v3 只记录单区域前向候选的确认摘要；瞬时推理内容不可进入持久化审计。
+static func _validate_sam_video_operation(operation: Dictionary, frames: Dictionary, digest_pattern: RegEx, frame_entries: Variant) -> PackedStringArray:
+	var fields := ["schema_version", "type", "mode", "provider_id", "metric_id", "keyframe",
+		"keyframe_playback_index", "keyframe_digest", "region_id", "direction", "requested_count", "generated_count",
+		"start_frame", "end_frame", "affected_frames", "target_playback_indices", "stop_frame", "stop_reason",
+		"checkpoint_sha256", "device", "model_version", "elapsed_ms", "risk_summary", "created_at"]
+	var errors := PackedStringArray()
+	for field: Variant in operation:
+		if field not in fields: errors.append("SAM audit: unexpected field %s" % str(field))
+	for field: String in fields:
+		if not operation.has(field): errors.append("SAM audit.%s: required" % field)
+	if not errors.is_empty(): return errors
+	if operation.type != "range_propagate" or operation.mode != "merge" or operation.provider_id != "sam_video" or operation.metric_id != "sam-video-v1" or operation.direction != "forward":
+		errors.append("SAM audit: invalid type, mode, provider, metric or direction")
+	for field: String in ["keyframe", "start_frame", "end_frame"]:
+		if not _valid_frame_number(operation[field]) or not frames.has(int(operation[field])):
+			errors.append("SAM audit.%s: unknown Source frame" % field)
+	for field: String in ["keyframe_playback_index", "requested_count", "generated_count", "elapsed_ms"]:
+		if not _valid_frame_number(operation[field]) or float(operation[field]) > 9007199254740991.0:
+			errors.append("SAM audit.%s: expected bounded nonnegative integer" % field)
+	if not _sam_audit_text(operation.region_id, 128): errors.append("SAM audit.region_id: invalid bounded identity")
+	var version_pattern := RegEx.new()
+	version_pattern.compile("^[A-Za-z0-9][A-Za-z0-9._+\\-]{0,63}\\z")
+	if not operation.model_version is String or version_pattern.search(operation.model_version) == null:
+		errors.append("SAM audit.model_version: expected bounded runtime version")
+	if operation.device not in ["cpu", "cuda"]: errors.append("SAM audit.device: expected actual cpu or cuda device")
+	for field: String in ["keyframe_digest", "checkpoint_sha256"]:
+		if not operation[field] is String or operation[field].length() != 64 or digest_pattern.search(operation[field]) == null:
+			errors.append("SAM audit.%s: expected SHA256" % field)
+	var timestamp_pattern := RegEx.new()
+	timestamp_pattern.compile("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](Z)?$")
+	if not _sam_audit_text(operation.created_at, 20) or timestamp_pattern.search(operation.created_at) == null:
+		errors.append("SAM audit.created_at: expected ISO timestamp")
+	if not operation.affected_frames is Array or not operation.target_playback_indices is Array:
+		errors.append("SAM audit: expected target frame and playback arrays")
+	if not operation.risk_summary is Array or operation.risk_summary.size() > 30:
+		errors.append("SAM audit.risk_summary: expected at most 30 items")
+	if operation.stop_reason not in ["", "source_end", "verified_target", "model_topology", "user_range"]:
+		errors.append("SAM audit.stop_reason: expected bounded stop category")
+	if not errors.is_empty(): return errors
+	var count := int(operation.generated_count)
+	var requested := int(operation.requested_count)
+	var key_index := int(operation.keyframe_playback_index)
+	var order := _sam_playback_order(frame_entries, frames)
+	if order.is_empty():
+		return PackedStringArray(["SAM audit: trusted complete Source playback entries are required"])
+	if requested < 1 or requested > 30 or count < 1 or count > requested or operation.affected_frames.size() != count or operation.target_playback_indices.size() != count:
+		return PackedStringArray(["SAM audit: inconsistent bounded target counts"])
+	if key_index >= order.size() or key_index + count >= order.size() or order[key_index] != operation.keyframe:
+		return PackedStringArray(["SAM audit: key/playback identity or target range differs from Source"])
+	for offset in range(count):
+		var frame: Variant = operation.affected_frames[offset]
+		var index: Variant = operation.target_playback_indices[offset]
+		if not _valid_frame_number(frame) or not _valid_frame_number(index) or index != key_index + offset + 1 or frame != order[key_index + offset + 1]:
+			errors.append("SAM audit: targets must be the exact ordered forward Source prefix")
+	if operation.start_frame != operation.keyframe or operation.end_frame != operation.affected_frames[-1]:
+		errors.append("SAM audit: range must exactly cover key and accepted targets")
+	if count == requested:
+		if operation.stop_frame != null or operation.stop_reason != "": errors.append("SAM audit: complete request cannot have a stop")
+	elif operation.stop_reason == "source_end":
+		if operation.stop_frame != null or key_index + count != order.size()-1:
+			errors.append("SAM audit: Source end must follow the last accepted Source frame")
+	elif operation.stop_reason in ["verified_target", "model_topology", "user_range"]:
+		if key_index + count + 1 >= order.size() or not _valid_frame_number(operation.stop_frame) or operation.stop_frame != order[key_index + count + 1]:
+			errors.append("SAM audit: stop must name the first excluded Source frame")
+	else: errors.append("SAM audit: truncated request needs a stop category")
+	var previous_risk_index := -1
+	for item: Variant in operation.risk_summary:
+		if not item is Dictionary or item.size() != 2 or not item.has("frame_id") or not item.has("kinds"):
+			errors.append("SAM audit.risk_summary: expected exact frame_id and kinds")
+			continue
+		var risk_index: int = operation.affected_frames.find(item.frame_id)
+		if not _valid_frame_number(item.frame_id) or risk_index < 0 or risk_index <= previous_risk_index:
+			errors.append("SAM audit.risk_summary: unique accepted targets must be ordered")
+		previous_risk_index = risk_index
+		if not item.kinds is Array or item.kinds.is_empty() or item.kinds.size() > 4:
+			errors.append("SAM audit.risk_summary.kinds: expected one to four categories")
+			continue
+		var seen := {}
+		for kind: Variant in item.kinds:
+			if kind not in ["sparse_input", "area_change", "frame_difference", "flow_consistency"] or seen.has(kind):
+				errors.append("SAM audit.risk_summary.kinds: unknown or duplicate category")
+			seen[kind] = true
+	return errors
+
+
+static func _sam_audit_text(value: Variant, limit: int) -> bool:
+	if not value is String or value.is_empty() or value.length() > limit or value.contains("/") or value.contains("\\"):
+		return false
+	for index in range(value.length()):
+		if value.unicode_at(index) < 32 or value.unicode_at(index) == 127: return false
+	return not value.strip_edges().is_empty()
+
+
+## 播放序号与原始 frame_id 是两种身份；禁止从原始编号排序推断播放顺序。
+static func _sam_playback_order(frame_entries: Variant, frames: Dictionary) -> Array:
+	if not frame_entries is Array or frame_entries.is_empty() or frame_entries.size() != frames.size(): return []
+	var order: Array = []
+	var seen := {}
+	for index in range(frame_entries.size()):
+		var entry: Variant = frame_entries[index]
+		if not entry is Dictionary or not _valid_frame_number(entry.get("frame")) or entry.frame != index or not _valid_frame_number(entry.get("frame_id")):
+			return []
+		var frame := int(entry.frame_id)
+		if not frames.has(frame) or seen.has(frame): return []
+		seen[frame] = true
+		order.append(frame)
+	return order
+
+
+static func _same_frame_set(affected: Variant, changed: Array) -> bool:
+	if not affected is Array or affected.size() != changed.size(): return false
+	var seen := {}
+	for value: Variant in affected:
+		if not _valid_frame_number(value): return false
+		var frame := int(value)
+		if frame not in changed or seen.has(frame): return false
+		seen[frame] = true
+	return true
+
+
+static func _validate_edge_refinement(operation: Dictionary, frames: Dictionary, frame_step: int = 1) -> PackedStringArray:
 	var errors := PackedStringArray()
 	if operation.get("metric_id") != "poly-sim-flow-edge-v1":
 		errors.append("batch_operations.metric_id: invalid Poly edge algorithm")
 	if operation.get("max_frames") != 30:
 		errors.append("batch_operations.max_frames: Poly edge audit must use 30")
 	if _valid_frame_number(operation.get("start_frame")) and _valid_frame_number(operation.get("end_frame")) and _valid_frame_number(operation.get("covered_count")):
-		if int(operation.end_frame) - int(operation.start_frame) + 1 != int(operation.covered_count):
+		if int(operation.end_frame) - int(operation.start_frame) != (int(operation.covered_count) - 1) * frame_step:
 			errors.append("batch_operations: real and playback ranges differ")
 	for field: String in ["left_stop", "right_stop"]:
 		if operation.get(field) is String and operation[field].length() > 512:
@@ -409,9 +676,15 @@ static func _validate_edge_refinement(operation: Dictionary, frames: Dictionary)
 	var reference_ids := {}
 	var keyframe: int = int(operation.get("keyframe", -1))
 	var target_set := {}
-	if _valid_frame_number(operation.get("start_frame")) and _valid_frame_number(operation.get("end_frame")):
-		for frame_id: int in range(int(operation.start_frame), int(operation.end_frame) + 1):
-			if frame_id != keyframe and frames.has(frame_id):
+	if _valid_frame_number(operation.get("start_frame")) and _valid_frame_number(operation.get("covered_count")):
+		var start_frame := int(operation.start_frame)
+		if (keyframe - start_frame) % frame_step != 0:
+			errors.append("batch_operations.keyframe: must match frame_step")
+		for offset: int in range(int(operation.covered_count)):
+			var frame_id := start_frame + offset * frame_step
+			if not frames.has(frame_id):
+				errors.append("batch_operations: sampled range contains an unknown frame")
+			elif frame_id != keyframe:
 				target_set[frame_id] = true
 	var seen := {}
 	var accepted_count := 0
@@ -469,6 +742,22 @@ static func _validate_edge_refinement(operation: Dictionary, frames: Dictionary)
 # These session APIs contain no IO. Load/validation belongs to the worker that
 # constructs the store; freeze only publishes already immutable record values.
 func configure_session(context: Dictionary) -> PackedStringArray:
+	var errors := validate_session_context(context, _model_records, _corrected_records, _frame_order)
+	if not errors.is_empty(): return errors
+	_session = {}
+	for field: String in ["session_id", "media_id", "media_type", "source_relative_path", "source", "source_sha256", "round_id", "model_revision", "taxonomy_version", "baseline_kind", "source_root"]:
+		if context.has(field):
+			_session[field] = context[field]
+	_session["source_sha256"] = context.get("source_sha256")
+	_session["frame_entries"] = _immutable_copy(context.frame_entries)
+	_revision = int(context.get("revision", 0))
+	_explicit_frames = {}
+	for frame: Variant in context.get("explicit_frames", _frame_order):
+		_explicit_frames[int(frame)] = true
+	return errors
+
+
+static func validate_session_context(context: Dictionary, model_records: Dictionary, corrected_records: Dictionary, frame_order: Array) -> PackedStringArray:
 	var errors := PackedStringArray()
 	for field: String in ["session_id", "media_id", "media_type", "source_relative_path", "source", "round_id", "model_revision", "taxonomy_version"]:
 		if not context.get(field) is String or context[field].is_empty():
@@ -494,10 +783,10 @@ func configure_session(context: Dictionary) -> PackedStringArray:
 	if not _valid_frame_number(context.get("revision", 0)):
 		errors.append("revision: expected nonnegative integer")
 	var entries: Variant = context.get("frame_entries")
-	var explicit: Variant = context.get("explicit_frames", _frame_order)
+	var explicit: Variant = context.get("explicit_frames", frame_order)
 	var frame_map := {}
 	var previous_time := -1.0
-	if not entries is Array or entries.is_empty() or entries.size() != _corrected_records.size():
+	if not entries is Array or entries.is_empty() or entries.size() != corrected_records.size():
 		errors.append("frame_entries: expected exact source frame set")
 	else:
 		for index in range(entries.size()):
@@ -519,11 +808,11 @@ func configure_session(context: Dictionary) -> PackedStringArray:
 			var frame := int(entry.frame_id)
 			if frame > 999999:
 				errors.append("frame_entries: original frame ID exceeds six digits")
-			if frame_map.has(frame) or not _corrected_records.has(frame):
+			if frame_map.has(frame) or not corrected_records.has(frame):
 				errors.append("frame_entries: duplicate or unknown frame")
 			else:
 				frame_map[frame] = true
-				var record: Dictionary = _model_records[frame]
+				var record: Dictionary = model_records[frame]
 				if record.source != context.get("source") or (record.has("time_s") and (not entry.has("time_s") or record.time_s != entry.time_s)):
 					errors.append("frame_entries: source or timestamp differs from loaded record")
 	var next_explicit := {}
@@ -535,16 +824,6 @@ func configure_session(context: Dictionary) -> PackedStringArray:
 				errors.append("explicit_frames: duplicate or unknown frame")
 			else:
 				next_explicit[int(frame)] = true
-	if not errors.is_empty():
-		return errors
-	_session = {}
-	for field: String in ["session_id", "media_id", "media_type", "source_relative_path", "source", "source_sha256", "round_id", "model_revision", "taxonomy_version", "baseline_kind", "source_root"]:
-		if context.has(field):
-			_session[field] = context[field]
-	_session["source_sha256"] = context.get("source_sha256")
-	_session["frame_entries"] = _immutable_copy(entries)
-	_revision = int(context.get("revision", 0))
-	_explicit_frames = next_explicit
 	return errors
 
 
@@ -566,14 +845,14 @@ func restore_corrected(records: Variant, review_state: Variant, batch_operations
 			errors.append("records: duplicate frame")
 		errors.append_array(_validate_replacement(frame, record))
 		next[frame] = record
-	errors.append_array(validate_workflow_state(review_state, batch_operations, next))
+	errors.append_array(validate_workflow_state(review_state, batch_operations, next, _session.get("frame_entries")))
 	if not errors.is_empty():
 		return errors
 	for frame: int in next:
-		next[frame] = _immutable_copy(next[frame])
+		next[frame] = _model_records[frame] if next[frame] == _model_records.get(frame) else _immutable_copy(next[frame])
 	_corrected_records = next
 	_review_state = review_state.duplicate(true)
-	_batch_operations.assign(batch_operations.duplicate(true))
+	_batch_operations.assign(_normalize_sam_operations(batch_operations))
 	_dirty_frames.clear()
 	corrected_records_replaced.emit(PackedInt64Array(_frame_order))
 	review_state_changed.emit()
@@ -606,7 +885,21 @@ func freeze_snapshot() -> Dictionary:
 	return snapshot
 
 
+# 只有整棵容器树均不可变时才共享；浅只读容器仍需隔离可变子节点。
+static func _deeply_immutable(value: Variant) -> bool:
+	if value is Dictionary:
+		if not value.is_read_only(): return false
+		for key: Variant in value:
+			if not _deeply_immutable(value[key]): return false
+	elif value is Array:
+		if not value.is_read_only(): return false
+		for child: Variant in value:
+			if not _deeply_immutable(child): return false
+	return true
+
+
 static func _immutable_copy(value: Variant) -> Variant:
+	if _deeply_immutable(value): return value
 	if value is Dictionary:
 		var result := {}
 		for key: Variant in value:

@@ -1,0 +1,9 @@
+{
+  "id": "missing_entry",
+  "version": "1.0.0",
+  "api_version": 1,
+  "stage": "source",
+  "entry": "absent.gd",
+  "priority": 10,
+  "capabilities": ["frames"]
+}

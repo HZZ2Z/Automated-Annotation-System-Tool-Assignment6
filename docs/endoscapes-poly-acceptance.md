@@ -24,15 +24,15 @@
 .venv/bin/python python/run_endoscapes_poly_acceptance.py \
   --fixture .local-acceptance/endoscapes-poly-65 \
   --output .local-acceptance/endoscapes-poly-65-evidence \
-  --threshold 0.02
+  --threshold 0.10
 ```
 
 报告记录候选范围、所有相邻/关键帧 MAD、停止原因、每帧/区域的边缘接受或 raw-flow fallback、有限诊断值和运行时间。`overlays/` 用红色显示 raw flow、绿色显示最终候选；fallback 时两张几何必须一致。报告不保存数据集绝对路径。
 
-2026-09-10 的本地 5 帧实测得到候选播放帧 `[2]`（原帧 11825），候选范围 `1..2`；11775 与 11850 均由局部光流证据安全停止。11825 的 GrabCut 结果因产生孔洞被拒绝，保留 raw-flow 候选。30 帧窗口得到相同的唯一相邻候选，证明本例由质量门提前停止而不是依赖 30 帧上限。
+2026-09-10 以阈值 `0.10` 重新运行本地 5 帧夹具，得到候选播放帧 `[2]`（原帧 11825），候选范围 `1..2`；两侧候选因触及图像边界停止。报告中的传播模式与边缘接受/回退必须分开读取。
 
 ## Main 验收边界
 
-用 `--copy` 夹具打开 Main，在播放索引 1 分析默认 `Poly 光流 + 边缘精修`，阈值保持 `0.02`。逐帧查看候选后执行一次 Apply、一次 undo、一次 redo，等待保存，重开同一来源，再确认帧 2 并检查自动前进与再次重开。当前 mounted UI 验收覆盖了上述状态转换、v2 audit marker、原始 `model_output_v1.jsonl` 不变和 1280×800 布局截图。
+用 `--copy` 夹具打开 Main，在播放索引 1 分析默认 `Poly 光流 + 边缘精修`，阈值保持 `0.10`。逐帧查看候选及 `flow`、`bright-template fallback`、`fixed fallback` 标记后执行一次 Apply、一次 undo、一次 redo，等待保存，重开同一来源，再确认帧 2 并检查自动前进与再次重开。当前 mounted UI 验收覆盖上述状态转换、v2 audit marker、原始 `model_output_v1.jsonl` 不变和 1280×800 布局截图。
 
 只有关键帧 11800 具有实例 mask。其他帧没有独立密集真值，因此本流程只能证明真实数据路径闭环和人工可审查性；它不能声明目标帧 IoU、普遍精修收益或自动验证。定量 IoU 结论只来自独立合成基准。

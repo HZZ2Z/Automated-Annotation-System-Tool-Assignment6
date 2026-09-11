@@ -8,14 +8,19 @@ baseline digest to its original immutable predictions.
 from __future__ import annotations
 
 import csv
+from datetime import datetime
 import hashlib
 import io
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from referencing import Registry, Resource
-from annotation_data.contracts import ROOT, SCHEMA_PATHS, StrictDraft202012Validator, validate_instance
+from referencing.exceptions import CannotDetermineSpecification, Unresolvable
+from referencing.jsonschema import UnknownDialect
+from jsonschema.exceptions import SchemaError, UnknownType
+from annotation_data.contracts import ROOT, SCHEMA_PATHS, StrictDraft202012Validator
 from annotation_data.review_session import _normalized
 
 PATHS = (
@@ -35,12 +40,34 @@ def package_identity(manifest: dict) -> str:
     return canonical_digest({k: v for k, v in manifest.items() if k not in {"package_id", "revision", "created_at"}})
 
 
-def _schema_errors(value: Any, name: str) -> list[str]:
+def _schema_validators() -> dict[str, Any]:
+    """本次校验共用合同与 registry；下次调用重新读取，避免任务间可变缓存。"""
     paths = dict(SCHEMA_PATHS)
     paths.update({n: ROOT / "core/feedback" / n for n in ("annotation-diff-v1.schema.json", "training-package-v2.schema.json")})
-    schemas = {n: json.loads(p.read_text()) for n, p in paths.items()}
-    registry = Registry().with_resources((n, Resource.from_contents(s)) for n, s in schemas.items())
-    return [f"{name}:{'.'.join(map(str, e.path))}: {e.message}" for e in StrictDraft202012Validator(schemas[name], registry=registry).iter_errors(value)]
+    schemas = {n: _json(p.read_text(encoding="utf-8")) for n, p in paths.items()}
+    try:
+        registry = Registry().with_resources((n, Resource.from_contents(s)) for n, s in schemas.items())
+    except (CannotDetermineSpecification, UnknownDialect) as exc:
+        raise ValueError(f"schema registry unavailable or invalid: {exc}") from exc
+    return {n: StrictDraft202012Validator(schema, registry=registry) for n, schema in schemas.items()}
+
+
+def _schema_errors(value: Any, name: str, validators: dict[str, Any] | None = None) -> list[str]:
+    try:
+        validator = (validators if validators is not None else _schema_validators())[name]
+        return [f"{name}:{'.'.join(map(str, e.path))}: {e.message}" for e in validator.iter_errors(value)]
+    except (OSError, ValueError, TypeError, KeyError, SchemaError, UnknownType, Unresolvable) as exc:
+        return [f"{name}: schema unavailable or invalid: {exc}"]
+
+
+def _valid_created_at(value: Any) -> bool:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value) is None:
+        return False
+    try:
+        datetime(int(value[:4]), int(value[5:7]), int(value[8:10]), int(value[11:13]), int(value[14:16]), int(value[17:19]))
+    except ValueError:
+        return False
+    return True
 
 
 def _json(text: str) -> Any:
@@ -62,16 +89,40 @@ def _jsonl(text: str) -> list[Any]:
     CR in CRLF remains valid JSON whitespace. Unicode line separators inside
     strings are content, so str.splitlines() must not be used here.
     """
+    return [_json(line) for line in _jsonl_lines(text)]
+
+
+def _jsonl_lines(text: str) -> list[str]:
     if not text:
         return []
-    return [_json(line) for line in text.removesuffix("\n").split("\n")]
+    return text.removesuffix("\n").split("\n")
+
+
+def _record_digest_candidates(record: dict, line: str, source: str) -> set[str]:
+    """Reproduce both independent-Python and producer-Godot record hashes.
+
+    JSONL written by Project6 is already recursively sorted and normalized.  Keep
+    its original numeric lexemes because Godot and Python can choose different,
+    equally short spellings for the same binary64 value (for example a final
+    decimal digit of 3 versus 2).  Only the exported source projection differs
+    from the internal record that was accepted by the reviewer.
+    """
+    internal = dict(record, source=source)
+    candidates = {canonical_digest(internal)}
+    marker = ',"source":"human_corrected"'
+    position = line.rfind(marker)
+    if position >= 0:
+        replacement = ',"source":' + json.dumps(source, ensure_ascii=False, separators=(",", ":"))
+        producer_text = line[:position] + replacement + line[position + len(marker):]
+        candidates.add(hashlib.sha256(producer_text.removesuffix("\r").encode("utf-8")).hexdigest())
+    return candidates
 
 
 def validate_training_package(directory: str | Path) -> list[str]:
     """Return checked errors for either training_update_v2 or review_export_v1."""
     try:
         return _validate(Path(directory))
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, OverflowError, SchemaError, UnknownType, Unresolvable) as exc:
         return [f"malformed package: {exc}"]
 
 
@@ -94,9 +145,12 @@ def _validate(root: Path) -> list[str]:
     if actual_files != expected_files:
         return ["package files must exactly match the fixed artifact allowlist"]
     manifest = _json((root / "manifest.json").read_text(encoding="utf-8"))
-    errors.extend(_schema_errors(manifest, "training-package-v2.schema.json"))
+    validators = _schema_validators()
+    errors.extend(_schema_errors(manifest, "training-package-v2.schema.json", validators))
     if errors:
         return errors
+    if "created_at" in manifest and not _valid_created_at(manifest["created_at"]):
+        return ["created_at: expected a real Gregorian UTC timestamp YYYY-MM-DDTHH:MM:SSZ"]
     if manifest["package_id"] != package_identity(manifest):
         errors.append("package_id: canonical content identity mismatch")
     training = manifest["package_type"] == "training_update_v2"
@@ -118,12 +172,13 @@ def _validate(root: Path) -> list[str]:
         texts[artifact["path"]] = raw.decode("utf-8")
     if errors:
         return errors
-    records = _jsonl(texts[PATHS[0]])
+    record_lines = _jsonl_lines(texts[PATHS[0]])
+    records = [_json(line) for line in record_lines]
     mapping = _jsonl(texts[PATHS[1]])
     diff = _json(texts[PATHS[2]])
-    errors.extend(_schema_errors(diff, "annotation-diff-v1.schema.json"))
+    errors.extend(_schema_errors(diff, "annotation-diff-v1.schema.json", validators))
     for record in records:
-        errors.extend(validate_instance(record, "model_output_v1.schema.json"))
+        errors.extend(_schema_errors(record, "model_output_v1.schema.json", validators))
     if errors:
         return errors
     coverage = manifest["coverage"]
@@ -134,6 +189,8 @@ def _validate(root: Path) -> list[str]:
     excluded = coverage["excluded_frame_ids"]
     verified = coverage["verified_frame_ids"]
     explicit = coverage["explicit_frame_ids"]
+    # Schema 已拒绝重复项；集合仅用于查找，数组继续保留 Source 顺序。
+    source_set, included_set, excluded_set, verified_set, explicit_set = map(set, (source_ids, included, excluded, verified, explicit))
     if len(entry_map) != len(entries) or [e["frame"] for e in entries] != list(range(len(entries))):
         errors.append("source frame identity/playback indices invalid")
     times = [e["time_s"] for e in entries if "time_s" in e]
@@ -141,10 +198,10 @@ def _validate(root: Path) -> list[str]:
         errors.append("source timestamps not ordered")
     if coverage["source_frame_ids"] != source_ids:
         errors.append("coverage source frame identity mismatch")
-    if (set(included) & set(excluded) or set(included) | set(excluded) != set(source_ids)
-            or not set(verified) <= set(explicit) <= set(source_ids)):
+    if (included_set & excluded_set or included_set | excluded_set != source_set
+            or not verified_set <= explicit_set <= source_set):
         errors.append("invalid coverage partition/verification/explicit sets")
-    if included != [f for f in source_ids if f in set(included)] or excluded != [f for f in source_ids if f in set(excluded)]:
+    if included != [f for f in source_ids if f in included_set] or excluded != [f for f in source_ids if f in excluded_set]:
         errors.append("coverage order differs from Source")
     for key, values in (("total_frames", source_ids), ("included_frames", included), ("excluded_frames", excluded)):
         if coverage[key] != len(values) or manifest["summary"][key] != len(values) or diff["summary"][key] != len(values):
@@ -160,7 +217,7 @@ def _validate(root: Path) -> list[str]:
         errors.append("artifact frame order/coverage mismatch")
         return errors
     by_frame = {int(r["frame"]): r for r in records}
-    for record, mapped in zip(records, mapping):
+    for index, (record, mapped) in enumerate(zip(records, mapping)):
         frame = int(record["frame"])
         entry = entry_map[frame]
         if record["source"] != "human_corrected":
@@ -173,16 +230,15 @@ def _validate(root: Path) -> list[str]:
             errors.append(f"frame {frame}: provided annotation timestamp differs from source")
         if ("time_s" in mapped) != ("time_s" in entry) or mapped.get("time_s") != entry.get("time_s"):
             errors.append(f"frame {frame}: frame map source timestamp value/presence mismatch")
-        expected = dict(entry, sample_id=f"{manifest['media']['media_id']}_{frame:06d}", explicit=frame in explicit,
-                        verified=frame in verified, review_status="verified" if frame in verified else "unverified",
-                        annotation_status=("negative" if not record["regions"] else "annotated") if frame in explicit else "unannotated")
+        expected = dict(entry, sample_id=f"{manifest['media']['media_id']}_{frame:06d}", explicit=frame in explicit_set,
+                        verified=frame in verified_set, review_status="verified" if frame in verified_set else "unverified",
+                        annotation_status=("negative" if not record["regions"] else "annotated") if frame in explicit_set else "unannotated")
         if any(type(mapped.get(k)) is not bool for k in ("verified", "explicit")) or mapped != expected:
             errors.append(f"frame {frame}: frame map/sample ID/status mismatch")
-        internal = dict(record, source=manifest["media"]["source"])
         accepted = manifest["review_state"].get(str(frame), {}).get("accepted_digest")
-        if (accepted == canonical_digest(internal)) != (frame in verified):
+        if (accepted in _record_digest_candidates(record, record_lines[index], manifest["media"]["source"])) != (frame in verified_set):
             errors.append(f"frame {frame}: current content verification mismatch")
-    if not set(map(int, manifest["review_state"])) <= set(explicit):
+    if not set(map(int, manifest["review_state"])) <= explicit_set:
         errors.append("review state must refer to explicit source frames")
     for operation in manifest["batch_operations"]:
         if any(operation[k] not in entry_map for k in ("keyframe", "start_frame", "end_frame")):
@@ -200,6 +256,43 @@ def _validate(root: Path) -> list[str]:
                 errors.append("batch metric range/coverage/changed counts inconsistent")
         if any(f not in entry_map or f == operation["keyframe"] or not operation["start_frame"] <= f <= operation["end_frame"] for f in operation["affected_frames"]):
             errors.append("batch provenance contains invalid target")
+        if operation["schema_version"] == 1:
+            if "frame_step" in operation or "edge_refinement" in operation:
+                errors.append("legacy batch provenance cannot claim Poly V2 audit fields")
+            continue
+        required = {
+            "metric_id", "threshold", "max_frames", "keyframe_digest", "created_at",
+            "start_index", "end_index", "left_stop", "right_stop", "changed_count",
+            "covered_count", "edge_refinement",
+        }
+        if not required <= operation.keys():
+            errors.append("Poly V2 batch provenance is missing required audit fields")
+            continue
+        step = int(operation.get("frame_step", 1))
+        covered = int(operation["covered_count"])
+        start = int(operation["start_frame"])
+        end = int(operation["end_frame"])
+        keyframe = int(operation["keyframe"])
+        expected = {start + offset * step for offset in range(covered)}
+        targets = expected - {keyframe}
+        items = operation["edge_refinement"]["items"]
+        reference_ids = {item["region_id"] for item in items}
+        identities = {(item["frame_id"], item["region_id"]) for item in items}
+        accepted = sum(item["accepted"] for item in items)
+        summary = operation["edge_refinement"]
+        if (operation["metric_id"] != "poly-sim-flow-edge-v1"
+                or end - start != (covered - 1) * step
+                or keyframe not in expected
+                or not expected <= entry_map.keys()
+                or any(frame not in expected for frame in operation["affected_frames"])
+                or any(item["frame_id"] not in targets for item in items)
+                or not reference_ids
+                or len(identities) != len(items)
+                or len(items) != len(targets) * len(reference_ids)
+                or summary["attempted"] != len(items)
+                or summary["accepted"] != accepted
+                or summary["fallback"] != len(items) - accepted):
+            errors.append("Poly V2 batch provenance audit is inconsistent")
     if manifest["summary"]["verified_frames"] != len(verified):
         errors.append("verified_frames count mismatch")
     errors.extend(_validate_diff(diff, manifest, by_frame, texts))

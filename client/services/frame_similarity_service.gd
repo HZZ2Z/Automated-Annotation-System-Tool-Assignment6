@@ -16,6 +16,7 @@ var _direction := -1
 var _next := -1
 var _key := -1
 var _threshold := 0.02
+var _frame_step := 1
 
 func begin(source: Variant, store: Variant, entries: Array, key: int, threshold: float) -> PackedStringArray:
 	running = false
@@ -27,6 +28,9 @@ func begin(source: Variant, store: Variant, entries: Array, key: int, threshold:
 	_entries = entries.duplicate(true)
 	_key = key
 	_threshold = threshold
+	_frame_step = _sampling_step(source)
+	if _frame_step < 1:
+		return PackedStringArray(["Source frame_step must be a positive integer"])
 	var image := _image(key)
 	if image == null:
 		return PackedStringArray(["Keyframe image could not be loaded"])
@@ -36,7 +40,8 @@ func begin(source: Variant, store: Variant, entries: Array, key: int, threshold:
 	_direction = -1
 	_next = key - 1
 	result = {"key_index": key, "start_index": key, "end_index": key,
-		"metric_id": METRIC_ID, "threshold": threshold, "max_frames": MAX_FRAMES,
+		"metric_id": METRIC_ID, "threshold": threshold, "frame_step": _frame_step,
+		"max_frames": MAX_FRAMES,
 		"left_stop": "", "right_stop": "", "scores": [], "errors": PackedStringArray()}
 	running = true
 	return PackedStringArray()
@@ -52,7 +57,7 @@ func step() -> void:
 		return
 	var neighbor_index := _next - _direction
 	var frame_id := int(_entries[_next].frame_id)
-	if frame_id - int(_entries[neighbor_index].frame_id) != _direction:
+	if frame_id - int(_entries[neighbor_index].frame_id) != _direction * _frame_step:
 		_stop("missing original frame ID")
 		return
 	if _store.has_method("is_verified") and _store.is_verified(frame_id):
@@ -119,3 +124,11 @@ static func distance(left: PackedFloat32Array, right: PackedFloat32Array) -> flo
 	for i in range(left.size()):
 		total += absf(left[i] - right[i])
 	return total / float(left.size())
+
+static func _sampling_step(source: Variant) -> int:
+	if source != null and source.has_method("get_manifest"):
+		var value: Variant = source.get_manifest().get("frame_step", 1)
+		if (typeof(value) != TYPE_INT and typeof(value) != TYPE_FLOAT) or not is_finite(float(value)) or float(value) != floorf(float(value)):
+			return -1
+		return int(value)
+	return 1

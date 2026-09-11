@@ -35,9 +35,10 @@ func setup(host: Variant) -> void:
 	toolbar.add_child(_status)
 	_round_button = Button.new()
 	_round_button.name = "ModelRound"
-	_round_button.text = "模型轮次"
+	_round_button.text = "模型设置"
 	_round_button.clip_text = true
 	_round_button.custom_minimum_size.x = 210
+	_round_button.visible = false
 	toolbar.add_child(_round_button)
 	_open_job = JOB.new()
 	add_child(_open_job)
@@ -87,8 +88,7 @@ func refresh() -> void:
 	if _host._source != null:
 		var snapshot: Dictionary = _host._store.freeze_snapshot()
 		_round_button.text = "轮次：" + String(snapshot.get("round_id","initial"))
-		if snapshot.get("baseline_kind") == "unknown": _round_button.text += " · 基线未绑定"
-		_round_button.tooltip_text = "基线未绑定" if snapshot.get("baseline_kind") == "unknown" else "导入模型新轮次"
+		_round_button.tooltip_text = "管理模型轮次与原始标注"
 
 func save_now() -> void:
 	if _host._source != null: _host._workspace_session.request_save()
@@ -168,6 +168,10 @@ func _set_leave_buttons_disabled(value: bool) -> void:
 		button.disabled = value
 
 func request_close() -> void:
+	if _host._workspace_catalog_controller != null:
+		await _host._workspace_catalog_controller.cancel_and_drain()
+	if _host._workspace_media_controller != null:
+		await _host._workspace_media_controller.cancel_and_drain()
 	if _opening:
 		_open_job.cancel()
 		while _open_job.is_running(): await get_tree().process_frame

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "source": "sample_v1",
+  "frame": 128,
+  "time_s": 4.27,
+  "regions": [
+    {
+      "id": "reg-003",
+      "class": "grasper",
+      "kind": "instrument",
+      "box": [585, 26, 268, 176],
+      "polygon": [[585, 26], [853, 26], [853, 202], [585, 202]],
+      "conf": 0.92,
+      "track_id": "T02"
+    },
+    {
+      "id": "reg-004",
+      "class": "cystic_duct",
+      "kind": "anatomy",
+      "box": [361, 224, 254, 150],
+      "conf": 0.87,
+      "track_id": null
+    }
+  ]
+}

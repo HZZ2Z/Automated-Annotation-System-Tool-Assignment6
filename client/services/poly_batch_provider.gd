@@ -20,7 +20,8 @@ func availability() -> Dictionary:
 func begin(context: Dictionary) -> PackedStringArray:
 	return service.begin(
 		context.get("source"), context.get("store"), context.get("entries", []),
-		int(context.get("key_index", -1)), float(context.get("similarity_threshold", 0.02)),
+		int(context.get("key_index", -1)), float(context.get("similarity_threshold", 0.10)),
+		int(context.get("frame_step", -1)),
 	)
 
 func step() -> void:

@@ -20,6 +20,9 @@ var _mode: StringName = &"empty"
 var _media_items: Dictionary = {}
 var _folder_items: Dictionary = {}
 var _selected_media := ""
+var _active_source_view_model: Dictionary = {}
+var _active_frames_root: TreeItem
+var _active_media_id := ""
 
 
 func _ready() -> void:
@@ -41,6 +44,9 @@ func populate(view_model: Dictionary) -> void:
 	_media_items.clear()
 	_folder_items.clear()
 	_selected_media = ""
+	_active_source_view_model.clear()
+	_active_frames_root = null
+	_active_media_id = ""
 	_summary_mode = false
 	_summary_item = null
 
@@ -88,6 +94,9 @@ func populate_workspace(view_model: Dictionary) -> void:
 	_selected_frame = -1
 	_selected_media = ""
 	_view_model = candidate
+	_active_source_view_model.clear()
+	_active_frames_root = null
+	_active_media_id = ""
 	_summary_mode = false
 	_summary_item = null
 	_mode = &"workspace"
@@ -102,6 +111,57 @@ func populate_workspace(view_model: Dictionary) -> void:
 	workspace_item.set_collapsed(false)
 
 
+func populate_workspace_active_source(
+	media_id: String,
+	view_model: Dictionary,
+) -> PackedStringArray:
+	if _mode != &"workspace":
+		return PackedStringArray([
+			"Dataset explorer must show a workspace before mounting active frames"])
+	if not _media_items.has(media_id):
+		return PackedStringArray([
+			"Dataset explorer active media is unknown: %s" % media_id])
+	var error := _validation_error(view_model)
+	if not error.is_empty():
+		return PackedStringArray([_bounded(error)])
+	var candidate := view_model.duplicate(true)
+	if is_instance_valid(_active_frames_root):
+		_active_frames_root.free()
+	_frame_items.clear()
+	_selected_frame = -1
+	_summary_mode = false
+	_summary_item = null
+	_active_source_view_model = candidate
+	_active_media_id = media_id
+
+	var media_item := _media_items[media_id] as TreeItem
+	_active_frames_root = _tree.create_item(media_item)
+	var frames: Array = candidate["frames"]
+	_active_frames_root.set_text(0, "Frames (%d)" % frames.size())
+	_active_frames_root.set_selectable(0, false)
+	_summary_mode = frames.size() > MAX_MATERIALIZED_FRAMES
+	if _summary_mode:
+		_summary_item = _tree.create_item(_active_frames_root)
+		_update_summary_item(0)
+	else:
+		for frame_value: Variant in frames:
+			var frame := frame_value as Dictionary
+			var item := _tree.create_item(_active_frames_root)
+			item.set_text(0, frame["label"])
+			item.set_tooltip_text(0, frame["path"])
+			item.set_metadata(0, frame["index"])
+			_frame_items[frame["index"]] = item
+	for artifact_value: Variant in candidate["artifacts"]:
+		var artifact := artifact_value as Dictionary
+		var item := _tree.create_item(_active_frames_root)
+		item.set_text(0, artifact["label"])
+		item.set_tooltip_text(0, artifact["path"])
+		item.set_selectable(0, false)
+	media_item.set_collapsed(false)
+	_active_frames_root.set_collapsed(false)
+	return PackedStringArray()
+
+
 func validate_view_model(value: Variant) -> PackedStringArray:
 	if not value is Dictionary:
 		return PackedStringArray(["Dataset explorer view model must be a Dictionary"])
@@ -111,7 +171,7 @@ func validate_view_model(value: Variant) -> PackedStringArray:
 
 func select_frame(index: int) -> bool:
 	if _summary_mode:
-		var frames: Array = _view_model.get("frames", [])
+		var frames: Array = _frame_view_model().get("frames", [])
 		if index < 0 or index >= frames.size():
 			return false
 		_update_summary_item(index)
@@ -148,6 +208,9 @@ func clear() -> void:
 	_selected_frame = -1
 	_selected_media = ""
 	_view_model.clear()
+	_active_source_view_model.clear()
+	_active_frames_root = null
+	_active_media_id = ""
 	_summary_mode = false
 	_summary_item = null
 	_mode = &"empty"
@@ -182,7 +245,7 @@ func _on_item_selected() -> void:
 func _update_summary_item(index: int) -> void:
 	if not is_instance_valid(_summary_item):
 		return
-	var frames: Array = _view_model.get("frames", [])
+	var frames: Array = _frame_view_model().get("frames", [])
 	if index < 0 or index >= frames.size():
 		return
 	var frame := frames[index] as Dictionary
@@ -191,6 +254,10 @@ func _update_summary_item(index: int) -> void:
 	_summary_item.set_tooltip_text(0, frame["path"])
 	_summary_item.set_metadata(0, frame["index"])
 	_frame_items[index] = _summary_item
+
+
+func _frame_view_model() -> Dictionary:
+	return _active_source_view_model if _mode == &"workspace" else _view_model
 
 
 func _insert_media_path(workspace_item: TreeItem, media: Dictionary) -> void:
@@ -266,6 +333,21 @@ func _workspace_validation_error(view_model: Dictionary) -> String:
 					position, field]
 		if entry["media_type"] not in ["image", "video", "image_sequence"]:
 			return "Dataset explorer media %d has an unsupported media_type" % position
+		var source_plugin_id: Variant = entry.get("source_plugin_id", "")
+		if (
+			typeof(source_plugin_id) != TYPE_STRING
+			or (
+				not String(source_plugin_id).is_empty()
+				and not String(source_plugin_id).is_valid_identifier()
+			)
+		):
+			return "Dataset explorer media %d source_plugin_id is invalid" % position
+		var baseline_kind: Variant = entry.get("baseline_kind", "empty")
+		if (
+			typeof(baseline_kind) != TYPE_STRING
+			or String(baseline_kind) not in ["empty", "model", "imported_labels"]
+		):
+			return "Dataset explorer media %d baseline_kind is invalid" % position
 		if ids.has(entry["media_id"]):
 			return "Dataset explorer media_id must be unique: %s" % entry["media_id"]
 		ids[entry["media_id"]] = true

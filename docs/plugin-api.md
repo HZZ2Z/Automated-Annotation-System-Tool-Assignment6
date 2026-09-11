@@ -50,9 +50,22 @@ Godot 导出包默认不会自动携带普通 JSON。仓库的 `export_presets.c
 
 位置 `i` 的 frame entry 必须使用连续的 `frame == i`；可选 `frame_id` 是原始数据帧号，缺失时规范为 `frame`。位置 `i` 的模型记录必须使用该 `frame_id`。`SourceSessionBuilder` 为直接 Open 和 Workspace 同时校验这一映射、唯一帧 ID、非递减时间、manifest/record 数量、首帧纹理和可选 presentation。manifest、presentation、entries 与记录均在该边界深拷贝。Main 提交后保留这份 accepted frame-entry snapshot；每次加载纹理前都将 Source 当前 entry 的缺省 `frame_id` 补为 `frame` 并与快照比较，发生动态重映射时拒绝跳帧且保留上一个已接受画面。
 
-`get_presentation` 由 Source 自己把文件、localhost 或远程 locator 投影为格式无关的浏览数据：`display_name`、`source_path`、连续的 `frames[{index,label,path}]` 和 `artifacts[{label,path}]`；Main 只校验并消费这些字段，不猜测 `manifest.json`、`image_path` 或模型文件名。现有三个工作插件是 `image_sequence_source`、`numeric_image_sequence_source` 和 `single_image_source`。视频先经 `python/frame_source.py` 归一化后由 `image_sequence_source` 读取；数字图片序列由 `numeric_image_sequence_source` 直接读取，其 `frame` 是播放位置、`frame_id` 保留稀疏原始帧号。这不修改 SourceStage V1 的方法签名。
+`get_presentation` 由 Source 自己把文件、localhost 或远程 locator 投影为格式无关的浏览数据：`display_name`、`source_path`、连续的 `frames[{index,label,path}]` 和 `artifacts[{label,path}]`；Main 只校验并消费这些字段，不猜测 `manifest.json`、`image_path` 或模型文件名。现有四个工作插件是 `image_sequence_source`、`numeric_image_sequence_source`、`single_image_source` 和 `endoscapes_video_source`。视频先经 `python/frame_source.py` 归一化后由 `image_sequence_source` 读取；数字图片序列由 `numeric_image_sequence_source` 直接读取，其 `frame` 是播放位置、`frame_id` 保留稀疏原始帧号。Endoscapes Source 只为选中的 split/视频构建帧表和官方 COCO 种子记录。这不修改 SourceStage V1 的方法签名。
 
-工作区发现、单媒体 `label/<media_id>.json`、自动保存和训练 `sample_id` 属于应用协调层，不是插件 API；新插件不应读写这些文件。
+工作区级 Source 可选实现 `discover_workspace_media(root: String, token: Variant) -> Dictionary`。这是能力探测扩展，不是 SourceStage V1 的必需签名。`SourceFactory.discover_workspace_media()` 按与 `can_open` 一致的 preferred-ID/priority 顺序调用它，并要求结果严格为：
+
+```text
+{
+  claimed: bool,
+  plugin_id: String,
+  media: Array[Dictionary],
+  errors: PackedStringArray
+}
+```
+
+Factory 会深拷贝并验证结果。`claimed == false` 才允许 `WorkspaceCatalog` 继续通用递归扫描；插件已声明根目录后的格式或数据错误必须显式返回，不得静默回退。每个媒体条目必须提供便携 `media_id`、`display_name`、`media_type`、`source_path` 和安全相对路径；可选 `source_plugin_id` 用于选择时固定路由，可选 `baseline_kind` 只允许 `empty`、`model` 或 `imported_labels`。
+
+工作区发现的任务、进度、generation、取消和原子 Catalog 发布属于 `WorkspaceCatalogController`；媒体 Source 后台打开、latest-wins 和陈旧实例关闭属于 `WorkspaceMediaController`。单媒体 `label/<media_id>.json`、自动保存和训练 `sample_id` 仍属于应用协调层；Source 插件不应读写这些文件。
 
 ### RenderStage
 
@@ -105,7 +118,7 @@ Renderer 只持有短期绘制快照，不拥有标注真值。`AnnotationViewpo
 | `model_previous_candidate` / `model_next_candidate` | `{}` | 在经校验的最多三个 candidate 中循环切换 |
 | `model_recheck` | `{}` | 无活动草稿时重新运行外部环境 preflight |
 
-`basic_edit_tools` 的公共描述子顺序为 Add Box、Subtract、Lasso、Fill、Paint、Eraser、Select 和 Model Assist。前 7 个是保留的 Assignment 工具，Model Assist 是追加的单帧能力；Batch 不调用它。Close Gaps、Region Growing 和 Live Wire 不再是 descriptor、capability 或快捷键；`C/E/G/I` 保持未绑定。Select 用最上层内部命中和 6 viewport-px 边缘回退选择 region，八个 resize handles 在 8 viewport px 内取最近者；空闲时 Delete/Backspace 整区删除、Escape 清选区。Lasso/Subtract 按 12 viewport-px 首尾距离自动闭合，Space 强制闭合；无选区 Subtract 原子修改所有相交 regions，允许空结果整区删除。
+`basic_edit_tools` 的公共描述子顺序为 Add Box、Subtract、Lasso、Fill、Paint、Eraser、Select、Match 和 Model Assist。前 7 个是保留的 Assignment 工具，Match 和 Model Assist 是追加能力；Model Assist 是单帧 Edit 流程，Batch 不调用它。Close Gaps、Region Growing 和 Live Wire 不再是 descriptor、capability 或快捷键；`C/E/G/I` 保持未绑定。Select 用最上层内部命中和 6 viewport-px 边缘回退选择 region，八个 resize handles 在 8 viewport px 内取最近者；空闲时 Delete/Backspace 整区删除、Escape 清选区。Lasso/Subtract 按 12 viewport-px 首尾距离自动闭合，Space 强制闭合；无选区 Subtract 原子修改所有相交 regions，允许空结果整区删除。
 
 Lasso 逐点绘制时就显示可拖动的原始点击点；确认新对象后直接继续顶点编辑，选中已有 polygon 时也显示其真实轮廓点，支持拖动、双击边插点、Delete/Backspace 删点、方括号切点、1/5/10 px 方向键微调及 Insert 插入边中点。`polygon_vertex_editor.gd` 管理局部交互；overlay 的 `vertex_points: PackedVector2Array` 与 `active_vertex: int` 描述控制点。`vertex_edit_region_id: String` 经 viewport 转交给 renderer 的可选 `set_vertex_edit_region_id()`，仅隐藏该对象的包围框缩放柄；对象填色和标签仍显示。`basic_edit_tools.refresh_edit_overlay()` 是可选的显示刷新钩子，Main 在选择及历史更新后通过 `has_method` 探测调用；未修改 EditStage 的必需接口或 Plugin API 版本。
 
@@ -119,7 +132,11 @@ Model Assist 使用左键正点、Shift+左键负点和 Ctrl+拖动唯一 box；
 
 编辑命令的内部契约为 `apply(store) -> PackedStringArray` 与 `revert(store) -> PackedStringArray`，均须在验证通过后原子修改 Store。`CommandHistory.try_undo(store)` 检查 revert 结果，失败保持两侧栈并把错误交给 Main；`undo(store) -> bool` 保留为包装。execute/redo 同样在成功后才移动栈，全局容量 200。范围恢复使用 `AnnotationStore.restore_corrected_records`，整批记录与传播日志同时提交后才发出变更信号。这些命令/参考插件能力没有改变 Stage V1 的必需方法签名或 Model Output V1。
 
-批量页不是 EditStage 插件方法的扩展。`BatchController` 通过受限 provider 生命周期（availability/begin/step/cancel/get_result/validate_source）调用默认 `polygon_flow` provider；provider 只能返回冻结的逐帧候选，不能写 Store 或确认帧。生产 provider 的 `metric_id` 为 `poly-sim-flow-edge-v1`：它在同一批冻结 PNG 上先执行相邻帧和固定关键帧 MAD 门，再做 DIS 光流和有界 GrabCut/Sobel 边缘精修。覆盖/合并、预览、一次性 `ApplyPropagationCommand`、v2 batch marker、undo/redo、保存和人工确认仍由应用层拥有；候选 polygon 保持 Model Output V1 单环约束。第三方 provider 必须返回独立候选及完整诊断，并接受提交前 stale 校验，不能把算法分数解释为验证状态。
+批量页不是 EditStage 插件方法的扩展。`BatchController` 通过受限 provider 生命周期（availability/begin/step/cancel/get_result/validate_source）调用默认 `sam_video` provider；provider 只能返回冻结的只读逐帧候选，不能写 Store 或确认帧。SAM 请求必须是一个已提交 Box/Poly region、显式锚点确认、固定向后且按 Source 顺序选择 1–30 个目标。`SamVideoService` 独立拥有与 `sam-video-v1` worker 的进程、job、超时、取消和 stale 边界；单帧 Model Assist 与它不共享会话状态。
+
+模型拓扑失败使计划在首个非法帧分段停止，保留之前合法候选以便确认后重新锚定；协议或一致性失败则使整批作废。SAM 失败不得静默转换 provider。`polygon_flow` / `poly-sim-flow-edge-v1` 与 `copy` 保留为显式选择；它们分别继续使用 v2 audit 和历史基线合同。
+
+SAM 确认由应用层以一条 `ApplyPropagationCommand` 按 region ID 合并，保留其他 regions 与非几何字段，并原子更新 records、review 和 schema-v3 audit。v3 字段精确为 `schema_version,type,mode,provider_id,metric_id,keyframe,keyframe_playback_index,keyframe_digest,region_id,direction,requested_count,generated_count,start_frame,end_frame,affected_frames,target_playback_indices,stop_frame,stop_reason,checkpoint_sha256,device,model_version,elapsed_ms,risk_summary,created_at`。Model score、mask、prompt 和非受限诊断不进入 V1 region 或 v3 audit。
 
 ### FeedbackStage
 
@@ -138,7 +155,7 @@ training_update_v1/
 
 manifest 包含 schema/package 版本、确定性 package ID、源数据集 ID/SHA-256、模型基线版本/摘要、taxonomy 版本、帧覆盖、dirty frames、独立 batch operations，以及 corrected artifact 的相对路径、字节数和 SHA-256。records 的 `frame`（即原始 `frame_id`）必须严格递增，dirty frames 必须属于该 record 集合；数字图像序列无整体原文件哈希时，`source_dataset.sha256` 保留为 `null`。原始 `model_output_v1.jsonl` 永远只读。
 
-Part 4 保留上述 V1 路径，并通过插件 capability `training_update_v2` 增加可选方法：
+Part 4 保留上述底层 V1 接口兼容性，并通过插件 capability `training_update_v2` 增加可选方法。客户端只调用异步 V2 入口，缺少该能力时返回错误：
 
 ```gdscript
 export_package(snapshot: Dictionary, options: Dictionary, token: Variant = null) -> Dictionary
@@ -146,7 +163,9 @@ export_package(snapshot: Dictionary, options: Dictionary, token: Variant = null)
 
 `snapshot` 来自 `AnnotationStore.freeze_snapshot()`，包含会话、轮次、revision、不可变基线、当前修正、帧映射、验证和批量来源。`options.kind` 为 `training_update_v2` 或 `review_export_v1`，`output_parent` 为目标父目录。返回 `success`、`errors`、`output_path`、`package_id`、`revision`、`reused`、`summary`，以及不进入包身份的 `timings_ms`。UI 通过 `BackgroundJob` 调用，worker 只消费冻结数据和线程安全的取消/进度 token；不要访问活动 SceneTree、纹理或 Store。
 
-业务实现位于 `client/feedback/training_package.gd` 和纯差异模块 `annotation_diff.gd`；共享 Godot 包语义校验位于 `package_semantics.gd`，Python 独立校验位于 `python/annotation_data/training_package.py`。正式包只包含当前内容验证通过的帧，评审包保留全帧审核状态；两个类型都携带帧映射和 JSON/CSV 审计。完整文件布局、模型返回和版本规则见 [Part 4 协议](part4-protocol.md)。V2 是可选包能力，必需的 Stage API 和 Model Output Schema 仍为 V1。
+UI 与 `await Main.export_package(output_parent, kind="training_update_v2")` 共用 `TrainingExportController`。控制器依次等待保存、冻结版本并调度后台发布，返回实际包目录；参数始终表示父目录。`prepare()`、`preview(kind)`、`publish(output_parent, kind)`、`export_current(output_parent, kind)` 和 `cancel_and_drain()` 均须 `await`。取消和会话切换等待已有准备/工作任务结束，已发布文件保留。对话框只处理展示和用户操作。
+
+业务实现位于 `client/feedback/training_package.gd` 和纯差异模块 `annotation_diff.gd`；共享 Godot 包语义校验位于 `package_semantics.gd`，Python 独立校验位于 `python/annotation_data/training_package.py`。正式包只包含当前内容验证通过的帧，评审包保留全帧审核状态；两个类型都携带帧映射和 JSON/CSV 审计。完整文件布局、模型返回和 `created_at` 兼容规则见 [Part 4 协议](part4-protocol.md)。V2 是可选包能力，必需的 Stage API 和 Model Output Schema 仍为 V1。
 
 ## 3. 新增插件（不修改 Registry 或 core）
 

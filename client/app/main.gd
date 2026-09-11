@@ -15,6 +15,8 @@ const VIEWPORT_TRANSFORM_SCRIPT := preload("res://client/services/viewport_trans
 const PROJECT_CLASS_CATALOG_SCRIPT := preload("res://client/domain/project_class_catalog.gd")
 const CLASS_COLOR_RESOLVER_SCRIPT := preload("res://client/domain/class_color_resolver.gd")
 const WORKSPACE_CATALOG_SCRIPT := preload("res://client/workspace/workspace_catalog.gd")
+const WORKSPACE_CATALOG_CONTROLLER_SCRIPT := preload(
+	"res://client/workspace/workspace_catalog_controller.gd")
 const WORKSPACE_MEDIA_CONTROLLER_SCRIPT := preload("res://client/workspace/workspace_media_controller.gd")
 const MEDIA_LABEL_STORE_SCRIPT := preload("res://client/workspace/media_label_store.gd")
 const WORKSPACE_SESSION_SCRIPT := preload("res://client/workspace/workspace_session.gd")
@@ -208,6 +210,8 @@ class StagedEditContextBridge:
 @export var review_session_root := "user://review_sessions"
 
 @onready var _open_button: Button = $MainVBox/TopToolbar/Open
+@onready var _workspace_scan_cancel_button: Button = (
+	$MainVBox/TopToolbar/CancelWorkspaceScan)
 @onready var _export_button: Button = $MainVBox/TopToolbar/Export
 @onready var _redo_button: Button = $MainVBox/TopToolbar/Redo
 @onready var _dataset_explorer = $MainVBox/WorkspaceSplit/DatasetExplorerContainer/DatasetExplorer
@@ -228,7 +232,6 @@ class StagedEditContextBridge:
 @onready var _status_bar: Label = $MainVBox/StatusBar
 @onready var _class_dialog = $ClassAssignmentDialog
 @onready var _source_dialog: FileDialog = $SourceDialog
-@onready var _export_dialog: FileDialog = $ExportDialog
 @onready var _video_import_controller = $VideoImportController
 @onready var _video_import_dialog: Window = $VideoImportDialog
 @onready var _video_output_parent_dialog: FileDialog = $VideoOutputParentDialog
@@ -274,9 +277,12 @@ var _workspace_root := ""
 var _workspace_media_id := ""
 var _review_workflow: Variant
 var _workspace_label_store: Variant
+var _workspace_catalog_controller: Variant
 var _workspace_media_controller: Variant
 var _workspace_session: Variant
 var _workspace_import_active := false
+var _workspace_scan_active := false
+var _workspace_scan_generation := -1
 var _edit_state := {
 	"phase": &"idle",
 	"navigation_blocked": false,
@@ -362,21 +368,53 @@ func open_workspace(path: String) -> PackedStringArray:
 		return PackedStringArray(["Finish the active model round operation first"])
 	if _is_class_dialog_active():
 		return _modal_refusal("Workspace replacement")
-	if _workspace_media_controller != null and _workspace_media_controller.is_busy():
-		var busy_errors := PackedStringArray([
-			"Wait for the selected video to finish preparing or cancel it first"])
-		_show_errors("Cannot open workspace", busy_errors)
-		return busy_errors
-	var candidate = WORKSPACE_CATALOG_SCRIPT.new()
-	candidate.configure_source_resolver(_source_factory, source_plugin_id)
-	var errors: PackedStringArray = candidate.scan(path)
-	if not errors.is_empty():
+	_workspace_scan_active = true
+	_set_workspace_scan_ui(true)
+	_set_status("正在建立视频索引…")
+	var started: Dictionary = _workspace_catalog_controller.start(
+		path, _source_factory, source_plugin_id)
+	var start_errors_value: Variant = started.get("errors")
+	var start_errors := (
+		PackedStringArray(start_errors_value)
+		if start_errors_value is PackedStringArray
+		else PackedStringArray(["Workspace catalog start returned invalid errors"])
+	)
+	_workspace_scan_generation = int(started.get("generation", -1))
+	if not start_errors.is_empty():
+		_workspace_scan_active = false
+		_set_workspace_scan_ui(false)
+		_show_errors("Cannot open workspace", start_errors)
+		return start_errors
+	var generation := _workspace_scan_generation
+	var terminal: Dictionary = await _workspace_catalog_controller.wait_for(generation)
+	var terminal_errors_value: Variant = terminal.get("errors")
+	var errors := (
+		PackedStringArray(terminal_errors_value)
+		if terminal_errors_value is PackedStringArray
+		else PackedStringArray(["Workspace catalog returned invalid errors"])
+	)
+	if not bool(terminal.get("success", false)):
+		if generation == _workspace_scan_generation:
+			_workspace_scan_active = false
+			_set_workspace_scan_ui(false)
+			if bool(terminal.get("cancelled", false)):
+				_set_status("Workspace scan cancelled; current workspace unchanged")
+			else:
+				_show_errors("Cannot open workspace", errors)
+		return errors
+	var candidate: Variant = terminal.get("catalog")
+	if not candidate is Object or candidate == null:
+		errors = PackedStringArray(["Workspace catalog returned no candidate"])
 		_show_errors("Cannot open workspace", errors)
 		return errors
+	await _review_workflow.exports.cancel_and_drain()
 	errors = await _flush_workspace_changes()
 	if not errors.is_empty():
 		_show_errors("Cannot replace workspace", errors)
 		return errors
+	if generation != _workspace_scan_generation:
+		return PackedStringArray(["Workspace scan was superseded"])
+	await _workspace_media_controller.cancel_and_drain()
 	_clear_active_source()
 	_workspace_catalog = candidate
 	_workspace_root = candidate.get_root()
@@ -387,12 +425,22 @@ func open_workspace(path: String) -> PackedStringArray:
 		source_plugin_id,
 	)
 	_dataset_explorer.populate_workspace(candidate.get_view_model())
+	_workspace_scan_active = false
+	_set_workspace_scan_ui(false)
 	_set_status("Workspace opened: %s" % _workspace_root)
 	_refresh_toolbar()
 	return PackedStringArray()
 
 
 func _setup_workspace_services() -> void:
+	_workspace_catalog_controller = WORKSPACE_CATALOG_CONTROLLER_SCRIPT.new()
+	add_child(_workspace_catalog_controller)
+	_workspace_catalog_controller.scan_started.connect(
+		_on_workspace_catalog_scan_started)
+	_workspace_catalog_controller.scan_progress.connect(
+		_on_workspace_catalog_scan_progress)
+	_workspace_catalog_controller.scan_finished.connect(
+		_on_workspace_catalog_scan_finished)
 	_workspace_media_controller = WORKSPACE_MEDIA_CONTROLLER_SCRIPT.new()
 	add_child(_workspace_media_controller)
 	_workspace_media_controller.media_ready.connect(_on_workspace_media_ready)
@@ -400,8 +448,51 @@ func _setup_workspace_services() -> void:
 	_workspace_media_controller.import_started.connect(_on_workspace_import_started)
 	_workspace_media_controller.import_progress.connect(_on_workspace_import_progress)
 	_workspace_media_controller.import_cancelled.connect(_on_workspace_import_cancelled)
+	_workspace_media_controller.media_preparation_started.connect(
+		_on_workspace_media_preparation_started)
+	_workspace_media_controller.media_preparation_progress.connect(
+		_on_workspace_media_preparation_progress)
+	_workspace_media_controller.media_preparation_cancelled.connect(
+		_on_workspace_media_preparation_cancelled)
 	_workspace_session = WORKSPACE_SESSION_SCRIPT.new()
 	add_child(_workspace_session)
+
+
+func _on_workspace_catalog_scan_started(_path: String) -> void:
+	_set_workspace_scan_ui(true)
+	_set_status("正在建立视频索引…")
+
+
+func _on_workspace_catalog_scan_progress(payload: Dictionary) -> void:
+	if int(payload.get("generation", -1)) != _workspace_scan_generation:
+		return
+	var split := String(payload.get("completed_split", ""))
+	var media_count := int(payload.get("media_count", 0))
+	var detail := "" if split.is_empty() else " %s" % split
+	_set_status("正在建立视频索引…%s；已发现 %d 个视频" % [detail, media_count])
+
+
+func _on_workspace_catalog_scan_finished(
+	generation: int,
+	_result: Dictionary,
+) -> void:
+	if generation != _workspace_scan_generation:
+		return
+	_workspace_scan_active = false
+	_set_workspace_scan_ui(false)
+
+
+func _on_workspace_scan_cancel_pressed() -> void:
+	if not _workspace_scan_active or _workspace_catalog_controller == null:
+		return
+	_workspace_catalog_controller.cancel()
+	_set_status("正在取消视频索引…")
+
+
+func _set_workspace_scan_ui(active: bool) -> void:
+	if is_instance_valid(_workspace_scan_cancel_button):
+		_workspace_scan_cancel_button.visible = active
+		_workspace_scan_cancel_button.disabled = not active
 
 
 func _on_workspace_media_requested(media_id_value: String) -> void:
@@ -443,6 +534,12 @@ func _on_workspace_media_ready(payload: Dictionary) -> void:
 	_workspace_import_active = false
 	var source: Variant = payload.get("source")
 	var media_value: Variant = payload.get("media_entry")
+	var statistics_value: Variant = payload.get("import_statistics", {})
+	var import_statistics: Dictionary = (
+		statistics_value.duplicate(true)
+		if statistics_value is Dictionary
+		else {}
+	)
 	if not source is Object or source == null or not media_value is Dictionary:
 		if source is Object and source != null and source.has_method("close"):
 			source.close()
@@ -450,7 +547,8 @@ func _on_workspace_media_ready(payload: Dictionary) -> void:
 		_refresh_toolbar()
 		media_activation_finished.emit(PackedStringArray(["Invalid media data"]))
 		return
-	var errors: PackedStringArray = await _activate_workspace_media(source, media_value as Dictionary)
+	var errors: PackedStringArray = await _activate_workspace_media(
+		source, media_value as Dictionary, import_statistics)
 	if not errors.is_empty():
 		_show_errors("Cannot open media", errors)
 		_review_workflow.finish_transition()
@@ -460,9 +558,10 @@ func _on_workspace_media_ready(payload: Dictionary) -> void:
 
 func _activate_workspace_media(
 	candidate: Variant,
-	media_entry: Dictionary
+	media_entry: Dictionary,
+	import_statistics: Dictionary = {},
 ) -> PackedStringArray:
-	var snapshot: Dictionary = _source_session_builder.build(candidate, false)
+	var snapshot: Dictionary = _source_session_builder.build(candidate, true)
 	var errors_value: Variant = snapshot.get("errors")
 	var errors: PackedStringArray = (
 		PackedStringArray(errors_value)
@@ -477,6 +576,7 @@ func _activate_workspace_media(
 	var frame_entries := (snapshot["frame_entries"] as Array).duplicate(true)
 	var playback_frames := (snapshot["playback_frames"] as Array).duplicate(true)
 	var first_texture := snapshot["first_texture"] as Texture2D
+	var candidate_presentation := (snapshot["presentation"] as Dictionary).duplicate(true)
 	var frame_count := frame_entries.size()
 	for playback_index in range(frame_count):
 		var frame_id := int((frame_entries[playback_index] as Dictionary)["frame_id"])
@@ -511,6 +611,9 @@ func _activate_workspace_media(
 
 	var candidate_catalog = PROJECT_CLASS_CATALOG_SCRIPT.new()
 	errors = candidate_catalog.rebuild(candidate_store.snapshot_corrected())
+	if errors.is_empty():
+		errors.append_array(
+			_dataset_explorer.validate_view_model(candidate_presentation))
 	var candidate_playback = PLAYBACK_CONTROLLER_SCRIPT.new()
 	if errors.is_empty():
 		errors = candidate_playback.configure(playback_frames, float(nominal_fps))
@@ -596,9 +699,14 @@ func _activate_workspace_media(
 		Callable(self, "_set_status"),
 	)
 	_batch_workflow.bind_source()
-	_dataset_explorer.select_media(_workspace_media_id)
+	var explorer_errors: PackedStringArray = (
+		_dataset_explorer.populate_workspace_active_source(
+			_workspace_media_id, candidate_presentation)
+	)
+	if explorer_errors.is_empty():
+		_dataset_explorer.select_frame(0)
 	_review_workflow.finish_transition()
-	_set_status("Loaded %s (%d frames)" % [_workspace_media_id, frame_count])
+	_set_status(_workspace_media_summary(media_entry, frame_count, import_statistics))
 	return PackedStringArray()
 
 
@@ -629,6 +737,45 @@ func _on_workspace_import_cancelled() -> void:
 	_refresh_toolbar()
 	_review_workflow.finish_transition()
 	media_activation_finished.emit(PackedStringArray(["Media preparation cancelled"]))
+
+
+func _on_workspace_media_preparation_started(media_id: String) -> void:
+	_workspace_import_active = true
+	_set_status("正在准备当前视频… %s" % media_id)
+	_refresh_toolbar()
+
+
+func _on_workspace_media_preparation_progress(payload: Dictionary) -> void:
+	var message := String(payload.get("message", "正在读取帧表与标注"))
+	_set_status("正在准备当前视频… %s" % message)
+
+
+func _on_workspace_media_preparation_cancelled(_media_id: String) -> void:
+	_workspace_import_active = false
+	_set_status("Video preparation cancelled; current media unchanged")
+	_refresh_toolbar()
+	_review_workflow.finish_transition()
+	media_activation_finished.emit(PackedStringArray(["Media preparation cancelled"]))
+
+
+func _workspace_media_summary(
+	media_entry: Dictionary,
+	frame_count: int,
+	statistics: Dictionary,
+) -> String:
+	if statistics.is_empty():
+		return "Loaded %s (%d frames)" % [media_entry.media_id, frame_count]
+	var label := String(media_entry.get("display_name", media_entry.media_id))
+	var count_suffix := label.find(" (")
+	if count_suffix > 0:
+		label = label.left(count_suffix)
+	return "%s: %d frames; imported %d regions, %d mask fallbacks, %d skipped" % [
+		label,
+		frame_count,
+		int(statistics.get("imported_regions", 0)),
+		int(statistics.get("box_fallbacks", 0)),
+		int(statistics.get("skipped_regions", 0)),
+	]
 
 
 func open_source(path: String) -> PackedStringArray:
@@ -697,6 +844,7 @@ func open_source(path: String) -> PackedStringArray:
 		(snapshot["presentation"] as Dictionary).duplicate(true))
 	var candidate_frame_count := frame_entries.size()
 
+	await _review_workflow.exports.cancel_and_drain()
 	var opened: Dictionary = await _review_workflow.open_session("direct", {
 		"locator":ProjectSettings.globalize_path(path).simplify_path(),"records":records_value,
 		"manifest":candidate_manifest,"frame_entries":frame_entries,
@@ -857,8 +1005,7 @@ func set_frame(index: int) -> bool:
 		_batch_workflow.refresh_current()
 	_refresh_labels(entry)
 	_refresh_toolbar()
-	if _workspace_media_id.is_empty():
-		_dataset_explorer.select_frame(index)
+	_dataset_explorer.select_frame(index)
 	return true
 
 
@@ -981,36 +1128,18 @@ func _record_frame_for_playback(index: int, entry: Dictionary = {}) -> int:
 	return int(frame_value) if _logical_integer(frame_value) and int(frame_value) >= 0 else -1
 
 
-func export_handoff(output_path: String) -> PackedStringArray:
-	if _is_class_dialog_active():
-		return _modal_refusal("Export")
-	if _source == null or _current_frame < 0:
-		var no_source := PackedStringArray(["Open a source before exporting"])
-		_show_errors("Export failed", no_source)
-		return no_source
-	if _feedback_plugin == null:
-		var no_plugin := PackedStringArray(["Configured Feedback plugin is unavailable: %s" % feedback_plugin_id])
-		_show_errors("Export failed", no_plugin)
-		return no_plugin
-	var dirty_frames: Array = []
-	for frame: int in _store.get_dirty_frames():
-		dirty_frames.append(frame)
-	var context := {
-		"records": _store.snapshot_corrected(),
-		"output_path": output_path,
-		"source_manifest": _manifest.duplicate(true),
-		"model_digest": _store.model_digest(),
-		"dirty_frames": dirty_frames,
-		"batch_operations": _store.snapshot_batch_operations(),
-		"review_state": _store.snapshot_review_state(),
-	}
-	var result: Variant = _feedback_plugin.export(context)
-	var errors: PackedStringArray = result if result is PackedStringArray else PackedStringArray(["Feedback plugin export must return PackedStringArray"])
-	if errors.is_empty():
-		_set_status("Exported training handoff: %s" % output_path)
-	else:
-		_show_errors("Export failed", errors)
-	return errors
+## UI 与程序调用共用同一控制器，结果保留已保存版本和包路径。
+func export_package(output_parent: String, kind: String = "training_update_v2") -> Dictionary:
+	return await _review_workflow.exports.controller.export_current(output_parent,kind)
+
+
+## 普通训练导出分两步，调用者必须显式传入人工审核声明。
+func prepare_training_export() -> Dictionary:
+	return await _review_workflow.exports.controller.prepare_one_click()
+
+
+func confirm_training_export(output_parent: String, attested: bool) -> Dictionary:
+	return await _review_workflow.exports.controller.confirm_and_publish(output_parent, attested)
 
 
 func is_playing() -> bool:
@@ -1063,13 +1192,6 @@ func _on_directory_selected(path: String) -> void:
 	else:
 		await open_workspace(path)
 		_review_workflow.finish_transition()
-
-
-func _on_export_parent_selected(path: String) -> void:
-	if _is_class_dialog_active():
-		_modal_refusal("Export")
-		return
-	export_handoff(ProjectSettings.globalize_path(path).simplify_path().path_join("training_update_v1"))
 
 
 func _begin_video_import(path: String) -> void:
@@ -1261,6 +1383,16 @@ func _on_selection_cancel_requested() -> void:
 	_set_status("Selection cleared")
 
 
+func _on_viewport_transform_changed() -> void:
+	if _edit_plugin != null and _edit_plugin.has_method("refresh_edit_overlay"):
+		_edit_plugin.refresh_edit_overlay()
+
+
+func _on_viewport_mouse_exited() -> void:
+	if _edit_plugin != null and _edit_plugin.has_method("clear_pointer_hover"):
+		_edit_plugin.clear_pointer_hover()
+
+
 func _on_image_pointer_event(event: InputEvent, image_position: Vector2) -> void:
 	if _batch_workflow != null and _batch_workflow.is_previewing():
 		_set_status("关闭预览后再编辑")
@@ -1270,29 +1402,12 @@ func _on_image_pointer_event(event: InputEvent, image_position: Vector2) -> void
 	var mouse_button := event as InputEventMouseButton
 	if mouse_button != null and mouse_button.button_index == MOUSE_BUTTON_LEFT and mouse_button.pressed:
 		pause()
-	var compare_committed_record := _pointer_event_may_commit(event)
-	var before_record: Dictionary = _store.get_corrected_record(_current_record_frame()) if compare_committed_record and _current_frame >= 0 else {}
+	# 每个鼠标按键事件都可能提交；用版本号统一判断，避免工具专用分支漏掉双击释放。
+	var compare_committed_record := event is InputEventMouseButton
+	var before_revision: int = _store.current_revision() if compare_committed_record else -1
 	_edit_plugin.handle_pointer(event, image_position)
-	var after_record: Dictionary = _store.get_corrected_record(_current_record_frame()) if compare_committed_record and _current_frame >= 0 else {}
-	if compare_committed_record and before_record != after_record:
+	if compare_committed_record and before_revision != _store.current_revision():
 		_refresh_after_edit(true)
-
-
-func _pointer_event_may_commit(event: InputEvent) -> bool:
-	if not event is InputEventMouseButton or event.button_index != MOUSE_BUTTON_LEFT:
-		return false
-	# Anchored Lasso closes on the double-click press; its release is inert.
-	if event.double_click:
-		return event.pressed
-	if _edit_plugin == null:
-		return false
-	var active_tool: Variant = _edit_plugin.get_active_tool()
-	if typeof(active_tool) not in [TYPE_STRING, TYPE_STRING_NAME]:
-		return not event.pressed
-	var tool := StringName(active_tool)
-	if tool == &"fill":
-		return event.pressed
-	return not event.pressed
 
 
 func _on_tool_requested(tool_id: StringName) -> void:
@@ -1311,7 +1426,8 @@ func _on_tool_requested(tool_id: StringName) -> void:
 	if not errors.is_empty():
 		_show_errors("Tool change refused", errors)
 		return
-	_set_status("Tool: %s" % _tool_display_name(tool_id))
+	var hint := str(_edit_plugin.get_edit_state().get("message", ""))
+	_set_status(hint if not hint.is_empty() else "Tool: %s" % _tool_display_name(tool_id))
 
 
 func _on_tool_option_changed(tool_id: StringName, option_id: StringName, value: Variant) -> void:
@@ -1469,7 +1585,9 @@ func _refresh_after_edit(mark_modified: bool = true) -> void:
 	_refresh_current_annotations()
 	_refresh_toolbar()
 	if mark_modified and not _store.get_dirty_frames().is_empty():
-		_set_status("Modified")
+		var active_tool := StringName(_edit_plugin.get_active_tool()) if _edit_plugin != null else &""
+		var hint := str(_edit_plugin.get_edit_state().get("message", "")) if active_tool == &"match_region" else ""
+		_set_status(hint if not hint.is_empty() else "Modified")
 
 
 func _refresh_current_annotations() -> void:
@@ -1499,6 +1617,8 @@ func _set_selected_region(region_id: String) -> void:
 		_syncing_sidebar_selection = false
 	if _edit_plugin != null and _edit_plugin.has_method("refresh_edit_overlay"):
 		_edit_plugin.refresh_edit_overlay()
+	if _batch_workflow != null:
+		_batch_workflow.refresh_current()
 
 
 func _refresh_annotation_sidebar() -> void:
@@ -1701,6 +1821,133 @@ func _modal_refusal(action: String) -> PackedStringArray:
 
 func _get_selected_region_id() -> String:
 	return _selected_region_id
+
+
+## Batch 只读取当前导航/选区/草稿身份；Main 仍拥有这些可变状态。
+func _batch_sam_context() -> Dictionary:
+	return {
+		"key_index": _current_frame,
+		"region_id": _selected_region_id,
+		"edit_pending": bool(_edit_state.get("navigation_blocked", false)) \
+			or bool(_edit_state.get("draft_active", false)),
+	}
+
+
+## 先从 Source 自有路径读取一次不可缓存的候选帧；返回值不暴露路径。
+func _read_sam_batch_preview_snapshot(playback_index: int, frame_id: int) -> Dictionary:
+	if _source == null or not _source.has_method("load_image_snapshot_uncached") \
+			or playback_index < 0 or playback_index >= _frame_entries.size():
+		return {"errors": PackedStringArray(["SAM preview target is outside the frozen Source range"])}
+	var frozen_entry := _frame_entry_for_playback(playback_index)
+	var live_before := _normalized_sam_preview_entry(_source.get_frame_entry(playback_index))
+	if frozen_entry.is_empty() or live_before != frozen_entry \
+			or _record_frame_for_playback(playback_index, frozen_entry) != frame_id:
+		return {"errors": PackedStringArray(["SAM preview target identity changed"])}
+	var image_value: Variant = _source.load_image_snapshot_uncached(playback_index)
+	var image: Image = image_value if image_value is Image else null
+	var live_after := _normalized_sam_preview_entry(_source.get_frame_entry(playback_index))
+	if image == null or image.is_empty() or live_after != frozen_entry:
+		return {"errors": PackedStringArray(["SAM preview target changed while loading"])}
+	var png := image.save_png_to_buffer()
+	return {"errors": PackedStringArray(), "playback_index": playback_index,
+		"frame_id": frame_id, "image": image, "image_sha256": _sam_preview_sha256(png)}
+
+
+## Batch 只读预览只替换画布内容；导航、选区、时间轴和 Edit 身份均不变。
+func _show_sam_batch_preview_frame(
+	playback_index: int, frame_id: int, proposed_record: Dictionary, region_id: String,
+	snapshot: Dictionary, expected_image_sha256: String
+) -> PackedStringArray:
+	if _source == null or playback_index < 0 or playback_index >= _frame_entries.size():
+		return PackedStringArray(["SAM preview target is outside the frozen Source range"])
+	var frozen_entry := _frame_entry_for_playback(playback_index)
+	var live_before := _normalized_sam_preview_entry(_source.get_frame_entry(playback_index))
+	if frozen_entry.is_empty() or live_before != frozen_entry \
+			or _record_frame_for_playback(playback_index, frozen_entry) != frame_id \
+			or proposed_record.get("frame") != frame_id:
+		return PackedStringArray(["SAM preview target identity changed"])
+	var candidate_count := 0
+	for value: Variant in proposed_record.get("regions", []):
+		if value is Dictionary and value.get("id") == region_id and value.has("polygon"):
+			candidate_count += 1
+	if region_id.is_empty() or candidate_count != 1:
+		return PackedStringArray(["SAM preview candidate identity is invalid"])
+	var image_value: Variant = snapshot.get("image")
+	var image: Image = image_value if image_value is Image else null
+	var image_sha256 := str(snapshot.get("image_sha256", ""))
+	if snapshot.get("playback_index") != playback_index or snapshot.get("frame_id") != frame_id \
+			or image == null or image.is_empty() \
+			or image_sha256 != expected_image_sha256 \
+			or _sam_preview_sha256(image.save_png_to_buffer()) != expected_image_sha256:
+		return PackedStringArray(["SAM preview image identity is invalid"])
+	var texture: Texture2D = ImageTexture.create_from_image(image)
+	var live_after := _normalized_sam_preview_entry(_source.get_frame_entry(playback_index))
+	if texture == null or live_after != frozen_entry:
+		return PackedStringArray(["SAM preview target changed while loading"])
+	_viewport.set_state(texture, proposed_record, region_id, _opacity_slider.value)
+	return PackedStringArray()
+
+
+func _normalized_sam_preview_entry(value: Variant) -> Dictionary:
+	var entry: Dictionary = value.duplicate(true) if value is Dictionary else {}
+	var frame_value: Variant = entry.get("frame_id", entry.get("frame"))
+	if _logical_integer(frame_value):
+		entry["frame_id"] = int(frame_value)
+	return entry
+
+
+func _sam_preview_sha256(bytes: PackedByteArray) -> String:
+	var hashing := HashingContext.new()
+	hashing.start(HashingContext.HASH_SHA256)
+	hashing.update(bytes)
+	return hashing.finish().hex_encode()
+
+
+## 关闭候选预览时按 Main 的真实当前身份重建画布。
+func _restore_sam_batch_preview_frame() -> PackedStringArray:
+	if _source == null or _current_frame < 0 or _current_frame >= _frame_entries.size():
+		return _fail_sam_batch_preview_restore("Current frame is unavailable")
+	var entry := _frame_entry_for_playback(_current_frame)
+	var frame_id := _record_frame_for_playback(_current_frame, entry)
+	var live_value: Variant = _source.get_frame_entry(_current_frame)
+	var live_entry: Dictionary = live_value.duplicate(true) if live_value is Dictionary else {}
+	var live_frame_value: Variant = live_entry.get("frame_id", live_entry.get("frame"))
+	if _logical_integer(live_frame_value):
+		live_entry["frame_id"] = int(live_frame_value)
+	if entry.is_empty() or live_entry != entry or frame_id < 0:
+		return _fail_sam_batch_preview_restore(
+			"Current frame identity changed before restoring SAM preview")
+	var texture_value: Variant = _source.load_texture(_current_frame)
+	var texture: Texture2D = texture_value if texture_value is Texture2D else null
+	var record: Dictionary = _store.get_corrected_record(frame_id) if _store != null else {}
+	var live_after_value: Variant = _source.get_frame_entry(_current_frame)
+	var live_after: Dictionary = live_after_value.duplicate(true) if live_after_value is Dictionary else {}
+	live_frame_value = live_after.get("frame_id", live_after.get("frame"))
+	if _logical_integer(live_frame_value):
+		live_after["frame_id"] = int(live_frame_value)
+	if live_after != entry or texture == null or record.is_empty() or record.get("frame") != frame_id:
+		return _fail_sam_batch_preview_restore("Current frame changed while restoring SAM preview")
+	_viewport.set_state(texture, record, _selected_region_id, _opacity_slider.value)
+	return PackedStringArray()
+
+
+func _fail_sam_batch_preview_restore(message: String) -> PackedStringArray:
+	# 恢复失败时 fail closed，不让可编辑界面遗留候选纹理或记录。
+	_viewport.set_state(null, {}, "", _opacity_slider.value)
+	return PackedStringArray([message])
+
+
+## 重新锚定只传递 Source 身份；不传递 Video SAM 的 mask、prompt 或运行状态。
+func _begin_sam_reanchor(playback_index: int, frame_id: int, region_id: String) -> void:
+	if _batch_workflow != null:
+		_batch_workflow.cancel()
+		_batch_workflow._show_tab(false)
+	if not seek(playback_index) or _current_record_frame() != frame_id:
+		_set_status("停止帧已变化，无法重新锚定。")
+		return
+	var record: Dictionary = _store.get_corrected_record(frame_id)
+	_set_selected_region(region_id if not _find_region(record, region_id).is_empty() else "")
+	_on_tool_requested(&"model_assist")
 
 
 func _on_edit_state_changed(state: Dictionary) -> void:
@@ -1915,6 +2162,8 @@ func _frame_entry_for_playback(index: int) -> Dictionary:
 
 func _connect_ui() -> void:
 	_open_button.pressed.connect(_on_open_pressed)
+	_workspace_scan_cancel_button.pressed.connect(
+		_on_workspace_scan_cancel_pressed)
 	_export_button.pressed.connect(_on_export_pressed)
 	_previous_button.pressed.connect(_on_previous_pressed)
 	_play_pause_button.pressed.connect(_on_play_pause_pressed)
@@ -1934,7 +2183,6 @@ func _connect_ui() -> void:
 	_tool_panel.tool_action_requested.connect(_on_tool_action_requested)
 	_source_dialog.file_selected.connect(_on_file_selected)
 	_source_dialog.dir_selected.connect(_on_directory_selected)
-	_export_dialog.dir_selected.connect(_on_export_parent_selected)
 	_video_import_browse.pressed.connect(_on_video_import_browse_pressed)
 	_video_import_name.text_changed.connect(func(_value: String) -> void: _update_video_import_start_button())
 	_video_import_start.pressed.connect(_on_video_import_start_pressed)
@@ -1949,6 +2197,8 @@ func _connect_ui() -> void:
 	_viewport.region_selected.connect(_on_region_selected)
 	_viewport.image_pointer_event.connect(_on_image_pointer_event)
 	_viewport.selection_cancel_requested.connect(_on_selection_cancel_requested)
+	_viewport.transform_changed.connect(_on_viewport_transform_changed)
+	_viewport.mouse_exited.connect(_on_viewport_mouse_exited)
 	_annotation_sidebar.region_hovered.connect(_on_sidebar_region_hovered)
 	_annotation_sidebar.region_selected.connect(_on_sidebar_region_selected)
 	_annotation_sidebar.region_reclassify_requested.connect(_on_sidebar_reclassify_requested)
@@ -2011,6 +2261,7 @@ func _refresh_toolbar() -> void:
 	var frame_count := _active_frame_count()
 	var import_running: bool = is_instance_valid(_video_import_controller) \
 		and _video_import_controller.is_running()
+	import_running = import_running or _workspace_import_active
 	var class_modal := _is_class_dialog_active()
 	_open_button.disabled = import_running or class_modal
 	_previous_button.disabled = import_running or class_modal or not has_source or _current_frame <= 0
@@ -2122,6 +2373,10 @@ func _logical_positive_integer(value: Variant) -> bool:
 
 func _exit_tree() -> void:
 	# Window close is handled before destruction by ReviewWorkflow.
+	if _workspace_catalog_controller != null:
+		_workspace_catalog_controller.cancel()
+	if _workspace_media_controller != null:
+		_workspace_media_controller.cancel()
 	_unbind_workspace_session()
 	_playback_controller.pause()
 	if is_instance_valid(_viewport):

@@ -9,5 +9,6 @@ func step() -> void: pass
 func cancel() -> void: pass
 func is_running() -> bool: return false
 func progress_text() -> String: return ""
+## 运行期间不得公开部分候选；调用方必须先确认 is_running() 为 false。
 func get_result() -> Dictionary: return {}
 func validate_source() -> PackedStringArray: return PackedStringArray()

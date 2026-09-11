@@ -186,6 +186,16 @@ func close() -> void:
 	last_error = ""
 
 
+## 可选完整性边界：每次从 Source 自有路径重读，不查询或更新播放缓存。
+func load_image_snapshot_uncached(index: int) -> Image:
+	last_error = ""
+	if index < 0 or index >= get_frame_count():
+		last_error = "sequence playback index %d is out of range" % index
+		return null
+	var texture := _load_texture_uncached(index)
+	return texture.get_image() if texture != null else null
+
+
 func _load_texture_uncached(index: int) -> Texture2D:
 	var entry := _manifest["frames"][index] as Dictionary
 	var image_path: String = entry["image_path"]

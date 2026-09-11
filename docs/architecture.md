@@ -10,7 +10,8 @@
 
 ```mermaid
 flowchart LR
-    Workspace[工作区文件夹] --> Catalog[WorkspaceCatalog]
+    Workspace[工作区文件夹] --> CatalogController[WorkspaceCatalogController]
+    CatalogController --> Catalog[WorkspaceCatalog]
     Catalog --> Explorer[左侧媒体树]
     Explorer --> Media[WorkspaceMediaController]
     Media --> Factory[SourceFactory + PluginRegistry]
@@ -18,6 +19,7 @@ flowchart LR
     Import --> Normalizer[Python frame_source + FFmpeg]
     Normalizer --> Normalized[归一化索引帧目录]
     Input[单图 / 图像序列] --> Factory
+    Endoscapes[Endoscapes 根目录] -. 可选视频级发现 .-> Factory
     Normalized --> Factory
     Factory --> Source[数据源插件]
     Source --> Session[SourceSessionBuilder]
@@ -32,11 +34,19 @@ flowchart LR
     Feedback --> Handoff[修正数据/训练交接]
 ```
 
-`SourceFactory` 是所有 Source 创建入口。它让 `PluginRegistry` 按 `can_open`、priority 和可选 preferred ID 选择插件，创建独立实例并调用 `open`；打开失败时关闭候选实例。`image_sequence_source` 读取归一化帧源清单，并根据 `model_version` 定位同名模型输出文件。例如 `model_version: "model_output_v1"` 只允许读取 `model_output_v1.jsonl`。它不会退回读取无版本文件，也不会把记录中的 `source` 当成模型版本。
+`SourceFactory` 是所有 Source 创建入口。它让 `PluginRegistry` 按 `can_open`、priority 和可选 preferred ID 选择插件，创建独立实例并调用 `open`；打开失败时关闭候选实例。Factory 也验证可选 `discover_workspace_media` 结果：未实现或未声明根目录时继续通用扫描，声明后的错误则直接拒绝，不会静默退回。`image_sequence_source` 读取归一化帧源清单，并根据 `model_version` 定位同名模型输出文件。例如 `model_version: "model_output_v1"` 只允许读取 `model_output_v1.jsonl`。它不会退回读取无版本文件，也不会把记录中的 `source` 当成模型版本。
 
 `SourceSessionBuilder` 随后把任何已打开插件规范化为一个经过深拷贝和验证的会话快照。旧的直接 Open 与工作区媒体选择都消费同一个快照，不再各自解释 Source 数据。Main 在会话生命期内固定已验证的 frame entries，跳帧时使用该映射查找记录，并在纹理加载前拒绝 Source 的动态重映射。`image_sequence_source`、`numeric_image_sequence_source` 和 `single_image_source` 因而共享创建、校验、播放和失败清理边界。
 
 `source` 表示图像或帧来源，例如 `sample_v1`；`model_output_v1` 表示模型输出契约和文件版本。两者职责不同。
+
+### 2.1 Endoscapes 当前视频所有权
+
+`endoscapes_video_source` 的发现阶段只产生 `endoscapes_<split>_video_<NNN>` 便携 media ID、`<split>/video-<NNN>` 相对路径、代表帧 locator 和帧数；它不把整库逐帧路径塞入 Catalog。`WorkspaceCatalogController` 在 `BackgroundJob` 中创建候选 Catalog，通过 generation 防止取消或陈旧结果覆盖当前工作区，并在替换或退出前 cancel-and-drain。
+
+媒体选择后，`WorkspaceMediaController` 才在独立 `BackgroundJob` 中创建该视频的 Source；它同样使用 generation 和 media 身份执行 latest-wins，陈旧候选必须 `close()`。Source 拥有当前视频的有序帧路径、COCO 转换后记录和 12-entry 纹理 LRU；COCO 顶层对象与单个 RLE mask 只是转换期间的临时数据。Main 只在后台打开成功后于主线程构造首张 `ImageTexture`，切换后旧 Source 不再持有帧路径或纹理。
+
+`baseline_kind: "imported_labels"` 是通用会话语义，不是 Endoscapes 分支。`SessionLoader` 的优先级为：已保存的 Project6 V3 会话，显式 `labels/<media_id>.json`，然后才是 Source 的 imported-label 种子。COCO 安全门禁只允许 Model Output V1 的单简单环；多连通域、孔洞、触边或失真结果保留合法 box 并记录原因，不伪造 polygon、`conf` 或审核状态。
 
 ## 3. 前端组成与交互边界
 
@@ -64,14 +74,15 @@ MainVBox
 
 `DatasetExplorer` 有工作区树和旧 Source 呈现两种只读模式，不是通用文件管理器。工作区模式只列出嵌套文件夹和逻辑媒体；视频和数字图片序列不在左树逐帧物化。选择媒体只发出一次请求，候选 Source、标注和编辑会话都验证后才事务替换当前界面。旧 Source 模式仍保留连续帧列表；超过 500 帧时只物化总数和当前帧，避免为 10,000 帧创建 10,000 个 `TreeItem`。
 
-中央 `AnnotationViewport`、所选 Renderer 和图像坐标变换是唯一显示路径。右侧 `AnnotationSidebar` 显示项目类别与当前帧标注，其下方固定无分类、四列工具区。工具区保留 Part 2.2 的 7 个 Assignment 工具，并追加第八个单帧 Model Assist。工具 ID、名称、图标和可用性均由 Edit plugin descriptors 提供。
+中央 `AnnotationViewport`、所选 Renderer 和图像坐标变换是唯一显示路径。右侧 `AnnotationSidebar` 显示项目类别与当前帧标注，其下方固定无分类、四列工具区。工具区保留 Part 2.2 的 7 个 Assignment 工具，并追加第八个 Match 和第九个单帧 Model Assist。工具 ID、名称、图标和可用性均由 Edit plugin descriptors 提供。
 
 各层所有权如下：
 
 - `AnnotationMain` 组装应用并执行失败原子的 Source 替换；Source 创建交给 `SourceFactory`，Source 输出校验交给 `SourceSessionBuilder`，不直接加载具体 Source 插件脚本。
 - `DatasetExplorer` 只拥有当前数据集的呈现和帧请求意图，不打开、验证、缓存、编辑或写入源数据。
-- `WorkspaceCatalog` 递归遍历时先使用注入的 `SourceFactory.resolve_plugin_id` 识别插件所有的文件或目录，再为未命中项保留图片、视频和数字序列的内置发现回退；它为每个媒体建立最近数据集根的标签上下文索引，不解码视频或读取图像像素。
-- `WorkspaceMediaController` 只准备媒体 locator，并调用注入的同一个 `SourceFactory`；它不再拥有数字序列插件的私有构造路径。
+- `WorkspaceCatalogController` 拥有后台扫描、进度、取消、generation 和 drain；只在完整候选成功时原子发布 Catalog。
+- `WorkspaceCatalog` 先请求注入的 SourceFactory 执行可选工作区发现；未被声明时才递归遍历，并通过 `resolve_plugin_id` 识别插件所有的文件或目录，再为未命中项保留图片、视频和数字序列回退。它建立最近数据集根的标签上下文索引，不解码视频或读取图像像素。
+- `WorkspaceMediaController` 只准备媒体 locator，并调用注入的同一个 `SourceFactory`；插件 Source 在可取消的后台任务中打开，陈旧结果会被关闭，它不拥有任何具体 Source 的私有构造路径。
 - `SourceFactory` 只负责 Registry 路由、实例创建、`open` 结果类型和失败关闭；`SourceSessionBuilder` 只负责 manifest、record、entry、首帧纹理和 presentation 的公共校验与映射。
 - `MediaLabelStore` 按该上下文保存标签路径、磁盘摘要和已保存版本；`WorkspaceSession` 协调 300 ms 空闲防抖、连续编辑时 2 秒请求期限、单写入者和切换前异步保存。`SessionRepository` 与 `AtomicDocument` 在后台完成 V3 转换、回读校验和原子替换。
 - `ToolPanel` 消费 Edit 插件的声明式工具描述，并把可用编辑意图与不可用工具意图分开。
@@ -169,7 +180,7 @@ zoom/Fit/pan 不清除 overlay。开始编辑会暂停播放；切帧、seek 或
 
 #### 3.3.4 工具清单与键盘语义
 
-工具栏保留 7 个 Assignment 工具：Add Box、Subtract、Lasso、Fill、Paint、Eraser 和 Select，并追加 Model Assist。Select 统一选中、拖动移动、box/polygon 八柄缩放与 1/5/10 image-px keyboard nudge。命中先取最上层内部区域；无内部命中才按 6 viewport-px 容差查边缘。缩放柄在 8 viewport px 内取最近者，所有保存几何仍为 image-space。
+工具栏保留 7 个 Assignment 工具：Add Box、Subtract、Lasso、Fill、Paint、Eraser 和 Select，并追加 Match 与 Model Assist。Select 统一选中、拖动移动、box/polygon 八柄缩放与 1/5/10 image-px keyboard nudge。命中先取最上层内部区域；无内部命中才按 6 viewport-px 容差查边缘。缩放柄在 8 viewport px 内取最近者，所有保存几何仍为 image-space。
 
 Paint/Eraser 共用 1–40 image-px 圆形笔刷，默认半径 8 px；选中工具即显示跟随鼠标的细半径环，不画轨迹或中心点。Paint 重合唯一/选中 region 时做 union；无重合的单环创建新对象，闭合空心轮廓留给 Fill。Eraser 无需选区，擦除全部相交对象，完全擦除可删除；任一候选不符合 V1 时整笔拒绝。Subtract 有选区时做单对象减法，无选区时作为多对象大范围删减。右键只发出选择取消意图，Main 原子清除临时编辑、选区和 hover，再同步切回 Select，不创建 history。
 
@@ -299,9 +310,11 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 | Source 会话快照 | `client/pipeline/source_session_builder.gd` | 校验并分离 `playback_index` 与 `frame_id` |
 | 视口与坐标 | `client/services/viewport_transform.gd`、`client/ui/annotation_viewport.gd` | 唯一 `Transform2D` 正逆变换、缩放、平移、Fit 和输入边界 |
 | Region 几何与显示 | `client/domain/region_geometry.gd`、`canvas_region_renderer/plugin.gd` | polygon-first 几何、hit-test、overlay 缓存、opacity 和裁剪 |
-| 编辑工具 | `client/plugins/edit/basic_edit_tools/plugin.gd` | 7 个 Assignment 工具 + Model Assist；指针/键盘手势、实时 mask 与 viewport-only preview |
+| 编辑工具 | `client/plugins/edit/basic_edit_tools/plugin.gd` | 7 个 Assignment 工具 + Match + Model Assist；指针/键盘手势、实时 mask 与 viewport-only preview |
 | Model Assist | `client/domain/model_assist_session.gd`、`model_assist_candidate.gd`、`client/services/model_assist_service.gd` | 会话、V1 Poly 安全门、外部进程与 stale/cancel 生命周期 |
 | SAM 2 worker | `python/model_assist_worker.py`、`python/annotation_data/model_assist_backend.py` | 严格 JSONL、持久 image embedding、有哈希二值 candidate；无 Store 写权 |
+| SAM Video Batch | `client/services/sam_video_batch_provider.gd`、`sam_video_service.gd`、`batch_controller.gd` | 默认单 region 向后计划、只读候选、分段停止和 stale/cancel 边界 |
+| SAM Video worker | `python/sam_video_worker.py`、`python/annotation_data/sam_video_backend.py` | 严格 `sam-video-v1` JSONL、每批全新 predictor state、一个 object ID；无 Store 写权 |
 | 笔刷缓冲 | `client/domain/brush_stroke_buffer.gd` | 增量圆头线段、可增长 ROI、像素上限与失败保留 |
 | Mask 运算与 Fill | `client/domain/mask_region_ops.gd`、`fill_region_solver.gd` | raw mask、严格填充、方形核近闭合、修补候选与 V1 轮廓 |
 | 草稿会话与局部历史 | `client/domain/edit_session.gd`、`mask_draft_history.gd` | 冻结 frame/before、WorkingMask、种子、修补回退及 200 项/32 MiB 差异历史 |
@@ -324,7 +337,7 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 | 客户端即时拒绝条件 | `client/domain/model_output_validator.gd` | Schema 与共享样例 | Godot 验证器测试 |
 | 模型不可变或修正副本行为 | `client/domain/annotation_store.gd` | 编辑命令、导出插件 | `test_annotation_store.gd` |
 | 模型文件版本选择 | `client/plugins/source/image_sequence_source/plugin.gd` | 样本清单中的 `model_version` | `test_source_plugin.gd` |
-| Source 路由或公共输出契约 | `source_factory.gd`、`source_session_builder.gd` | 三个 Source 插件、Main、Workspace | `test_source_factory.gd`、`test_source_session_builder.gd` |
+| Source 路由或公共输出契约 | `source_factory.gd`、`source_session_builder.gd` | 四个 Source 插件、Main、Workspace | `test_source_factory.gd`、`test_source_session_builder.gd` |
 | 帧来源名称 | 模型生产方的 `source` 与清单 `source_name` | Source 对齐检查 | Python 样本测试、Godot Source 测试 |
 | 类别或颜色显示 | `client/domain/taxonomy.gd` | 渲染器、属性面板 | 渲染与界面测试 |
 | Part 2.1 坐标或几何 | `viewport_transform.gd`、`region_geometry.gd` | Viewport、Renderer、Edit 和样本 | `test_viewport_transform.gd`、`test_region_geometry.gd`、`test_renderer.gd` |
@@ -334,6 +347,7 @@ Godot 使用 `ModelOutputValidator.validate_record(record)` 实现同等字段�
 | Part 2.2 撤销边界 | `command_history.gd`、`mask_draft_history.gd`、`edit_session.gd` | Main 焦点路由、Store 原子恢复、两侧历史 | `test_checked_history.gd`、`test_annotation_store.gd`、`test_editing_assignment.gd` |
 | Part 2.2 boolean/轮廓 | `polygon_ops.gd`、`image_region_algorithms.gd` | V1 refusal、0.5 px 简化、精确轮廓回退、导出投影 | `test_polygon_ops.gd`、`test_image_region_algorithms.gd`、`test_mask_region_ops.gd` |
 | 单帧 Model Assist | `basic_edit_tools/plugin.gd`、`model_assist_session.gd`、`model_assist_service.gd` | ToolPanel session action、Main 的 frame/playback 身份、candidate 安全门、外部 worker | `test_model_assist_session.gd`、`test_model_assist_service.gd`、`test_model_assist_ui.gd`、`test_model_assist_smoke.py` |
+| SAM Video Batch | `sam_video_service.gd`、`sam_video_batch_provider.gd`、`batch_controller.gd`、`apply_propagation_command.gd` | Source/Store/review/session 冻结、默认 provider、只读预览、region 级 v3 原子提交 | `test_sam_video_service.gd`、`test_sam_video_batch.gd`、`test_sam_video_batch_command.gd`、`test_sam_video_batch_ui.gd` |
 | Part 2.3 交互忠实度 | `RESULTS.md` | README reviewer script、Assignment 2.2 | `test_documentation.py` |
 | Part 3.1 播放或时间契约 | `playback_controller.gd`、`main.gd` | Source frame entries、Timeline、Explorer | `test_playback_controller.gd`、`test_playback.gd`、可见播放基准 |
 | Part 3.1 导入或取消 | `video_import_controller.gd`、`python/frame_source.py` | `.venv`、FFmpeg/FFprobe、归一化目录 | Python 视频测试、Godot 子进程测试、真实导入基准 |
@@ -367,17 +381,25 @@ tests/run_tests.sh
 
 ## Part 3.2 batch workflow
 
-`BatchWorkflow` mounts the right-side Batch tab and selects `Poly 光流 + 边缘精修` by default. The visible similarity threshold defaults to 0.02; users can shorten a returned range and choose overwrite or merge before applying. Main wires this coordinator only after a Source session is committed. Timeline and preview use contiguous `playback_index`, while Store, review and audit use immutable original `frame_id`; a sparse-ID gap ends the current candidate segment.
+`BatchWorkflow` mounts the right-side Batch tab and selects `sam_video` by default. It collects one selected, already committed Box/Poly region, the explicit anchor-attestation checkbox and a forward target count of 1–30; it does not own inference or Store mutation. Targets follow committed Source order rather than `frame_id` arithmetic, so sparse IDs/times are risks instead of invented frames. The keyframe is not a target and is never rewritten or marked verified by Batch. Poly flow and fixed copy remain explicitly named alternatives; a SAM failure never silently changes provider.
 
-`PolygonPropagationService` is the trust and lifecycle boundary around the Python worker. It alternates outward from the corrected reference frame, protects verified targets, caps the snapshot set at 30 frames, saves each actual Source image as a worker-owned PNG and freezes the entry digest, image digest, annotation digest and review state. It launches `python/propagate_polygons.py` asynchronously, validates the exact schema-v2 response, and rechecks the same Source pixels and metadata before preview and again before commit. Cancellation, timeout, read/decode failure, protocol error or stale state discards the disposable plan and cleans only that job directory.
+`BatchController` freezes Source entries/pixels, session identity, Store revision, review digest, key record and selected region before dispatching `SamVideoBatchProvider`. `SamVideoService` is a process/file trust boundary independent from single-frame `ModelAssistService`: it reads only `PROJECT6_MODEL_PYTHON`, `PROJECT6_SAM2_CONFIG`, `PROJECT6_SAM2_CHECKPOINT` and `PROJECT6_SAM2_DEVICE`, owns at most 31 frozen PNGs and one full-image key mask, and drives the persistent `sam-video-v1` worker through `hello/open_batch/add_mask/propagate/reset_batch`. The worker creates a new official `SAM2VideoPredictor` inference state for each batch, uses object ID 1, and propagates only forward. Neither service nor provider has Store/history authority.
 
-The production metric ID is `poly-sim-flow-edge-v1`. `polygon_propagation.py` computes 64×64 OpenCV `INTER_AREA` grayscale MAD on the frozen PNGs; both adjacent-to-target and fixed-keyframe-to-target scores must be strictly below the user threshold before optical flow starts. `polygon_flow.py` uses bidirectional OpenCV DIS to propagate the previous accepted mask and checks local appearance, texture, forward/backward consistency, area change and a direct fixed-anchor prediction. A failed region stops that direction at the current frame; no unreliable frame is skipped.
+Each returned mask is hash/size/ROI/binary checked and must convert losslessly enough to one nonempty, non-full, hole-free, connected, simple V1 Poly with at most 2,048 vertices. Valid outputs are transient read-only proposals. A model-level geometry refusal produces a structured segmented stop and retains only the valid prefix; the user may confirm that prefix, correct the stop frame with the separate single-frame Model Assist tool, commit it, attest a new anchor and start a new Batch. Protocol, path, hash, process or live Source/Store/review/session inconsistency invalidates the whole plan. Cancel, stale or failed plans leave Store, review, revision, labels and training packages unchanged.
+
+`ApplyPropagationCommand` is the only SAM write path. It merges only the selected region ID on each target, preserving its non-geometric fields and all unrelated regions; if the ID is absent it appends the key region metadata with the candidate polygon. One command atomically installs target records, accepted review digests and one schema-v3 batch operation, and one undo/redo restores all three. The exact persisted v3 fields are `schema_version,type,mode,provider_id,metric_id,keyframe,keyframe_playback_index,keyframe_digest,region_id,direction,requested_count,generated_count,start_frame,end_frame,affected_frames,target_playback_indices,stop_frame,stop_reason,checkpoint_sha256,device,model_version,elapsed_ms,risk_summary,created_at`. SAM scores, prompts, masks, embeddings, paths and unbounded diagnostics never enter Model Output V1 or the audit.
+
+`AnnotationStore` owns content-bound review acceptance and batch operation history. `WorkspaceSession` persists a frozen revision through `MediaLabelStore`/the background repository. Media Label V3 stores baseline, corrections, explicit coverage, verification and batch provenance atomically; V1/V2 remain readable. Confirmed SAM targets still require human review; model output, risk diagnostics and automated tests never imply ground truth or verified state.
+
+The following Poly path remains an independently tested explicit alternative, not the default and not a SAM fallback.
+
+`PolygonPropagationService` is the trust and lifecycle boundary around the Python worker. It alternates outward from the corrected reference frame, protects verified targets, caps the snapshot set at 30 frames, saves each actual Source image as a worker-owned PNG and freezes the entry digest, image digest, annotation digest and review state. It launches `python/propagate_polygons.py` asynchronously, validates the exact sampling-aware schema-v3 response, and rechecks the same Source pixels and metadata before preview and again before commit. Cancellation, timeout, read/decode failure, protocol error or stale state discards the disposable plan and cleans only that job directory.
+
+The production metric ID is `poly-sim-flow-edge-v1`. `polygon_propagation.py` computes 64×64 OpenCV `INTER_AREA` grayscale MAD on the frozen PNGs; both adjacent-to-target and fixed-keyframe-to-target scores must be strictly below the user threshold before optical flow starts. `polygon_flow.py` uses bidirectional OpenCV DIS to propagate the previous accepted mask and checks local appearance, texture, forward/backward consistency, area change and a direct fixed-anchor prediction. When flow evidence or flow geometry is weak, the invalid flow mask is discarded and a bounded bright-template translation is attempted; absent useful brightness contrast, fixed coordinates are returned. Each mode is explicit and remains unverified.
 
 `polygon_edge_refinement.py` applies bounded GrabCut only inside the propagated mask's local band/ROI, then evaluates a Sobel edge map. Refinement is accepted only for one hole-free component that remains inside the crop, has raw IoU at least 0.85, area ratio 0.80–1.25, Hausdorff distance at most 6 image px and edge-score gain at least 0.01. An expected gate refusal returns the raw optical-flow mask byte-for-byte and records its reason. A runtime/protocol fault rejects the whole plan. `polygon_geometry.py` finally requires one simple V1 ring, no holes or extra components, at most 2,048 points and raster approximation IoU at least 0.99.
 
 `BatchController` owns only the plan and read-only preview. For Poly, overwrite keeps only propagated reference polygons; merge replaces the same IDs and retains target-only regions. `ApplyPropagationCommand` commits the exact previewed per-frame records as one history operation, preserves target source/frame/time identity, refuses changed or verified targets and restores both geometry and audit marker on undo. The schema-v2 batch marker stores `metric_id`, threshold, bounds, stop reasons and bounded edge accepted/fallback diagnostics; polygon records still conform to Model Output V1. Changed targets remain unverified.
-
-`AnnotationStore` owns content-bound review acceptance and batch operation history. `ReviewFramesCommand` changes acceptance through normal undo/redo, and `WorkspaceSession` persists a frozen revision through `MediaLabelStore`/the background repository. Media Label V3 stores baseline, corrections, explicit coverage, verification and batch provenance atomically; V1/V2 remain readable with exact migration backups. Workspace and direct Source sessions both support batch autosave, and auto-advance waits for the matching revision to save successfully. Similarity, flow quality or edge gain never imply human verification.
 
 The fixed-coordinate `FrameSimilarityService`/`PropagateRangeCommand` path remains available as a compatibility option and historical baseline. New providers must preserve the provider lifecycle and plan → preview → validated command → human verification boundary; they must not write Store state during inference or treat a low image difference as acceptance.
 

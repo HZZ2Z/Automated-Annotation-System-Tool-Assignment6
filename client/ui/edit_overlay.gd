@@ -26,6 +26,7 @@ var _batch_layers: Array[Dictionary] = []
 
 func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	clip_contents = true
 
 
 func _ready() -> void:
@@ -81,6 +82,46 @@ func _draw() -> void:
 	_draw_vertices(color)
 	_draw_model_prompts()
 	_draw_brush_cursor(color)
+	_draw_region_highlights()
+
+
+# Match 的高亮不进入标注记录；先画参考 B，保证包含关系中的小块 A 仍清晰。
+func _draw_region_highlights() -> void:
+	var highlights: Array = _state.get("region_highlights", [])
+	var font := ThemeDB.fallback_font
+	for index in range(highlights.size() - 1, -1, -1):
+		var layer: Dictionary = highlights[index]
+		var polygon: PackedVector2Array = layer.get("polygon", PackedVector2Array())
+		if polygon.size() < 3:
+			continue
+		var points := _to_viewport_points(polygon)
+		var color: Color = layer.get("color", CANDIDATE_COLOR)
+		var fill := color
+		fill.a = 0.14
+		if not Geometry2D.triangulate_polygon(points).is_empty():
+			draw_colored_polygon(points, fill)
+		var closed := points.duplicate()
+		closed.append(points[0])
+		draw_polyline(closed, color, 3.0, true)
+		var label: String = layer.get("label", "")
+		var label_size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14)
+		var minimum := points[0]
+		for point: Vector2 in points:
+			minimum = minimum.min(point)
+		var width := minf(label_size.x + 8.0, maxf(0.0, size.x - 8.0))
+		var origin := Vector2(clampf(minimum.x, 4.0, maxf(4.0, size.x - width - 4.0)),
+			clampf(minimum.y - 25.0, 4.0, maxf(4.0, size.y - 25.0)))
+		draw_style_box(_highlight_label_style(color), Rect2(origin, Vector2(width, 22)))
+		draw_string(font, origin + Vector2(4, 16), label, HORIZONTAL_ALIGNMENT_LEFT, width - 8, 14, color)
+
+
+func _highlight_label_style(color: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color("#17202eef")
+	style.border_color = color
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(3)
+	return style
 
 
 func get_prompt_draw_commands() -> Array:

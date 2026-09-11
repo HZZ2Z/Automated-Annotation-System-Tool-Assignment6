@@ -73,6 +73,15 @@ media per package, concurrent writers, or automatic carry-over of old correction
 - Keep Plugin API V1 export(context); add optional training_update_v2 capability.
   UI/CLI share production business modules. Demo uses real command classes,
   autosave, reopen and independent validation, not prebuilt success output.
+- Client export uses `TrainingExportController` for both the dialog and awaited
+  `Main.export_package(output_parent, kind)`. Its prepare/preview/publish operations
+  bind a request generation, saved session/revision and plugin instance. Cancel and
+  context changes drain both pending preparation and workers before replacement;
+  no client fallback to synchronous V1 export is provided.
+- New training/review manifests include a single worker-generated `created_at`
+  UTC second timestamp. Legacy omission is accepted and preserved on reuse.
+  Both validators reject malformed or impossible dates. Upgrade receivers before
+  emitting the extension; timestamp remains outside the unchanged content ID.
 
 ## Locked internal snapshot interface
 
@@ -132,3 +141,7 @@ Design, execution checklist, one-page interface agreement, production CLI demo,
 UI reviewer script, independent validator, regression/fault/performance evidence,
 README/RESULTS/traceability updates. Local tests/output/tmp are retained and not
 force-added to Git. Demonstration commands cannot depend on ignored test files.
+
+## Shared persistence memory boundary
+
+See [Part 4 memory design](part4-memory.md) for immutable sharing, pure validation, per-frame hashing, 64 KiB output buffers, full readback guarantees and reproducible resource gates. Buffer size does not bound the entire Store or a single large geometry.

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "source": "sample_v1",
+  "frame": 0,
+  "regions": [
+    {
+      "id": "few",
+      "class": "duct",
+      "kind": "anatomy",
+      "polygon": [[0, 0], [1, 1]]
+    },
+    {
+      "id": "vertex",
+      "class": "duct",
+      "kind": "anatomy",
+      "polygon": [[0, 0], [1, 0], [0, 1, 2]]
+    }
+  ]
+}

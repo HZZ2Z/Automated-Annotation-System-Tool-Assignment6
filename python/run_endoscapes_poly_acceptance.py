@@ -86,7 +86,7 @@ class _RecordingRefiner:
         return result
 
 
-def run_acceptance(fixture: Path, output: Path, threshold: float = 0.02) -> dict:
+def run_acceptance(fixture: Path, output: Path, threshold: float = 0.10) -> dict:
     fixture, output = fixture.resolve(), output.resolve()
     if output.exists() or output.is_symlink():
         raise ValueError("acceptance output already exists")
@@ -152,7 +152,8 @@ def run_acceptance(fixture: Path, output: Path, threshold: float = 0.02) -> dict
             raise ValueError("fixture contains duplicate grayscale frames; evidence mapping is ambiguous")
         recorder = _RecordingRefiner(staging, originals, analysis_lookup, original_ids)
         request = {
-            "schema_version": 2,
+            "schema_version": 3,
+            "frame_step": 1,
             "key_index": key,
             "similarity_threshold": float(threshold),
             "frames": request_frames,
@@ -252,7 +253,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
-    parser.add_argument("--threshold", type=float, default=0.02)
+    parser.add_argument("--threshold", type=float, default=0.10)
     return parser.parse_args(argv)
 
 

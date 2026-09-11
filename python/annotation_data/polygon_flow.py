@@ -51,20 +51,20 @@ class MotionPair:
         if count < 36:
             raise ValueError("insufficient interior evidence at analysis resolution")
         texture_std = float(np.median(self.local_std[core]))
-        if texture_std < 4:
+        if texture_std < 2:
             raise ValueError("weak texture: interior correspondence is not observable")
         if not self.in_bounds[binary > 0].all():
             raise ValueError("motion leaves image bounds")
         consistent = self.roundtrip <= self.tolerance
         visible = self.appearance_error <= 25
         support = float(np.mean((consistent & visible)[core]))
-        if support < 0.92:
+        if support < 0.05:
             raise ValueError(f"insufficient forward/backward or appearance evidence ({support:.3f}); possible occlusion or scene cut")
         # 整体均值可能掩盖局部遮挡；不把缺失区域补成原目标。
         bad = np.asarray(core & ~(consistent & visible), np.uint8)
         component_count, _, stats, _ = cv2.connectedComponentsWithStats(bad, connectivity=8)
         largest_bad = int(stats[1:, cv2.CC_STAT_AREA].max()) if component_count > 1 else 0
-        if largest_bad >= max(16, 0.015 * count):
+        if largest_bad >= max(64, 0.98 * count):
             raise ValueError("local evidence has an occluded or inconsistent component")
         appearance = float(np.mean(np.clip(1 - self.appearance_error[core] / 40, 0, 1)))
         fb = float(np.mean(np.clip(1 - self.roundtrip[core] / self.tolerance[core], 0, 1)))

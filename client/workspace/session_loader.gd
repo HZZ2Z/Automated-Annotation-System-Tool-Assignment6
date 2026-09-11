@@ -8,12 +8,31 @@ const IMPORTED_LABELS := preload("res://client/workspace/cholect50_label_adapter
 
 func open_workspace(options: Dictionary, token: Variant) -> Dictionary:
 	var media: Dictionary = options.media
+	var baseline_kind_value: Variant = media.get(
+		"baseline_kind",
+		"model" if options.manifest.get("model_version", "none") != "none" else "empty",
+	)
+	if (
+		typeof(baseline_kind_value) != TYPE_STRING
+		or String(baseline_kind_value) not in ["empty", "model", "imported_labels"]
+	):
+		return {"success":false,"errors":["Workspace baseline_kind is invalid"]}
+	var requested_baseline_kind := String(baseline_kind_value)
 	var label_root := String(media.get("label_root",options.root))
 	var entries: Array = options.frame_entries
 	var records: Array = []
 	var kind := "empty"
+	var descriptor := {}
+	var imported_path := label_root.path_join("labels/%s.json" % media.media_id)
+	if FileAccess.file_exists(imported_path):
+		descriptor = {
+			"kind": "cholect50",
+			"path": imported_path,
+			"root": label_root,
+			"media_id": media.media_id,
+			"image_size": [options.image_size.x, options.image_size.y],
+		}
 	if not FileAccess.file_exists(PATHS.label_path(label_root, media.media_id)):
-		var imported_path := label_root.path_join("labels/%s.json" % media.media_id)
 		if FileAccess.file_exists(imported_path):
 			var ids := PackedInt64Array()
 			for entry: Dictionary in entries: ids.append(int(entry.frame_id))
@@ -21,15 +40,16 @@ func open_workspace(options: Dictionary, token: Variant) -> Dictionary:
 			if not imported.errors.is_empty(): return {"success":false,"errors":imported.errors}
 			records.assign(imported.records.values() if imported.records is Dictionary else imported.records)
 			kind = "imported_labels"
-		elif options.manifest.get("model_version","none") != "none":
+		elif requested_baseline_kind in ["model", "imported_labels"]:
 			records = options.records.duplicate(true)
-			kind = "model"
+			kind = requested_baseline_kind
 			for record: Dictionary in records: record.source = media.media_id
 	if token.is_cancelled(): return {"success":false,"errors":["Opening cancelled"],"cancelled":true}
 	var label = LABEL.new()
 	var context := {"baseline_kind":kind,"model_revision":options.manifest.get("model_revision",options.manifest.get("model_version","none")),"taxonomy_version":options.taxonomy_version,"source_root":label_root}
 	var errors: PackedStringArray = label.prepare(options.root,media,entries,records,context)
 	if not errors.is_empty(): return {"success":false,"errors":errors}
+	label.set_baseline_descriptor(descriptor)
 	if token.is_cancelled(): return {"success":false,"errors":["Opening cancelled"],"cancelled":true}
 	return {"success":true,"errors":[],"label_store":label,"store":label.prepared_store()}
 

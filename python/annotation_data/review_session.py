@@ -92,6 +92,17 @@ def validate_review_session(payload: object) -> list[str]:
                 or operation["changed_count"] != len(affected)
                 or operation["changed_count"] >= operation["covered_count"]):
                 errors.append(f"{prefix}: inconsistent covered range or changed count")
+        if operation["schema_version"] == 2:
+            step = operation.get("frame_step", 1)
+            covered = operation["covered_count"]
+            expected = {start + offset * step for offset in range(covered)}
+            if (end - start != (covered - 1) * step
+                or keyframe not in expected
+                or not expected <= frame_map.keys()
+                or any(frame not in expected for frame in affected)
+                or any(item["frame_id"] not in expected or item["frame_id"] == keyframe
+                       for item in operation["edge_refinement"]["items"])):
+                errors.append(f"{prefix}: frames do not match declared frame_step")
     return errors
 
 

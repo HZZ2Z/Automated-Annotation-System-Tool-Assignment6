@@ -13,7 +13,8 @@ var _disk_sha256 := ""
 var _saved_revision := -1
 var _backup_existing := false
 var _needs_save := false
-var _opened: Dictionary = {}
+var _opened_context: Dictionary = {}
+var _baseline_descriptor: Dictionary = {}
 
 ## Synchronous adapter for workers and offline callers. UI uses BackgroundJob.
 func prepare(workspace_root: String, media_entry: Dictionary, frame_entries: Array, seed_records: Variant = [], context: Dictionary = {}) -> PackedStringArray:
@@ -44,7 +45,9 @@ func prepare(workspace_root: String, media_entry: Dictionary, frame_entries: Arr
 
 ## Adopt only after the opening worker has finished; ownership moves to main.
 func adopt_session(result: Dictionary) -> void:
-	_opened = result
+	_opened_context = result.snapshot.duplicate()
+	for field: String in ["baseline_records", "records", "review_state", "batch_operations"]:
+		_opened_context.erase(field)
 	_store = result.store
 	_path = result.path
 	_disk_sha256 = result.disk_sha256
@@ -54,11 +57,17 @@ func adopt_session(result: Dictionary) -> void:
 
 func prepared_store() -> Variant: return _store
 
+func set_baseline_descriptor(descriptor: Dictionary) -> void:
+	_baseline_descriptor = descriptor.duplicate(true)
+
+func baseline_descriptor() -> Dictionary:
+	return _baseline_descriptor.duplicate(true)
+
 func bind_store(store: Variant) -> PackedStringArray:
 	if store != _store:
 		var snapshot: Dictionary = store.freeze_snapshot()
 		if not snapshot.has("session_id"):
-			var errors: PackedStringArray = store.configure_session(_opened.snapshot)
+			var errors: PackedStringArray = store.configure_session(_opened_context)
 			if not errors.is_empty(): return errors
 		_store = store
 	return PackedStringArray()
@@ -113,7 +122,8 @@ func flush() -> PackedStringArray:
 
 func clear() -> void:
 	_store = null
-	_opened = {}
+	_opened_context = {}
+	_baseline_descriptor = {}
 	_path = ""
 	_disk_sha256 = ""
 	_saved_revision = -1

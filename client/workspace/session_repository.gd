@@ -20,7 +20,7 @@ func open_session(options: Dictionary, token: Variant = null) -> Dictionary:
 		if not read.success: return read
 		disk_sha = read.sha256
 		if read.payload.get("schema_version") == 3:
-			decoded = CODEC.new().decode(read.payload)
+			decoded = CODEC.new().decode(read.payload, token)
 		else:
 			decoded = _decode_legacy(read.payload, options)
 			backup = true
@@ -34,9 +34,11 @@ func open_session(options: Dictionary, token: Variant = null) -> Dictionary:
 	if options.has("source_root"):
 		snapshot = snapshot.duplicate()
 		snapshot["source_root"] = options.source_root
-	var store = STORE.new()
-	var errors := restore_store(store, snapshot)
-	if not errors.is_empty(): return _failure("; ".join(errors))
+	var store: Variant = decoded.get("store")
+	if store == null:
+		store = STORE.new()
+		var errors := restore_store(store, snapshot)
+		if not errors.is_empty(): return _failure("; ".join(errors))
 	return {"success":true,"errors":[],"snapshot":store.freeze_snapshot(),"store":store,"path":path,"disk_sha256":disk_sha,"backup_existing":backup,"needs_save":not existing or backup}
 
 func save_snapshot(snapshot: Dictionary, options: Dictionary, token: Variant = null) -> Dictionary:
@@ -45,7 +47,7 @@ func save_snapshot(snapshot: Dictionary, options: Dictionary, token: Variant = n
 	var codec = CODEC.new()
 	var payload := codec.encode(snapshot)
 	var write_options := options.duplicate()
-	write_options["validate"] = Callable(self, "_validate_v3")
+	write_options["validate"] = Callable(self, "_validate_v3").bind(token)
 	var result: Dictionary = DOCUMENT.new().write_document(payload, write_options, token)
 	result["session_id"] = snapshot.get("session_id", "")
 	result["revision"] = snapshot.get("revision", -1)
@@ -58,12 +60,12 @@ func restore_store(store: Variant, snapshot: Dictionary) -> PackedStringArray:
 	if errors.is_empty(): errors = store.restore_corrected(snapshot.records, snapshot.review_state, snapshot.batch_operations)
 	return errors
 
-func _validate_v3(payload: Dictionary) -> PackedStringArray:
-	return CODEC.new().decode(payload).errors
+func _validate_v3(payload: Dictionary, token: Variant = null) -> PackedStringArray:
+	return CODEC.new().validate_v3(payload, token)
 
 func _new_snapshot(options: Dictionary) -> Dictionary:
 	var context := _context(options)
-	var records: Array = options.get("seed_records", []).duplicate(true)
+	var records: Array = options.get("seed_records", [])
 	var explicit: Array = []
 	var by_frame := {}
 	for record: Variant in records:
@@ -84,7 +86,7 @@ func _new_snapshot(options: Dictionary) -> Dictionary:
 	var store = STORE.new()
 	var errors: PackedStringArray = store.load_model_records(display)
 	if errors.is_empty(): errors = store.configure_session(context)
-	return {"snapshot":store.freeze_snapshot() if errors.is_empty() else {}, "errors":errors}
+	return {"snapshot":store.freeze_snapshot() if errors.is_empty() else {}, "errors":errors, "store":store if errors.is_empty() else null}
 
 func _decode_legacy(payload: Variant, options: Dictionary) -> Dictionary:
 	if not payload is Dictionary or (payload.get("schema_version") != 1 and payload.get("schema_version") != 2): return _decode_failure("Expected Media Label V1, V2 or V3")
@@ -137,7 +139,7 @@ func _decode_legacy(payload: Variant, options: Dictionary) -> Dictionary:
 	return {"snapshot":store.freeze_snapshot() if errors.is_empty() else {},"errors":errors}
 
 func _context(options: Dictionary) -> Dictionary:
-	var result := options.duplicate(true)
+	var result := options.duplicate()
 	result["session_id"] = options.get("session_id", (String(options.get("path", "")) + "|" + String(options.get("media_id", ""))).sha256_text())
 	result["source"] = options.get("source", options.get("media_id", ""))
 	result["revision"] = options.get("revision", 0)
@@ -151,8 +153,7 @@ func _check_identity(snapshot: Dictionary, options: Dictionary) -> PackedStringA
 	var errors := PackedStringArray()
 	for field: String in ["media_id","media_type","source_relative_path","source_sha256","source"]:
 		if snapshot.get(field) != options.get(field, options.get("media_id") if field == "source" else null): errors.append("%s does not match selected source" % field)
-	var normalizer = STORE.new()
-	if normalizer._canonicalize(snapshot.frame_entries) != normalizer._canonicalize(options.get("frame_entries")): errors.append("Frame mapping or timestamps changed; reopen the original source")
+	if STORE._canonicalize(snapshot.frame_entries) != STORE._canonicalize(options.get("frame_entries")): errors.append("Frame mapping or timestamps changed; reopen the original source")
 	return errors
 
 func _empty_record(source: String, entry: Dictionary) -> Dictionary:

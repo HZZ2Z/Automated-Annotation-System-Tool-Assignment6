@@ -1,0 +1,17 @@
+{
+  "accepted_as_similar": true,
+  "diagnostic": "constructed small-object motion; not surgical accuracy",
+  "fixed_copy_box_iou": 0.0,
+  "image_size": [
+    640,
+    360
+  ],
+  "mad": 0.0029296875,
+  "metric_id": "godot-rgb64-bilinear-mad-v1",
+  "movement_px": 32,
+  "object_size": [
+    20,
+    20
+  ],
+  "threshold": 0.02
+}

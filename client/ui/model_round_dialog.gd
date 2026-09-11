@@ -108,6 +108,13 @@ func open() -> void:
 	_invalidate()
 	_dialog.popup_centered(Vector2i(740,440))
 
+## 导出恢复入口直接打开原始标注绑定，不让用户再次选择模式。
+func open_baseline_binding() -> void:
+	open()
+	if _dialog.visible and not _mode.is_item_disabled(1):
+		_mode.select(1)
+		_invalidate()
+
 func _invalidate() -> void:
 	_prepared = {}
 	_commit.disabled = true

@@ -289,20 +289,47 @@ Audio playback, codec-level seeking, background `ImageTexture` creation, prefetc
 
 ## Single-frame Model Assist (2026-09-10)
 
-Model assistance is now the eighth single-frame edit tool; it is not a Batch algorithm. With no selection it creates a pending Model Output V1 Poly for classification. With a selected Box or Poly it replaces only that region's geometry and preserves its ID, class and attributes. The first positive/negative point or prompt box freezes the original frame ID, contiguous playback index, image digest, record digest and optional target identity. Candidate application rechecks all frozen identities and enters command history as one atomic create or replace operation.
+Model assistance is now the ninth single-frame edit tool, after Match in the eighth slot; it is not a Batch algorithm. With no selection it creates a pending Model Output V1 Poly for classification. With a selected Box or Poly it replaces only that region's geometry and preserves its ID, class and attributes. The first positive/negative point or prompt box freezes the original frame ID, contiguous playback index, image digest, record digest and optional target identity. Candidate application rechecks all frozen identities and enters command history as one atomic create or replace operation.
 
 `ModelAssistSession` owns prompt and candidate state. `ModelAssistService` owns asynchronous preflight, one external process, the bounded `model-assist-v1` JSONL exchange, deadlines, cancel/stale behavior and job cleanup; it has no Store write authority. Returned masks must be non-linked binary PNGs below the owned job directory with matching SHA-256, dimensions and ROI. Godot then requires one hole-free connected component, a simple V1 ring, no more than 2,048 vertices and raster round-trip IoU of at least 0.99 before exposing Apply. A terminal worker crash, malformed response or timeout transitions the matching request to a prompt-preserving Failed state with Retry/Cancel rather than leaving navigation blocked. A deterministic fake worker has exercised create, correction, candidate switching, retry, cancellation, stale-result refusal, atomic undo/redo, navigation blocking, save/reopen and shutdown behavior through the mounted Main UI.
 
-The tracked smoke driver separately verifies a user-provided official SAM 2 installation with `hello -> set_image -> predict -> shutdown` and emits an auditable report without overwriting an existing output directory. It uses only explicit `PROJECT6_MODEL_PYTHON`, `PROJECT6_SAM2_CONFIG`, `PROJECT6_SAM2_CHECKPOINT` and `PROJECT6_SAM2_DEVICE` inputs; the client never installs packages or downloads weights. On this host, read-only probes found no environment containing the complete official `sam2` package, package-owned config and checkpoint. Therefore **real SAM smoke: NOT RUN** and the visible real-model UI loop is also NOT RUN. Fake-worker PASS is implementation evidence only, not evidence that official SAM inference ran. The exact provisioning, smoke and manual UI procedure is in `docs/model-assist-acceptance.md`.
+The tracked smoke driver separately verifies a user-provided official SAM 2 installation with `hello -> set_image -> predict -> shutdown` and emits an auditable report without overwriting an existing output directory. It uses only explicit `PROJECT6_MODEL_PYTHON`, `PROJECT6_SAM2_CONFIG`, `PROJECT6_SAM2_CHECKPOINT` and `PROJECT6_SAM2_DEVICE` inputs; the client never installs packages or downloads weights.
 
-The fresh authoritative `tests/run_tests.sh` run passed **524 Python tests in 37.39 s** and all 24 log-audited Godot invocations with status 0. Those entries include the complete mounted suite, the standalone Model Assist service process test, delivery surface, editing, Batch/Poly propagation and Main boundaries. The aggregate emitted exactly the four intentional corrupt-PNG fixture pairs and ended with `PASS: complete Godot test suite`. The restricted-host editor probe emitted exactly two known local debug-listen socket failure pairs; its editor-only profile rejects missing, changed, extra or differently scoped errors. All other Godot profiles remained zero-error.
+On this host, **real SAM smoke: PASS** on both CPU and CUDA. The runs used the Conda `project6` interpreter, Meta's official SAM 2 repository at commit `2b90b9f5ceec907a1c18123530e92e794ad901a4`, official SAM 2.1 Tiny checkpoint SHA-256 `7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69`, and local surgical frame `Dataset_test/cholect50-challenge-val/videos/VID68/000016.png` (774×434). The historical CPU run completed in 9.665959 s and returned three binary, hash-checked candidates. The 2026-09-11 CUDA run used Python 3.10.0, Torch 2.11.0+cu128 and an NVIDIA GeForce RTX 5070 Ti Laptop GPU; model load took 2.416052 s, image embedding 0.324668 s and prediction 0.191926 s. It also returned three gated candidates and exited 0. The auditable reports remain local at `.local-acceptance/model-assist-real-20260910-cpu/report.json` and `.local-acceptance/model-assist-user-check-003/report.json`.
 
-Batch remains the independently verified `poly-sim-flow-edge-v1` similarity-gated optical-flow Poly propagation path described below. Model Assist does not replace or participate in Batch propagation.
+The CUDA smoke proves official single-frame SAM inference through the production worker protocol on the named GPU. It is not a SAM Video per-frame latency benchmark. Godot can load the configured runtime, but the complete **visible real-model UI checklist remains not formally recorded**. Neither smoke replaces human checks of create/correct/cancel/persistence behavior or establishes segmentation accuracy. Fake-worker PASS remains implementation evidence only. The exact provisioning, smoke and manual UI procedure is in `docs/model-assist-acceptance.md`.
+
+The earlier merged `tests/run_tests.sh` run passed **524 Python tests in 42.89 s** and all 24 then-registered, log-audited Godot invocations with status 0. It remains historical single-frame Model Assist evidence and is superseded for current aggregate counts by the Task 7 run below. The aggregate emitted exactly the four intentional corrupt-PNG fixture pairs and ended with `PASS: complete Godot test suite`. The restricted-host editor probe emitted exactly two known local debug-listen socket failure pairs; its editor-only profile rejects missing, changed, extra or differently scoped errors. All other Godot profiles remained zero-error. The captured historical merged-run log is `/tmp/project6-merged-full-tests-v7.log`.
+
+## SAM 2 Video Batch default (2026-09-11)
+
+The current implementation makes SAM 2 Video the Batch default and supersedes the former “Batch does not use SAM / Poly is default” decision. Single-frame Model Assist remains a separate Edit tool. `polygon_flow` / `poly-sim-flow-edge-v1` and fixed `copy` remain available only when explicitly selected; a SAM error never silently invokes either alternative.
+
+The default Batch path accepts exactly one committed Box/Poly region and an explicit anchor attestation, then follows Source order forward for 1–30 target entries. The keyframe is excluded. `SamVideoService` freezes the key plus targets, drives the official SAM 2 Video predictor through the bounded `sam-video-v1` JSONL protocol, and returns read-only transient candidates. Preview, cancellation, worker/model failure and stale results cannot change Store, history, review state, labels or training packages.
+
+A topology failure stops at the first inexpressible target and retains only the legal prefix. After confirming that prefix, the user can correct the stop frame with single-frame Model Assist, commit it, explicitly attest the new anchor and start a separate Batch. Protocol, path/hash, process or Source/Store/review/session inconsistency invalidates the entire plan rather than crossing the failure or falling back.
+
+Confirmation is region-scoped and atomic: one `ApplyPropagationCommand` updates/appends only the selected region ID, preserves other regions and non-geometric metadata, installs accepted review digests and one schema-v3 audit, and supports one-step undo/redo/save/reopen. The exact v3 fields are `schema_version,type,mode,provider_id,metric_id,keyframe,keyframe_playback_index,keyframe_digest,region_id,direction,requested_count,generated_count,start_frame,end_frame,affected_frames,target_playback_indices,stop_frame,stop_reason,checkpoint_sha256,device,model_version,elapsed_ms,risk_summary,created_at`. Model score, mask, prompt, embeddings, absolute paths and unbounded diagnostics never enter V1 regions or the audit.
+
+The four external settings are `PROJECT6_MODEL_PYTHON`, `PROJECT6_SAM2_CONFIG`, `PROJECT6_SAM2_CHECKPOINT` and `PROJECT6_SAM2_DEVICE=auto|cpu|cuda`. No package or checkpoint is installed/downloaded automatically. The evidence classes remain deliberately separate:
+
+- 自动协议/安全：**PASS**；
+- 真实 SAM Video 功能：**NOT RUN**；
+- 真实可见 UI：**NOT RUN**；
+- 真实精度结果（独立目标帧真值）：**NOT RUN**；
+- 人工效率结果（同范围配对计时）：**NOT RUN**；
+- CUDA 性能结果：**NOT RUN**。
+
+The prior single-image SAM 2.1 Tiny CPU smoke is evidence only for single-frame Model Assist. It is not SAM Video functional, quality, UI, efficiency or CUDA evidence. The checked-in SAM Video acceptance allowlist remains empty, so no surgical media was opened for this classification.
+
+Fresh final verification ran the repository-owned suite without changing its harness: **797 Python tests passed in 45.75 s**, followed by all **28** registered Godot invocations with status 0 and successful checked-log audits. A writable temporary XDG profile prevented unrelated user-settings write errors while retaining exactly the two expected headless-editor socket failure pairs. The aggregate emitted the intentional corrupt-PNG fixture diagnostics and ended with `PASS: complete Godot test suite`. Immediately afterward, the four specified Python SAM Video files passed **238 tests in 4.34 s**; the service, controller/read-only preview, exact-v3 command/persistence, and mounted Batch UI/re-anchor Godot gates each exited 0 and passed the repository `none` log profile. The final acceptance hardening additionally rejects excessive JSON nesting, equality-compatible numeric type substitutions, malformed direct-run containers, and unbound environment/CUDA provenance before evidence aggregation.
+
+One-click training export remains paused at its pre-existing Task 4 review boundary. Its unresolved review issues were not repaired, upgraded or reclassified by the SAM Video Batch work.
 
 
-## Part 3.2 / 3.3 — similarity-gated Poly motion and edge refinement (2026-09-10)
+## Part 3.2 / 3.3 alternative — similarity-gated Poly motion and edge refinement (2026-09-10)
 
-The production default is now `poly-sim-flow-edge-v1`. A corrected keyframe is only the human anchor: each accepted target receives its own motion-propagated polygon, optionally refined against local image edges. The Batch panel exposes threshold, range, overwrite/merge, read-only preview, Apply, verification and auto-next. It reports similarity stops, flow-quality stops and per-frame edge accepted/raw-flow fallback counts. Fixed-coordinate COPY remains available as an explicit compatibility option and historical baseline; it is not the default described below.
+When explicitly selected, `poly-sim-flow-edge-v1` uses a corrected keyframe as the human anchor: each accepted target receives its own motion-propagated polygon, optionally refined against local image edges. The Batch panel exposes threshold, range, overwrite/merge, read-only preview, Apply, verification and auto-next. It reports similarity stops, flow-quality stops and per-frame edge accepted/raw-flow fallback counts. This remains reproducible alternative/baseline evidence; it is not the current default and is never a silent fallback from SAM. Fixed-coordinate COPY is a separate explicit compatibility option and historical baseline.
 
 ### Frozen-input algorithm and safety contract
 
@@ -332,7 +359,7 @@ The translation/reverse minimum final IoU is 0.999701; rotation minimum is 0.979
 
 Focused tests additionally cover default-threshold similarity refusal before flow, fixed-keyframe brightness drift, local evidence failure, occlusion/texture/area/anchor gates, topology and image-boundary refusal, cancellation, 32 MP/64 MiB/128 MiB budgets, stale snapshots, v2 marker persistence, overwrite/merge, exact preview commit and atomic undo/redo.
 
-The fresh scoped Python gate passed **113 tests in 8.50 s**. The fresh repository runner then passed **465 Python tests in 36.47 s** and all invoked Godot entries with status 0, including the complete mounted suite, the historical fixed-COPY Batch UI fixture, no-candidate behavior, provider contract, Poly command/integration/service/UI suites and the Main boundary suite. The deliberately corrupt PNG fixtures emitted expected decoder diagnostics; the aggregate suite still ended with `PASS: complete Godot test suite`.
+The feature-branch scoped Python gate passed **113 tests in 8.50 s**. Its pre-integration repository runner passed **465 Python tests in 36.47 s** and all invoked Godot entries with status 0, including the complete mounted suite, the historical fixed-COPY Batch UI fixture, no-candidate behavior, provider contract, Poly command/integration/service/UI suites and the Main boundary suite. The deliberately corrupt PNG fixtures emitted expected decoder diagnostics; the aggregate suite still ended with `PASS: complete Godot test suite`. The later merged authoritative result is the 524-test run recorded above.
 
 ### Endoscapes local qualitative path
 
@@ -340,7 +367,7 @@ The reproducible local fixture uses Endoscapes video 65, frames 11775–11875, k
 
 At threshold 0.02, the five-frame direct run produced only playback index 2 (original frame 11825), range `1..2`. Playback 0/original 11775 and playback 3/original 11850 stopped on local inconsistent/occluded evidence. The target GrabCut candidate contained a hole, so the production gate rejected it and kept the exact raw-flow mask. A separate 30-frame window again produced only original 11825, proving this example stops on local quality evidence rather than the 30-frame cap.
 
-The mounted 1280x800 Main acceptance selected Poly by default, displayed threshold 0.02, previewed the exact candidate, applied it once, undid/redid one atomic command, saved/reopened, retained the v2 marker, confirmed the target, auto-advanced and reopened again. The baseline `model_output_v1.jsonl` SHA-256 remained unchanged. The local preview screenshot and raw/final overlays were visually inspected.
+The historical pre-SAM mounted 1280x800 Main acceptance selected Poly under the then-current default, displayed threshold 0.02, previewed the exact candidate, applied it once, undid/redid one atomic command, saved/reopened, retained the v2 marker, confirmed the target, auto-advanced and reopened again. The baseline `model_output_v1.jsonl` SHA-256 remained unchanged. The local preview screenshot and raw/final overlays were visually inspected. This evidence belongs only to the explicitly selected Poly alternative and does not describe the current Batch default.
 
 Only keyframe 11800 has an instance mask; target frames have no independent dense truth. Consequently this is evidence for the real-data path, safe fallback, persistence and human inspectability—not target-frame IoU, general Endoscapes accuracy, universal refinement benefit, automatic verification or a measured reduction in labelling time. Endoscapes images, masks, absolute dataset paths and generated evidence remain ignored and untracked. Reproduction details are in `docs/endoscapes-poly-acceptance.md`.
 
@@ -363,15 +390,18 @@ while the production demo does not depend on `tests/` or an existing `sample/`.
 
 ### Functional evidence
 
+This initial-delivery record predates the strict 4.3 audit and repair. Fresh repair
+counts and the remaining large-input gate are listed in the current repair entry below.
+
 | Requirement | Observed result | Reproduction / evidence |
 |---|---|---|
 | 4.1 immutable baseline and restoration | Original baseline digest, final diff and accepted content survive save/reopen; V3 corrected records use `human_corrected`; legacy migration preserves exact prior bytes | `test_part4_repository.gd`, `test_part4_store_regression.gd`, `test_part4_optional_timestamps.gd`; demo `reopen_stable` |
 | 4.1 autosave and lifecycle | 300 ms idle scheduling, request before 2 s during continuous edits; one writer, queued latest revision, external-write refusal, failure/retry, session guards, Save/Discard/Cancel | `test_part4_autosave.gd`, `test_part4_save_deadline.gd`, `test_part4_save_wait_races.gd`, `test_part4_save_failures.gd`, `test_part4_lifecycle.gd` |
-| 4.2 exact final audit | Frames 12/13 geometry=2; frame24 label=1; frame36 added=1; frame72 deleted=1; frame90 track attributes=2; total6 changed frames/7 changed regions | `output/part4-protected-demo-20260908/evidence.json`, JSON/CSV reports in its training package |
+| 4.2 exact final audit | Frames 12/13 geometry=2; frame24 label=1; frame36 added=1; frame72 deleted=1; frame90 track attributes=2; total6 changed frames/7 changed regions | `test/part4/history/output/part4-protected-demo-20260908/evidence.json`, JSON/CSV reports in its training package |
 | 4.2 audit boundaries | ID reorder and numeric12/12.0 are equivalent; undo restores no diff; ID replacement becomes delete+add; simultaneous label/geometry events and class transfers counted; source/filled ignored | `test_part4_diff_edges.gd`, `test_part4_package_numbers.gd` |
 | 4.3 coverage | Verified training includes6/120 and excludes114; review export contains120 with actual explicit/verified status; verified unchanged/empty frames are eligible, unverified empties are excluded | Production demo; `test_part4_package.gd`, `test_part4_package_review_fixes.gd` |
-| 4.3 publication and interoperability | Hash/bytes/schema/coverage/review/audit/CSV validation; conflicting or damaged destination rejected; repeat content reuses package; UI and CLI artifacts byte-identical with the same package ID | `test_part4_parent_semantics.gd`; `output/part4-ui-cli-parity.json` |
-| 4.3 editor isolation | After a real editor rescan, training/review packages retain exactly six files and identical SHA values; independent validation, repeated export and raw PNG Source loading still pass | `output/part4-editor-isolation.json`, `test_output_import_guard.py` |
+| 4.3 publication and interoperability | Hash/bytes/schema/coverage/review/audit/CSV validation; conflicting or damaged destination rejected; repeat content reuses package; UI and CLI artifacts byte-identical with the same package ID | `test_part4_parent_semantics.gd`; `test/part4/history/output/part4-ui-cli-parity.json` |
+| 4.3 editor isolation | After a real editor rescan, training/review packages retain exactly six files and identical SHA values; independent validation, repeated export and raw PNG Source loading still pass | `test/part4/history/output/part4-editor-isolation.json`, `test_output_import_guard.py` |
 | 4.4 new model round | Complete120-frame return validated before archival and active replacement; exact old V3 retained; new baseline/current predictions activated; verification/batch/undo reset | Production demo; `test_part4_rounds.gd`, `test_part4_round_ui.gd` |
 | 4.4 failed preparation/commit | Wrong coverage, time, parent semantics, SHA or changed input leaves the old active file and UI intact; legacy binding preserves explicit coverage | Round backend/UI and parent semantic tests |
 | Part3 regression | Poly similarity/flow/edge proposal, exact preview commit, v2 marker, undo/redo, persistence, verification and successful-save-only auto-advance; legacy 40–59 COPY workflow retained | polygon focused suites, mounted Endoscapes UI acceptance, `test_batch_workflow.gd`, `test_batch_ui.gd` |
@@ -380,8 +410,8 @@ Fresh full Python regression: **337 passed**, no skips. The complete Godot test
 entry and independent polygon, image-region, advanced-edit, keyboard, brush,
 fill, checked-history, assignment-editing, vertex and batch entries pass. The
 additional **27 Part 4 behavioral suites** are recorded in
-`output/part4-gate-1788853027511915310/results.json`. The final integrated main
-run and logs are in `output/part4-main-acceptance-1788852895156475325/results.json`
+`test/part4/history/output/part4-gate-1788853027511915310/results.json`. The final integrated main
+run and logs are in `test/part4/history/output/part4-main-acceptance-1788852895156475325/results.json`
 (runtime commit `9c24ea8`). Numeric oracle tests compare
 **12,230 IEEE binary64 values** with Python, including subnormals, midpoint ties,
 long decimals,30fps timestamps and independent content/package digests. Nesting256
@@ -389,10 +419,10 @@ is accepted and257/510/511/512/600/10000 are rejected without VM stack errors.
 Deliberately corrupt PNG fixtures produce expected decoder diagnostics; script
 errors are not accepted as a passing gate.
 
-Visible captures were inspected at `output/part4-ui/main.png`,
-`output/part4-ui/export.png` and `output/part4-ui-round-6157154.png`. The exported
+Visible captures were inspected at `test/part4/history/output/part4-ui/main.png`,
+`test/part4/history/output/part4-ui/export.png` and `test/part4/history/output/part4-ui-round-6157154.png`. The exported
 Godot resource ZIP contains all three exact runtime feedback schemas; integrity
-record: `output/part4-export-resources.json`.
+record: `test/part4/history/output/part4-export-resources.json`.
 
 ### Crash and failure evidence
 
@@ -407,7 +437,7 @@ SIGKILL, independent Python validation and exact bytes recover:
 | Immediately before atomic replacement | Complete old V3 |
 | Immediately after atomic replacement | Complete new V3 |
 
-Raw record: `output/part4-crash-1788848841065271365/results.json`. This is a local
+Raw record: `test/part4/history/output/part4-crash-1788848841065271365/results.json`. This is a local
 filesystem/process-crash guarantee at the latest successful save, not a power-loss
 or multiwriter durability claim. Unsuccessful edits remain in memory until saved.
 V1/V2 migration, invalid payload serialization, stale external SHA, unwritable
@@ -424,6 +454,10 @@ preempted. Slow save and background-token tests also confirm progress callbacks
 and continued event processing.
 
 ### Response and resource measurements
+
+Historical measurements before the current Part 4.3 repair follow. They are retained
+for comparison and are not current large-input acceptance; the repair entry below
+records the two interrupted attempts and final resource preflight rejection.
 
 Host: AMD Ryzen9 7945HX, Ubuntu22.04, Godot4.7.2-stable. The headless input probe
 uses a producer thread every10ms, queues a timestamp, and dispatches an actual
@@ -445,9 +479,9 @@ These measurements are not a human interaction study.
 | Input response during diff/export |p95 **13.297ms**,max13.662ms,n76 |p95 **13.354ms**,max535.681ms,n7583 |
 | Whole-process peak RSS |not measured |4,969.47MiB (4.85GiB) |
 
-Raw measurements: `output/part4-performance-120-206788/results.json`,
-`output/part4-performance-10000-193951/results.json` and
-`output/part4-large-1788849574176695631.monitor.json`.
+Raw measurements: `test/part4/history/output/part4-performance-120-206788/results.json`,
+`test/part4/history/output/part4-performance-10000-193951/results.json` and
+`test/part4/history/output/part4-large-1788849574176695631.monitor.json`.
 Timing subtotals omit some serialization/hash/worker-message overhead, so they
 need not sum to the total. Snapshot counts and distributions are stated explicitly;
 the single large edit is not a statistical autosave-latency claim. The required
@@ -483,7 +517,7 @@ bound, not a large-file completion deadline.
    of this report guard. No old files were removed and no package allowlist was
    relaxed. A fresh protected demo, actual editor rescan, exact inventory/hash
    comparison, independent validation, repeat reuse and Source texture reads pass
-   in `output/part4-editor-isolation.json`. That rescan used the local marker added
+   in `test/part4/history/output/part4-editor-isolation.json`. That rescan used the local marker added
    during diagnosis; twelve isolated-project tests separately verify automatic
    marker creation, refusal boundaries and in-project JSON round archival.
    The engine's native fault was not
@@ -494,3 +528,317 @@ The separate Part2.2/2.3 human-review boundary is unchanged. Part4 establishes f
 handoff and independent round ingestion; model-team training, actual weight
 quality, automatic correction merging and real surgical-video accuracy are outside
 this acceptance.
+
+### Part 4.1 strict requirement recheck (2026-09-08)
+
+A fresh focused audit at runtime commit `33268e3` passed **19 acceptance groups**.
+This includes independent V1/V3 validation and exact saved/exported record
+comparison, actual sparse PNG Source → UI edit → timer save → reopen → export,
+actual window-close signals and Ctrl+S, the existing failure/lifecycle tests,
+unverified legacy full-data export, the 120-frame production demo, and four owned
+subprocess crash boundaries. It is not a rerun of the earlier 337-test full suite.
+The requirement-by-requirement report and complete logs are local at
+`test/part4_1/REPORT.md` and
+`test/part4_1/runs/20260908-162840-1788856120932484360/results.json`.
+
+V3 remains the session envelope; each corrected record and exported JSONL line
+conforms to Model Output V1 with `source: human_corrected`. Full-dataset export
+uses the all-frame review option; the default training package remains a verified
+subset. Process-crash recovery is limited to the latest successful local save.
+The audit corrected an observation-time race in an old autosave test, preserving
+its original source and failing diagnostics; no runtime code changed.
+
+New audit artifacts are explicitly marked TEST ONLY under `test/part4_1/`.
+The main workspace's historical Part 4 artifacts were relocated to
+`test/part4/history/output/`: 31 top-level entries, 1,438 files, every file's
+SHA-256 unchanged. `test/part4/history/path-map.json` resolves original paths
+without rewriting historical evidence or package contents. Current links above
+refer to their archived locations.
+
+### Part 4.2 strict requirement recheck (2026-09-08)
+
+At runtime commit `33268e3`, a fresh **8-group audit passed**, including **37
+independent Python package tests**. A handwritten sparse-frame oracle verified
+13 events, 11 distinct changed regions, all four required categories, optional
+attribute events, complete before/after values, and exact per-class accounting.
+CSV parsing independently recovered commas, quotes, newlines and Unicode labels.
+Undo removed all final differences; redo and save/reopen restored identical
+reports and package identity. Corrupt baselines and duplicate IDs were rejected.
+
+The production 120-frame demo matched the assignment fixture: geometry=2,
+label=1, added=1, deleted=1, attributes=2; 6 changed frames and 7 changed regions.
+The training report covered 6 verified frames and the full review report covered
+120 frames. A mounted Main/export workflow and CLI export of the same frozen
+snapshot produced identical artifact bytes and package IDs. This UI check was
+headless; it was not a new manual visual review.
+
+Evidence is explicitly TEST ONLY at `test/part4_2/REPORT.md` and
+`test/part4_2/runs/20260908-164605-1788857165221704472/results.json`.
+The initial failed test fixture is retained: its JSON-derived floating frame IDs
+were adapted to the internal review command's integer input before the passing
+rerun. No runtime product code changed.
+
+Part 4.2 passes for the current Part 4 UI/CLI package path with a trusted model
+baseline. Reports live beside corrected data within the same package's
+`reports/` and `data/` directories. Full audit requires the all-frame review
+option; training summaries describe only their verified subset. Legacy Plugin
+API V1 export remains a compatibility path without the full audit. Unknown
+baseline reviews explicitly mark the audit unavailable, not zero differences.
+
+
+### Historical Part 4.3 strict all-entrypoint recheck (2026-09-08, before repair)
+
+The following records the preserved pre-repair audit; the repair acceptance entry below supersedes its current-status claims.
+
+**The previous unqualified Part 4.3 PASS is superseded: strict acceptance is
+BLOCKED pending a retained legacy entrypoint fix.** Current V2 Export/CLI file
+handoff passes its functional checks. Fourteen diagnostic groups ran successfully,
+including 37 independent Python package tests, but the strict audit exits 1
+because a product defect was reproduced. Runtime code remains `33268e3` unchanged.
+
+`Main.export_handoff()` at main.gd:995 calls the V1 plugin synchronously. A real
+Main test with injected 2-second slow IO confirmed main-thread execution for
+2086.573 ms with zero event-loop ticks. The default V2 UI path ran the same delay on
+a worker and delivered 366 event-loop ticks over 2563.226 ms. The old callback remains wired;
+the current top-level Export button does not use it. The legacy two-file package
+also lacks the complete diff and is not a V2 handoff substitute.
+
+The audit also records a separate original-plan deviation: top-level manifest
+`created_at` is absent and rejected by the current schema. Assignment 4.3 itself
+does not explicitly require that field. No runtime fix or schema relaxation was
+made during this review. The existing sanitized round naming rule is now stated
+in the consumer protocol as well as the design document.
+
+Passed V2 evidence includes actual CLI demo, relocated receiver validation without
+Godot, repeat/reused handoff, independent integrity/semantic checks, failures after
+partial writing and before publication, cancellation/late completion, collision
+preservation, actual UI failure/retry, and UI/CLI artifact byte parity. Fresh
+120-frame x20-region measurement: export 668.719 ms, diff/export input response p95
+13.166 ms, maximum 13.531 ms across 103 probes. It used headless SceneTree
+input events; no new manual visual check or 10,000-frame rerun is claimed.
+
+All artifacts are explicitly TEST ONLY at `test/part4_3/REPORT.md` and
+`test/part4_3/runs/20260908-165907-1788857947587592708/results.json`.
+The runner distinguishes `tests_passed: true` from
+`strict_all_entrypoints_compliant: false`. Fix the old Main path and rerun the
+slow-IO/cancel/failure gates before restoring an unconditional 4.3 completion claim.
+
+Documentation regression: the old hard-coded Part4.3 PASS assertion was updated
+to require BLOCKED and the confirmed legacy entrypoint explanation. Its original
+source and failed log are preserved under test/part4_3/. The revised documentation
+suite passes 12 tests; this does not resolve the product defect or change the
+strict audit exit status.
+
+
+### Historical Part 4.3 repair acceptance (2026-09-08, before memory optimization)
+
+The old synchronous Main export and connected dialog are removed. UI and awaited
+Main.export_package share TrainingExportController, with captured session/revision/
+plugin, cancellation drainage and stale preview invalidation. Plugin API V1 remains
+available only as the lower-level compatibility path. New training/review manifests
+include strict UTC-second created_at; legacy omission and original creation times
+are preserved on validated reuse. Receivers must upgrade their validators first.
+
+At that retained historical gate, acceptance was **BLOCKED: 21/22 groups pass**. The only outstanding
+gate is a fresh 10,000-frame x20-region response measurement. Two real attempts
+stopped during initial V3 save at RSS 3864.9 / 4366.32 MiB when MemAvailable fell
+below 1 GiB; neither completed measurement is claimed. The final gate checks for
+6 GiB available before starting this workload (5 GiB child limit + 1 GiB headroom),
+and rejects insufficient resources with exit 1. No old large-input result is reused.
+
+Passed evidence: complete Godot suite (including V1 compatibility), Part3 batch
+workflow/UI, Part4.1 19 groups, Part4.2 8 groups, 37 package Python tests, 78 targeted
+reader tests, Godot writer/reader matrices and 12 documentation tests. Two-second
+slow IO advances the actual UI/programmatic main loop 343 / 342 times on worker
+execution. Cancel/late-publication/retry, sparse frames, optional time, full-precision
+JSON/CSV, independent Python validation and UI/CLI parity remain covered.
+
+Final 120x20 measurement (3 edited saves): snapshot p95 0.183 ms; autosave
+including debounce p95 826.723 ms; export preview/write/validation/publication
+205.855/0.786/247.675/0.117 ms; total 482.861 ms. Input p95 is
+13.264 ms during save and 13.333 ms during preview/export; RSS 170.57 MiB,
+no images loaded. This headless input-queue test does not claim new human visual
+acceptance. Artifact reads per validation are measured at 3 before / 1 after using
+strace. Source-order/duplicate checks, task-local schema reuse, immutable golden
+IDs and all five artifact bytes pass; only created_at differs in new manifests.
+
+TEST ONLY evidence and original failures are retained under
+`test/part4_3/repair/20260908-171751/`; see `test/part4_3/REPORT.md` and
+`gate3/results.json`. The strict runner now computes its status from assertions
+and returns nonzero for any failed necessary check. Completion remains conditional
+on the large current-run memory/response gate, not the repaired old entrypoint.
+
+
+### Part 4.3 memory optimization acceptance (fresh recheck 2026-09-10)
+
+**PASS.** Fresh strict gate: 22/22 groups, including Part4.1's 19 groups,
+Part4.2's 8 groups, full Godot/V1 compatibility, Part3 batch workflow/UI,
+independent Python package validation, creation-time compatibility, real
+UI/programmatic slow-IO/cancel/retry and frozen UI/CLI artifact parity.
+The approved memory implementation shares recursively immutable frames, removes
+validation-only Stores, incrementally hashes frames, writes 64 KiB chunks and
+streams artifacts sequentially. Full strict readback/equivalence/semantic checks
+and atomic publication remain. See `docs/part4-memory.md`.
+
+The merged runtime was rechecked after Match and Model Assist integration. All
+22/22 groups passed, including both response measurements, documentation tests
+and the final runtime-hash equality gate; no finding remained. Current TEST ONLY
+results are in `test/part4_3/runs/20260910-113953-1789011593508518888/results.json`.
+
+Same input, fresh completed prechange/optimized processes (VmHWM MiB):
+
+| Fixture | Before | After | Reduction | Five artifacts + package ID |
+|---|---:|---:|---:|---|
+| 120 × 20 | 157.445 | 130.344 | 17.21% | PASS |
+| 1,000 × 20 | 504.363 | 260.531 | 48.34% | PASS |
+| 3,000 × 20 | 1271.855 | 556.574 | 56.24% | PASS |
+
+Three new independent 10,000x20 processes completed under the **3072 MiB**
+RSS/HWM budget with **1024 MiB** minimum system headroom (4096 MiB preflight).
+Each large process performed an initial save and one edited save, preview and
+complete export; each save/export input measurement has thousands of events.
+
+| Run | Peak MiB | Edited save seconds | Export seconds | Save / export input p95 ms |
+|---|---:|---:|---:|---:|
+| 1 | 1606.969 | 40.183 | 40.902 | 13.376 / 13.364 |
+| 2 | 1607.148 | 39.981 | 41.060 | 13.369 / 13.375 |
+| 3 | 1606.875 | 40.457 | 40.961 | 13.419 / 13.359 |
+
+The three package IDs and five artifact hashes match exactly. Large save duration
+is one observation per process, not a statistical claim about save-time p95.
+Final standard120x20 measured 20 edited saves: autosave including debounce p95
+**785.209 ms**, peak **131.203 MiB**, save/export input p95
+**13.264/13.401 ms**. Short prepare observations are
+explicitly marked limited-sample; original save/export >10-event rules remain.
+
+1000-frame stress fixtures with 50% / 100% corrected frames peaked at
+276.391 / 310.992 MiB. A separate120-frame fixture with64 polygon vertices per
+region peaked at262.047 MiB and saved in p95 **6.535 s** (3 observations).
+That complex-geometry stress does not meet the standard-box 1-second target and
+is not claimed to do so; it passes memory, input-response and output-validation
+checks. Memory still scales with frames, geometry and changed data.
+
+Save-worker phases from large repeat2 (two saves, observed maxima):
+serialization4.233 s, buffered writes0.044 s, strict readback18.128 s,
+equivalence4.308 s, semantic validation9.229 s, atomic publish0.0085 s.
+These per-phase maxima need not come from the same save. Export phases and
+raw sample counts are retained in the monitors. Individual large-run input tail
+spikes remain (first run save555.682 ms, export306.133 ms); p95 compliance is
+not a maximum-latency guarantee. Headless input-queue evidence and automated
+Main interactions do not represent new human visual acceptance.
+
+Code review found and fixed a long-scalar first-chunk failure hang and malformed
+snapshot precondition errors. Their red logs remain; fresh first/middle-chunk
+failure cleanup,43 malformed cases,384 before/after codec parity cases and
+stream byte/hash/precision/cancellation tests pass. The measurement gate rejects
+runtime errors despite exit0, insufficient save/export events, missing/nonfinite
+metrics, wrong fixture identity and resource overruns.14 selftests and11
+independent probes passed; optimized component timings and approved harness
+hashes are independently required by final postvalidation.
+
+All evidence is TEST ONLY in `test/part4_3/memory/20260908-115729/`:
+`gate1/results.json`, `acceptance.json`, `paired_comparison.json`,
+`repeat2_10000/monitor.json`, `repeat3_10000/monitor.json`, `final120/monitor.json`,
+`review2/report.md` and `measurement_review/report.md`. Original failed large
+runs and backups remain under `test/part4_3/repair/20260908-171751/`.
+Lowering the limit alone would terminate the old workload earlier; the new
+completed measurements demonstrate reduced actual memory without removing
+strict validation or changing file contents.
+
+
+### Part 4.4 targeted repair acceptance (fresh recheck 2026-09-10)
+
+**PASS.** Fresh Part 4.4 gate: 10/10 groups. Shared-decoder regression:
+Part 4.3 22/22, including Part 4.1 (19 groups), Part 4.2 (8 groups), full Godot
+compatibility and both response benchmarks. Runtime hashes match the tested code.
+
+The post-integration rerun again passed 10/10 groups and consumed the fresh
+Part 4.3 22/22 gate above. Current TEST ONLY results are in
+`test/part4_4/runs/20260910-114553/results.json`.
+
+Returned manifests and JSONL now reject malformed UTF-8 before JSON parsing or
+candidate creation. Actual CLI checks cover eight malformed encoding variants,
+weights-only and unknown-field rejection, valid Chinese/literal U+FFFD, and an
+optional opaque weights reference. Six mounted Main malformed-input cases retain
+active bytes, source snapshot, Store/history, undo/redo and the current frame.
+
+Demo now shares Source's source_sha256 with the session, packages and return.
+Normal demo retains the full simulated loop. `demo --prepare-only` leaves a saved,
+reviewed round1 and its matching round2 return. Actual Main opens that workspace,
+edits/undoes/saves, reexports an identical parent package, previews and imports the
+provided return, verifies the exact archive/reset, and reopens round2. The original
+round UI test uses the public awaited export API and exits on prerequisite failure;
+the final gate has no SCRIPT ERROR. Deliberately malformed inputs produce expected
+Godot Unicode diagnostics before the application rejects them.
+
+The agreement links all three authoritative schemas, summarizes region fields and
+coverage/versioning, and has a rendered, inspected one-page PDF. The runbook gives
+an explicit fresh UI starting round and explains why the completed demo cannot
+reimport its own round2 return. Prior faulty demos and failed test records remain.
+
+New regression measurements: standard 120 x 20 with 20 edits, autosave p95
+785.911 ms; 10,000 x 20, peak RSS/HWM 1606.188 MiB, save/export input p95
+13.457/13.435 ms. Large save remains about 39 seconds and this run contains one
+measured large edit. These results preserve the earlier memory optimization;
+they are not claims of real training or a human usability study.
+
+TEST ONLY evidence: `test/part4_4/repair/20260909-002956/`, especially
+`gate44/results.json`, `regression43/results.json`, `encoding/supplemental-result.json`
+and `final-review.md`. Original blocked audit: `test/part4_4/runs/20260908-220116/`.
+The original status/report and all failed fixtures are retained; see the current
+`test/part4_4/REPORT.md` for requirement-level acceptance and replay commands.
+
+### Poly motion propagation baseline (2026-09-09)
+
+The batch UI now offers **Poly 轮廓运动**. OpenCV DIS flow carries an internal
+mask through actual image frames and produces a distinct editable polygon for
+each target. Fixed-anchor and local evidence checks stop unreliable directions.
+Only matching Poly IDs are merged; the manual key and other objects are retained.
+Candidates remain unverified. This is an implemented CPU baseline with synthetic
+acceptance evidence, not a claim of surgical-video accuracy or completed human
+usability acceptance. Usage and boundaries: [Poly propagation](docs/poly-propagation.md).
+
+Fresh independent-truth measurements on AMD Ryzen 9 7945HX, Python 3.14.7,
+OpenCV 4.14.0 and NumPy 2.5.2, at 224 × 192 pixels (seed 27):
+
+| Scene | Accepted / all target frames | Fixed-copy mean mask IoU | Poly mean mask IoU | Poly minimum IoU | Engine time |
+|---|---:|---:|---:|---:|---:|
+| Translation | 6 / 6 | 0.523605 | 0.999850 | 0.999701 | 0.234 s |
+| Reverse translation | 6 / 6 | 0.523605 | 0.999850 | 0.999701 | 0.179 s |
+| Rotation | 3 / 3 | 0.753467 | 0.985876 | 0.979701 | 0.095 s |
+| Local bend | 3 / 3 | 0.677299 | 0.991753 | 0.988085 | 0.110 s |
+
+Every requested non-key target is included; no rejected frame is omitted from
+these comparisons. Truth comes from known rendering transforms rather than the
+estimated flow. Timings include PNG validation and propagation, exclude fixture
+generation and process startup, and are single local observations. Detailed
+frame values: `tmp/poly-benchmark-verified.json`. Reproduce with
+`.venv/bin/python tests/python/polygon_benchmark.py --output tmp/poly-benchmark.json`.
+
+| Requirement | Fresh evidence |
+|---|---|
+| Image-driven motion and concavity | 62 Python engine/CLI tests; translation in both directions, rotation, bend, static shape and original-coordinate restoration |
+| Conservative reliability and V1 geometry | Weak texture, disappearance, occlusion, scene cut, holes, components, boundary contact, invalid rings, anchor drift and 2048-point candidate cap |
+| Bounded Source processing | Real Godot service tests: 30-frame cap, original-ID gap, verified barrier, dimension change, unreadable image, stale mapping, timeout, malformed worker result and cancellation |
+| Exact preview and atomic history | Distinct moving polygons, key/other-object preservation, same preview on commit, one undo/redo, stale key/target/review rejection |
+| Save and review | Mounted headless Main: select Poly, preview, apply, save, reopen exact geometry and audit, manually verify, reopen verification |
+| Compatibility | Complete core Godot suite, original batch workflow/UI, polygon geometry and Lasso vertex editing PASS; full Python suite **399 passed in 35.07 s** |
+| Independent review | `tmp/poly-code-review.md`; no remaining Critical/Important finding. Output cap and post-cancel PID lookup issues were reproduced and corrected |
+
+Consolidated run records and tested runtime hashes: `tmp/poly-acceptance.json`.
+
+The core Godot suite emits expected decode diagnostics for deliberate corrupt-PNG
+fixtures and exits 0 with its PASS marker. New Poly gates have no runtime errors.
+The full Python run loads `project_env.sh` and first generates the existing Godot
+V3 interoperability fixture; `tests/run_tests.sh` now includes that prerequisite
+and all four new Poly gates. Its dependency-layout check excludes the existing
+ignored `/test/` archive directory, preserving older benchmark project copies.
+No baseline data or unrelated Part4 changes were removed.
+
+The 0.65 quality score is not a calibrated probability. These scenes have strong
+texture, modest motion and a clear foreground. Real surgical video, human edit
+time, crowded targets, difficult lighting and false-acceptance rates are unmeasured.
+The Main controls and layout bounds passed headless checks. A fresh visible
+X11/GL Compatibility capture also verified the delivered Poly preview and the
+seven-tool surface; that scripted capture still does not count as human visual
+acceptance, which remains pending.

@@ -21,12 +21,23 @@ exports/
 autosave/
 build/
 dist/
+/tmp/
+/plans/
+/交付/
+/导出/
 *.tmp
 *.temp
 *.log
 *.import
 icon.svg.import
 docs/000*.png
+
+# Keep internal planning/design notes locally; publish only reviewer-facing docs.
+/docs/*-plan.md
+/docs/*-implementation-plan.md
+/docs/model-assist-poly-edge-design.md
+/docs/source-pipeline-refactor.md
+/docs/Part4_Agreement.pdf
 
 # Private local configuration and credentials must never be submitted.
 .env
@@ -65,5 +76,4 @@ docs/superpowers/
 # Output artifacts and tests are kept locally, outside the published repository.
 /output/
 /test/
-/tests/
 /.local-acceptance/

@@ -25,7 +25,8 @@ var _right := -1
 var _left_stop := ""
 var _right_stop := ""
 var _direction := -1
-var _threshold := 0.02
+var _threshold := 0.10
+var _frame_step := 1
 var _pid := -1
 var _job_dir := ""
 var _job_parent := ""
@@ -33,7 +34,7 @@ var _started := 0
 var _message := ""
 var _retired: Array = []
 
-func begin(source: Variant, store: Variant, entries: Array, key: int, similarity_threshold: float = 0.02) -> PackedStringArray:
+func begin(source: Variant, store: Variant, entries: Array, key: int, similarity_threshold: float = 0.10, expected_frame_step: int = -1) -> PackedStringArray:
 	cancel()
 	if source == null or store == null or key < 0 or key >= entries.size() or not is_finite(similarity_threshold) or similarity_threshold <= 0.0 or similarity_threshold > 1.0:
 		return PackedStringArray(["Select a source frame with polygon annotations"])
@@ -61,6 +62,11 @@ func begin(source: Variant, store: Variant, entries: Array, key: int, similarity
 	_left = key - 1
 	_right = key + 1
 	_threshold = similarity_threshold
+	var source_frame_step := _sampling_step(source)
+	_frame_step = source_frame_step if expected_frame_step < 0 else expected_frame_step
+	if _frame_step < 1 or _frame_step != source_frame_step:
+		cancel()
+		return PackedStringArray(["Source frame_step must be a matching positive integer"])
 	_started = Time.get_ticks_msec()
 	_message = "正在准备参考帧"
 	running = true
@@ -111,7 +117,7 @@ func step() -> void:
 	var reason := ""
 	if index < 0 or index >= _entries.size():
 		reason = "source boundary"
-	elif int(_entries[index].frame_id) - int(_entries[index - _direction].frame_id) != _direction:
+	elif int(_entries[index].frame_id) - int(_entries[index - _direction].frame_id) != _direction * _frame_step:
 		reason = "missing original frame ID"
 	elif _store.is_verified(int(_entries[index].frame_id)):
 		reason = "verified frame protected"
@@ -210,8 +216,9 @@ func _launch() -> void:
 	if file == null:
 		_fail("Could not write Poly request")
 		return
-	file.store_string(JSON.stringify({"schema_version": 2, "key_index": _key,
-		"similarity_threshold": _threshold, "frames": _frames, "regions": _regions}))
+	file.store_string(JSON.stringify({"schema_version": 3, "key_index": _key,
+		"similarity_threshold": _threshold, "frame_step": _frame_step,
+		"frames": _frames, "regions": _regions}))
 	file.close()
 	_pid = OS.create_process(ProjectSettings.globalize_path(python_path), PackedStringArray([
 		ProjectSettings.globalize_path(cli_path), "--request", _job_dir.path_join("request.json"),
@@ -224,13 +231,13 @@ func _launch() -> void:
 
 func _accept(payload: Dictionary) -> PackedStringArray:
 	var invalid := PackedStringArray(["Poly worker returned an invalid or stale candidate"])
-	var fields := ["schema_version", "success", "cancelled", "metric_id", "threshold", "key_index", "start_index", "end_index", "left_stop", "right_stop", "proposals"]
+	var fields := ["schema_version", "success", "cancelled", "metric_id", "threshold", "frame_step", "key_index", "start_index", "end_index", "left_stop", "right_stop", "proposals"]
 	if payload.size() != fields.size():
 		return invalid
 	for field: String in fields:
 		if not payload.has(field):
 			return invalid
-	if payload.schema_version != 2 or payload.success != true or payload.cancelled != false or payload.metric_id != METRIC_ID or payload.threshold != _threshold or payload.key_index != _key:
+	if payload.schema_version != 3 or payload.success != true or payload.cancelled != false or payload.metric_id != METRIC_ID or payload.threshold != _threshold or payload.frame_step != _frame_step or payload.key_index != _key:
 		return invalid
 	if not _integer(payload.start_index) or not _integer(payload.end_index) or not payload.proposals is Array or not payload.left_stop is String or not payload.right_stop is String or payload.left_stop.is_empty() or payload.right_stop.is_empty() or payload.left_stop.length() > 512 or payload.right_stop.length() > 512:
 		return invalid
@@ -277,7 +284,8 @@ func _accept(payload: Dictionary) -> PackedStringArray:
 		proposals[int(proposal.frame_id)] = proposal.regions.duplicate(true)
 		quality[int(proposal.frame_id)] = proposal.quality.duplicate(true)
 	result = {"strategy": "polygon_flow", "key_index": _key, "start_index": first, "end_index": last,
-		"metric_id": METRIC_ID, "threshold": _threshold, "max_frames": MAX_FRAMES,
+		"metric_id": METRIC_ID, "threshold": _threshold, "frame_step": _frame_step,
+		"max_frames": MAX_FRAMES,
 		"left_stop": _left_stop if payload.left_stop == "source boundary" else payload.left_stop,
 		"right_stop": _right_stop if payload.right_stop == "source boundary" else payload.right_stop,
 		"target_regions": proposals, "quality": quality, "errors": PackedStringArray()}
@@ -286,23 +294,38 @@ func _accept(payload: Dictionary) -> PackedStringArray:
 func _integer(value: Variant) -> bool:
 	return (typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT) and is_finite(float(value)) and float(value) == floorf(float(value))
 
+static func _sampling_step(source: Variant) -> int:
+	if source != null and source.has_method("get_manifest"):
+		var value: Variant = source.get_manifest().get("frame_step", 1)
+		if (typeof(value) != TYPE_INT and typeof(value) != TYPE_FLOAT) or not is_finite(float(value)) or float(value) != floorf(float(value)):
+			return -1
+		return int(value)
+	return 1
+
 func _valid_quality(value: Variant) -> bool:
 	if not value is Dictionary:
 		return false
 	var fields := ["appearance", "fb_consistency", "support", "texture", "texture_std",
 		"largest_unsupported_fraction", "area_ratio", "anchor_area_ratio", "anchor_iou",
 		"anchor_quality", "adjacent_mad", "keyframe_mad", "raw_flow", "edge", "score"]
+	fields.append_array(["propagation_mode", "fallback_reason"])
 	if value.size() != fields.size():
 		return false
 	for field: String in fields:
 		if not value.has(field):
 			return false
 	for field: String in fields:
-		if field in ["raw_flow", "edge"]:
+		if field in ["raw_flow", "edge", "propagation_mode", "fallback_reason"]:
 			continue
 		if not _finite_nonnegative(value[field]):
 			return false
-	if float(value.adjacent_mad) >= _threshold or float(value.keyframe_mad) >= _threshold or float(value.score) < 0.65:
+	if value.propagation_mode not in ["flow", "bright-template fallback", "fixed fallback"] or not value.fallback_reason is String or value.fallback_reason.length() > 160:
+		return false
+	if value.propagation_mode == "flow" and (not value.fallback_reason.is_empty() or float(value.score) < 0.25):
+		return false
+	if value.propagation_mode != "flow" and value.fallback_reason.is_empty():
+		return false
+	if float(value.adjacent_mad) >= _threshold or float(value.keyframe_mad) >= _threshold:
 		return false
 	var raw: Variant = value.raw_flow
 	var raw_fields := ["appearance", "fb_consistency", "support", "texture", "texture_std",
