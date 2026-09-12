@@ -1,3 +1,13 @@
+# 帧间相似度度量与连续区间判定工具。
+#
+# 用途:提供版本化度量 gray64-area-mad-v1(两幅图缩放到 64×64 灰度后的
+# 归一化平均绝对差),以及基于该度量的传播门禁(similarity_gate:相邻帧与
+# 固定关键帧的距离都必须低于阈值)和连续帧段求解(contiguous_run)。
+#
+# 角色与协作:polygon_propagation 用 similarity_gate 做传播前的相似度门禁,
+# frame_source 与 sample 用 normalized_mad 判断近似重复帧,
+# run_endoscapes_poly_acceptance 复用门禁做验收;与 polygon_flow 解耦——
+# 先由本模块确认画面足够相似,才开始计算光流。
 """Frame similarity and contiguous-range helpers."""
 
 import math
@@ -7,6 +17,13 @@ import cv2
 import numpy as np
 
 
+# 计算两幅图像的 gray64-area-mad-v1 距离(值越小越相似)。
+# 参数 left/right:待比较的 uint8 ndarray 图像,两者通道数必须一致。
+# 算法:各自缩放到 64×64 并转灰度(float32),逐像素绝对差的均值除以 255
+# 归一化,再截断到 [0,1]。
+# 返回:float 距离;0.0 表示缩放后逐像素相同。
+# 异常:输入不是合法 uint8 图像(见 _validate_image),或两者通道数不一致
+#      时抛 TypeError/ValueError。
 def gray64_area_mad(left: np.ndarray, right: np.ndarray) -> float:
     """Return gray64-area-mad-v1 for two uint8 images."""
     _validate_image(left, "left")
@@ -20,11 +37,18 @@ def gray64_area_mad(left: np.ndarray, right: np.ndarray) -> float:
     return float(np.clip(difference, 0.0, 1.0))
 
 
+# 兼容别名:与 gray64_area_mad 完全等价,供沿用旧名称的调用方使用。
 def normalized_mad(left: np.ndarray, right: np.ndarray) -> float:
     """Compatibility name for the versioned gray64 metric."""
     return gray64_area_mad(left, right)
 
 
+# 传播门禁:target 必须同时「足够像上一帧」且「足够像固定关键帧」。
+# 参数 previous/target/keyframe:同源的三幅 uint8 图像(上一帧、目标帧、
+#      固定关键帧);threshold:0..1 的相似度阈值,严格小于才算通过。
+# 返回:{"accepted": bool, "adjacent_mad": float, "keyframe_mad": float}。
+# 异常:threshold 不合法时抛 TypeError/ValueError(见 _validate_score);
+#      图像不合法时由 gray64_area_mad 抛错。
 def similarity_gate(
     previous: np.ndarray,
     target: np.ndarray,
@@ -42,6 +66,14 @@ def similarity_gate(
     }
 
 
+# 求「与关键帧连通」的连续帧号闭区间 [start, end]。
+# 参数 scores:scores[i] 表示帧 i 到帧 i+1 的转移距离(共 len(scores) 个);
+#      keyframe:关键帧帧号,合法取值 0..len(scores);threshold:判定阈值,
+#      默认 0.02。
+# 返回:(start, end):从 keyframe 出发向两侧扩展,只要相邻转移距离严格
+#      小于 threshold 就继续延伸,返回含 keyframe 的闭区间端点。
+# 异常:scores 不是 list、keyframe 不是 int、keyframe 越界、threshold 或
+#      任一分数不合法时抛 TypeError/ValueError。
 def contiguous_run(
     scores: list[float],
     keyframe: int,
@@ -70,6 +102,8 @@ def contiguous_run(
     return start, end
 
 
+# 内部校验:image 必须是非空的 ndarray uint8 2D 灰度图或 1/3/4 通道 3D 彩图,
+# 否则抛 TypeError(类型不符)或 ValueError(空/形状不符)。
 def _validate_image(image: object, name: str) -> None:
     if not isinstance(image, np.ndarray):
         raise TypeError(f"{name} must be a numpy array")
@@ -83,10 +117,13 @@ def _validate_image(image: object, name: str) -> None:
         raise TypeError(f"{name} must use uint8 pixels")
 
 
+# 返回通道数:2D 灰度图视为 1,3D 图取第三维长度。
 def _channel_count(image: np.ndarray) -> int:
     return 1 if image.ndim == 2 else int(image.shape[2])
 
 
+# 统一转成 64×64 float32 单通道灰度:先 INTER_AREA 面积缩放,再按原通道数
+# 处理(灰度/单通道直接取用,3 通道按 BGR,4 通道按 BGRA 转灰度)。
 def _to_gray(image: np.ndarray) -> np.ndarray:
     resized = cv2.resize(image, (64, 64), interpolation=cv2.INTER_AREA)
     if image.ndim == 2 or image.shape[2] == 1:
@@ -98,6 +135,8 @@ def _to_gray(image: np.ndarray) -> np.ndarray:
     return gray.astype(np.float32)
 
 
+# 内部校验:分数必须是有限实数(显式排除 bool)且落在 [0,1],否则抛
+# TypeError(类型不符)或 ValueError(非有限或越界)。
 def _validate_score(value: object, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, Real):
         raise TypeError(f"{name} must be a finite number")

@@ -21,6 +21,7 @@ var _explicit_frames: Dictionary = {}
 var _baseline_digest := ""
 var _snapshot_baseline_digest := ""
 var _frame_order: Array = []
+var _sam_auto_review_scope: Dictionary = {}
 
 
 func load_model_records(records: Variant) -> PackedStringArray:
@@ -73,6 +74,7 @@ func load_model_records(records: Variant) -> PackedStringArray:
 	_dirty_frames.clear()
 	_batch_operations.clear()
 	_review_state.clear()
+	_sam_auto_review_scope.clear()
 	return errors
 
 
@@ -116,6 +118,84 @@ func replace_corrected_record(frame: int, record: Variant) -> PackedStringArray:
 	_revision += 1
 	corrected_records_replaced.emit(PackedInt64Array([frame]))
 	return errors
+
+
+## 仅当精确的 SAM v3 批次仍存在时，人工修改才可继承该批次的自动审核语义。
+## 该范围不进入会话文件；重开 Source 后自然失效。
+func begin_sam_auto_review_scope(operation: Variant) -> PackedStringArray:
+	var errors := PackedStringArray()
+	if not operation is Dictionary or _batch_operations.is_empty() or _batch_operations[-1] != operation:
+		return PackedStringArray(["SAM auto-review scope must bind the latest exact batch operation"])
+	if operation.get("schema_version") != 3 or operation.get("provider_id") != "sam_video":
+		return PackedStringArray(["SAM auto-review scope requires one SAM v3 operation"])
+	var affected: Variant = operation.get("affected_frames")
+	if not affected is Array or affected.is_empty():
+		return PackedStringArray(["SAM auto-review scope requires generated frames"])
+	var frames := {}
+	for value: Variant in affected:
+		if typeof(value) != TYPE_INT or frames.has(value) or not _corrected_records.has(int(value)):
+			errors.append("SAM auto-review scope has an invalid generated frame")
+		else:
+			frames[int(value)] = true
+	if not errors.is_empty():
+		return errors
+	_sam_auto_review_scope = {
+		"operation_index": _batch_operations.size() - 1,
+		"operation": _immutable_copy(operation),
+		"frames": frames,
+	}
+	return errors
+
+
+func clear_sam_auto_review_scope() -> void:
+	_sam_auto_review_scope.clear()
+
+
+func sam_auto_review_enabled(frame: int) -> bool:
+	if _sam_auto_review_scope.is_empty():
+		return false
+	var index: int = int(_sam_auto_review_scope.get("operation_index", -1))
+	if index < 0 or index >= _batch_operations.size() \
+			or _batch_operations[index] != _sam_auto_review_scope.get("operation"):
+		_sam_auto_review_scope.clear()
+		return false
+	return bool(_sam_auto_review_scope.get("frames", {}).get(frame, false))
+
+
+## 一次安装单帧记录与审核摘要，供编辑命令实现同一步撤销/重做。
+func replace_corrected_record_with_review_state(
+	frame: int,
+	record: Variant,
+	expected_review_state: Dictionary,
+	next_review_state: Dictionary,
+	expected_batch_operations: Array,
+) -> PackedStringArray:
+	if _review_state != expected_review_state:
+		return PackedStringArray(["reviewed edit: review state changed"])
+	if _batch_operations != expected_batch_operations:
+		return PackedStringArray(["reviewed edit: batch history changed"])
+	var expected_other := expected_review_state.duplicate(true)
+	var next_other := next_review_state.duplicate(true)
+	expected_other.erase(str(frame))
+	next_other.erase(str(frame))
+	if expected_other != next_other:
+		return PackedStringArray(["reviewed edit: may only update the edited frame review"])
+	var errors := _validate_replacement(frame, record)
+	if not errors.is_empty():
+		return errors
+	var candidate_records := _corrected_records.duplicate()
+	candidate_records[frame] = _immutable_copy(record)
+	errors.append_array(validate_workflow_state(
+		next_review_state, _batch_operations, candidate_records, _session.get("frame_entries")))
+	if not errors.is_empty():
+		return errors
+	_install_corrected_records_with_reviews(
+		candidate_records, next_review_state.duplicate(true), _batch_operations.duplicate(true), [frame])
+	return errors
+
+
+func record_value_digest(record: Dictionary) -> String:
+	return _record_digest_value(record)
 
 
 func replace_corrected_records(replacements: Dictionary, operation: Dictionary = {}) -> PackedStringArray:
@@ -410,6 +490,8 @@ static func _normalize_sam_operations(operations: Array) -> Array:
 		if operation.get("schema_version") != 3: continue
 		for field: String in ["schema_version", "keyframe", "keyframe_playback_index", "requested_count", "generated_count", "start_frame", "end_frame", "elapsed_ms"]:
 			operation[field] = int(operation[field])
+		operation["minimum_score"] = float(operation.get("minimum_score", 0.5))
+		operation["maximum_area_change_percent"] = float(operation.get("maximum_area_change_percent", 0.0))
 		if operation.stop_frame != null: operation.stop_frame = int(operation.stop_frame)
 		for field: String in ["affected_frames", "target_playback_indices"]:
 			for index in range(operation[field].size()): operation[field][index] = int(operation[field][index])
@@ -528,13 +610,18 @@ static func _validate_batch_operation(operation: Variant, frames: Dictionary, di
 static func _validate_sam_video_operation(operation: Dictionary, frames: Dictionary, digest_pattern: RegEx, frame_entries: Variant) -> PackedStringArray:
 	var fields := ["schema_version", "type", "mode", "provider_id", "metric_id", "keyframe",
 		"keyframe_playback_index", "keyframe_digest", "region_id", "direction", "requested_count", "generated_count",
+		"minimum_score", "maximum_area_change_percent",
 		"start_frame", "end_frame", "affected_frames", "target_playback_indices", "stop_frame", "stop_reason",
 		"checkpoint_sha256", "device", "model_version", "elapsed_ms", "risk_summary", "created_at"]
 	var errors := PackedStringArray()
 	for field: Variant in operation:
 		if field not in fields: errors.append("SAM audit: unexpected field %s" % str(field))
 	for field: String in fields:
+		if field in ["minimum_score", "maximum_area_change_percent"]:
+			continue
 		if not operation.has(field): errors.append("SAM audit.%s: required" % field)
+	if operation.has("minimum_score") != operation.has("maximum_area_change_percent"):
+		errors.append("SAM audit: quality threshold fields must be present together")
 	if not errors.is_empty(): return errors
 	if operation.type != "range_propagate" or operation.mode != "merge" or operation.provider_id != "sam_video" or operation.metric_id != "sam-video-v1" or operation.direction != "forward":
 		errors.append("SAM audit: invalid type, mode, provider, metric or direction")
@@ -544,6 +631,12 @@ static func _validate_sam_video_operation(operation: Dictionary, frames: Diction
 	for field: String in ["keyframe_playback_index", "requested_count", "generated_count", "elapsed_ms"]:
 		if not _valid_frame_number(operation[field]) or float(operation[field]) > 9007199254740991.0:
 			errors.append("SAM audit.%s: expected bounded nonnegative integer" % field)
+	var minimum_score: Variant = operation.get("minimum_score", 0.5)
+	if typeof(minimum_score) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(minimum_score)) or float(minimum_score) < 0.5 or float(minimum_score) > 1.0:
+		errors.append("SAM audit.minimum_score: expected finite number in [0.5, 1]")
+	var maximum_area_change: Variant = operation.get("maximum_area_change_percent", 0.0)
+	if typeof(maximum_area_change) not in [TYPE_INT, TYPE_FLOAT] or not is_finite(float(maximum_area_change)) or float(maximum_area_change) < 0.0 or float(maximum_area_change) > 500.0:
+		errors.append("SAM audit.maximum_area_change_percent: expected finite number in [0, 500]")
 	if not _sam_audit_text(operation.region_id, 128): errors.append("SAM audit.region_id: invalid bounded identity")
 	var version_pattern := RegEx.new()
 	version_pattern.compile("^[A-Za-z0-9][A-Za-z0-9._+\\-]{0,63}\\z")
@@ -561,7 +654,7 @@ static func _validate_sam_video_operation(operation: Dictionary, frames: Diction
 		errors.append("SAM audit: expected target frame and playback arrays")
 	if not operation.risk_summary is Array or operation.risk_summary.size() > 30:
 		errors.append("SAM audit.risk_summary: expected at most 30 items")
-	if operation.stop_reason not in ["", "source_end", "verified_target", "model_topology", "user_range"]:
+	if operation.stop_reason not in ["", "source_end", "verified_target", "model_topology", "quality_threshold", "user_range"]:
 		errors.append("SAM audit.stop_reason: expected bounded stop category")
 	if not errors.is_empty(): return errors
 	var count := int(operation.generated_count)
@@ -586,7 +679,7 @@ static func _validate_sam_video_operation(operation: Dictionary, frames: Diction
 	elif operation.stop_reason == "source_end":
 		if operation.stop_frame != null or key_index + count != order.size()-1:
 			errors.append("SAM audit: Source end must follow the last accepted Source frame")
-	elif operation.stop_reason in ["verified_target", "model_topology", "user_range"]:
+	elif operation.stop_reason in ["verified_target", "model_topology", "quality_threshold", "user_range"]:
 		if key_index + count + 1 >= order.size() or not _valid_frame_number(operation.stop_frame) or operation.stop_frame != order[key_index + count + 1]:
 			errors.append("SAM audit: stop must name the first excluded Source frame")
 	else: errors.append("SAM audit: truncated request needs a stop category")

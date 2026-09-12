@@ -215,7 +215,23 @@ func shutdown() -> void:
 	_stop_preflight()
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_PREDELETE and (_preflight_pid > 0 or _pid > 0 or not _job_dir.is_empty()): shutdown()
+	if what != NOTIFICATION_PREDELETE:
+		return
+	# Godot invalidates a RefCounted script's self before PREDELETE, so calling
+	# one of this script's own methods here fails. Normal owners call shutdown();
+	# this inline path is the last-resort guarantee that no external Python lives
+	# past an unexpectedly released service reference.
+	for process_id: int in [_preflight_pid, _pid]:
+		if process_id > 0 and OS.is_process_running(process_id):
+			OS.kill(process_id)
+	if _preflight_stdio != null:
+		_preflight_stdio.close()
+	if _preflight_stderr != null:
+		_preflight_stderr.close()
+	if _stdio != null:
+		_stdio.close()
+	if _stderr != null:
+		_stderr.close()
 
 func _capture(index: int, local: int) -> String:
 	if not _entries[index] is Dictionary: return "Source entry is invalid"

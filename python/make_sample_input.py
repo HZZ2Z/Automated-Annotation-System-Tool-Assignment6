@@ -1,3 +1,11 @@
+# 合成标注样例(assignment_v1)生成脚本。
+#
+# 用途:生成一份确定性的合成标注样例工作区,作为评审/审核流程的标准输入;
+# 同一随机种子总是产出完全相同的样例,便于回归测试与评审复现。
+# 输入:命令行可选的 --output 与 --seed;输出:新的样例目录(已存在则拒绝
+# 覆盖),控制台打印生成路径与校验结果(错误信息走 stderr)。
+# 典型运行方式:
+#   .venv/bin/python python/make_sample_input.py
 """生成确定性合成标注样例的命令行入口。
 
 不传参时使用评审流程要求的标准输出目录和固定随机种子。图像渲染、
@@ -18,6 +26,9 @@ DEFAULT_OUTPUT = Path("sample/assignment_v1")
 DEFAULT_SEED = 6006
 
 
+# 参数 argv:测试可注入的参数序列,None 时读取真实命令行。
+# 返回:argparse.Namespace(output: Path, seed: int),缺省为
+#     DEFAULT_OUTPUT / DEFAULT_SEED;参数非法时 argparse 直接结束进程。
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """解析可选的输出目录和随机种子参数。
 
@@ -42,6 +53,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+# CLI 主流程:调用 generate_sample 生成样例,并把预期错误折叠为退出码。
+# 返回:0 成功;1 输出目录已存在(FileExistsError)或写盘/数据校验失败
+#     (OSError、ValueError);预期错误不暴露 traceback。
 def main(argv: Sequence[str] | None = None) -> int:
     """执行样例生成流程，成功返回 ``0``，已处理的错误返回 ``1``。
 
@@ -55,14 +69,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     args = parse_args(argv)
     try:
-        # 具体生成逻辑由专用模块实现，本入口只管理调用和错误映射。
         generate_sample(args.output, seed=args.seed)
     except FileExistsError:
-        # 已有目录不是可覆盖状态，统一转换为可预期的失败退出码。
         print(f"error: output directory already exists: {args.output}", file=sys.stderr)
         return 1
     except (OSError, ValueError) as error:
-        # 将写盘失败和数据校验失败作为可读的命令行错误输出。
         print(f"error: {error}", file=sys.stderr)
         return 1
 
@@ -72,5 +83,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    # 将 main() 的整数结果交给操作系统作为进程退出码。
     raise SystemExit(main())

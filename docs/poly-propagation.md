@@ -74,7 +74,7 @@ Store、审核与保存仍由现有链路拥有。候选不扩展 Model Output V
 
 ## 自动化与合成基准
 
-从仓库根执行：
+以下 `tests/` 命令属于完整本地开发工作区，按发布边界不随 GitHub 版本上传：
 
 ```bash
 source project_env.sh
@@ -115,4 +115,4 @@ bash tests/check_godot_log.sh /tmp/poly-ui.log
 
 2026-09-10 在阈值 `0.10` 重新运行五帧夹具，仍返回 playback 2（原帧 11825），候选范围 `1..2`；两侧随后因候选触及图像边界停止。另用真实 Video001 的当前 polygon 对 `29375 → 29400` 只读实测，v3 请求保留 `frame_step=25` 和真实帧号，返回 frame 29400 候选；坏光流孔洞被丢弃后采用 `bright-template fallback`。这些均是可运行性证据，不是目标帧真值精度。
 
-只有 keyframe 11800 有实例 mask，目标帧没有独立密集真值。因此 Endoscapes 结果只是实际数据路径和人工可审查性的定性证据，不能声称目标帧 IoU、普遍边缘提升或自动验证。图片、mask、绝对数据集路径、叠加图和验收产物均不进入 Git；详细复现边界见 [Endoscapes Poly 验收流程](endoscapes-poly-acceptance.md)。
+只有 keyframe 11800 有实例 mask，目标帧没有独立密集真值。因此 Endoscapes 结果只是实际数据路径和人工可审查性的定性证据，不能声称目标帧 IoU、普遍边缘提升或自动验证。图片、mask、绝对数据集路径、叠加图和验收产物均不进入 Git；详细复现边界见 [Endoscapes Poly 验收流程](Endoscapes%20真实数据源/endoscapes-poly-acceptance.md)。

@@ -25,6 +25,7 @@ dist/
 /plans/
 /交付/
 /导出/
+/历史内容/
 *.tmp
 *.temp
 *.log
@@ -76,4 +77,18 @@ docs/superpowers/
 # Output artifacts and tests are kept locally, outside the published repository.
 /output/
 /test/
+/tests/
+!/tests/
+/tests/**
+!/tests/.gitkeep
 /.local-acceptance/
+/python/model_assist_smoke.py
+/python/sam_video_smoke.py
+
+# Completed internal design/history stays local after the public docs reorganization.
+/docs/**/endoscapes-lazy-source-plan.md
+/docs/**/model-assist-poly-edge-design.md
+/docs/**/part4-development-plan.md
+/docs/**/*-implementation-plan.md
+/docs/**/source-pipeline-refactor.md
+/docs/**/workspace-label-storage-design.md

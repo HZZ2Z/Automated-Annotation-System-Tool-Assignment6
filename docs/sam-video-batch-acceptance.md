@@ -1,8 +1,10 @@
 # SAM 2 Video Batch 有界验收
 
-本页只记录单 region、向后传播的 SAM 2 Video Batch 证据。候选始终先进入临时预览；这里的 smoke 不写工作区标签，也不把模型分数当作 `conf` 或 verified。
+本页只记录单 region、向后传播的 SAM 2 Video Batch 证据。命令行 smoke 只产生临时 candidate，不写工作区标签，也不把模型分数当作 `conf` 或 verified。生产 UI 则使用单一“生成并保存标注”动作：候选仅在内部完成冻结与 V1 校验，通过后把合法前缀、审核摘要与 v3 日志作为一次原子历史写入。传播帧数保留在主设置；“高级设置”提供最低模型确定度与可选相邻面积变化门禁，二者只会收紧接受范围，不会降低不可配置的 V1/完整性门禁；实际采用的两个门槛及 `quality_threshold` 停止类别会写入严格 v3 audit，原始逐帧分数与 mask 仍不持久化。完成后 Batch 面板保持打开；“2 日志”默认折叠并复用普通段落的卡片、字体与颜色，展开后显示实际分析、校验、写入、保存与导航过程；没有结果时隐藏整张生成状态卡和 SAM 不适用的审核卡。
 
 ## 可执行入口
+
+以下 smoke、runner 和 allowlist 只保留在完整本地验收工作区，按发布边界不随 GitHub 版本上传；本页保留其合同和已记录结果，不把公开仓库描述成可直接复跑这些内部测试。
 
 - [SAM Video smoke](../python/sam_video_smoke.py)：`--frames DIR --mask PNG --count N --json-out PATH`
 - [验收 runner](../tests/acceptance/run_sam_video_acceptance.py)：只消费显式 case allowlist；可选 `--visible-ui-evidence ABSOLUTE_JSON`
@@ -48,7 +50,7 @@ Box 和 Poly 坐标接受 Model Output V1 的有限整数或浮点数，均在�
 
 PASS smoke 的环境必须且只能包含版本、CUDA 可用性、请求/实际 device、config/checkpoint 摘要这八个字段，并与验收器独立 preflight 和磁盘字节精确绑定；计时只接受有限非负浮点数。CUDA 字典同样使用固定三字段与精确类型，CPU 运行不得携带 CUDA 测量，畸形或旧版字段不能进入功能、质量或 CUDA PASS 聚合。JSON 嵌套超过有界深度时只生成受控 FAIL。
 
-可见 UI 输入必须是显式指定的绝对、普通、非链接 JSON 文件，schema 为 `project6-sam-video-visible-ui-v1`。它严格绑定一个 allowlisted `case_id`、Python/Torch/SAM 运行时版本、checkpoint SHA-256 和该 case 六次 smoke 的实际 `cpu|cuda` device；`checks` 必须且只能包含以下八项，且全部为 `PASS`：
+可见 UI 输入必须是显式指定的绝对、普通、非链接 JSON 文件，schema 为 `project6-sam-video-visible-ui-v1`。它严格绑定一个 allowlisted `case_id`、Python/Torch/SAM 运行时版本、checkpoint SHA-256 和该 case 六次 smoke 的实际 `cpu|cuda` device；`checks` 必须且只能包含以下八项，且全部为 `PASS`。为保持 v1 验收文件兼容，旧字段 `preview` 现指“保存后自动打开第一张结果帧”，`prefix_confirm` 现指“合法前缀自动保存并验证”，不再表示可见候选预览或第二次确认按钮：
 
 ```json
 {

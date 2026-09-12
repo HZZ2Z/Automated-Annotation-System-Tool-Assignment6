@@ -769,10 +769,11 @@ func _workspace_media_summary(
 	var count_suffix := label.find(" (")
 	if count_suffix > 0:
 		label = label.left(count_suffix)
-	return "%s: %d frames; imported %d regions, %d mask fallbacks, %d skipped" % [
+	return "%s: %d frames; imported %d regions, %d negative frames, %d mask fallbacks, %d skipped" % [
 		label,
 		frame_count,
 		int(statistics.get("imported_regions", 0)),
+		int(statistics.get("negative_frames", 0)),
 		int(statistics.get("box_fallbacks", 0)),
 		int(statistics.get("skipped_regions", 0)),
 	]
@@ -1937,7 +1938,8 @@ func _fail_sam_batch_preview_restore(message: String) -> PackedStringArray:
 	return PackedStringArray([message])
 
 
-## 重新锚定只传递 Source 身份；不传递 Video SAM 的 mask、prompt 或运行状态。
+## 停止帧修正只传递 Source 身份；不传递 Video SAM 的 mask、prompt 或运行状态。
+## Batch 是唯一 SAM 前端；这里回到普通编辑工具，修正后再由 Batch 重新锚定。
 func _begin_sam_reanchor(playback_index: int, frame_id: int, region_id: String) -> void:
 	if _batch_workflow != null:
 		_batch_workflow.cancel()
@@ -1947,7 +1949,8 @@ func _begin_sam_reanchor(playback_index: int, frame_id: int, region_id: String) 
 		return
 	var record: Dictionary = _store.get_corrected_record(frame_id)
 	_set_selected_region(region_id if not _find_region(record, region_id).is_empty() else "")
-	_on_tool_requested(&"model_assist")
+	_on_tool_requested(&"select")
+	_set_status("已跳到 SAM 停止帧；请用普通编辑工具修正标注，再返回 Batch 重新生成。")
 
 
 func _on_edit_state_changed(state: Dictionary) -> void:

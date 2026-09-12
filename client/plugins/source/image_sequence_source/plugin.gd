@@ -34,9 +34,17 @@ var _cache = CACHE_SCRIPT.new(12)
 
 func can_open(locator: String) -> bool:
 	var root := ProjectSettings.globalize_path(locator).simplify_path().trim_suffix("/")
+	if (
+		not DirAccess.dir_exists_absolute(root)
+		or not FileAccess.file_exists(root.path_join("manifest.json"))
+	):
+		return false
+	var value: Variant = EXACT_JSON.parse_string(
+		FileAccess.get_file_as_string(root.path_join("manifest.json")))
 	return (
-		DirAccess.dir_exists_absolute(root)
-		and FileAccess.file_exists(root.path_join("manifest.json"))
+		value is Dictionary
+		and not value.has("package_type")
+		and (value.has("dataset_id") or value.has("frames"))
 	)
 
 

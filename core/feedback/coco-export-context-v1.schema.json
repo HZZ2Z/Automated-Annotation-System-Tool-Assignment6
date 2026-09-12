@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "coco-export-context-v1.schema.json",
+  "title": "Project6 private COCO export context V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "package_type",
+    "saved_snapshot",
+    "source_descriptor",
+    "export_options",
+    "preparation_token"
+  ],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "package_type": {"const": "training_coco_v1"},
+    "saved_snapshot": {"$ref": "media-label-v3.schema.json"},
+    "source_descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "source_type",
+        "dataset_namespace",
+        "dataset_root",
+        "source_split",
+        "video_id",
+        "frames",
+        "metadata_files"
+      ],
+      "properties": {
+        "schema_version": {"type": "integer", "const": 1},
+        "source_type": {"const": "endoscapes_coco"},
+        "dataset_namespace": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "dataset_root": {"type": "string", "minLength": 1, "pattern": "^(?:/|[A-Za-z]:[\\\\/]).+"},
+        "source_split": {"enum": ["train", "val", "test"]},
+        "video_id": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+        "frames": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source_frame_id", "source_playback_index", "file_name", "source_path"],
+            "properties": {
+              "source_frame_id": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+              "source_playback_index": {"type": "integer", "minimum": 0},
+              "file_name": {
+                "type": "string",
+                "pattern": "^[^/\\\\]+\\.(?:[Jj][Pp][Ee]?[Gg]|[Pp][Nn][Gg])$"
+              },
+              "source_path": {"type": "string", "minLength": 1, "pattern": "^(?:/|[A-Za-z]:[\\\\/]).+"}
+            }
+          }
+        },
+        "metadata_files": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["role", "path"],
+            "properties": {
+              "role": {"enum": ["detection", "video", "ds"]},
+              "path": {"type": "string", "minLength": 1, "pattern": "^(?:/|[A-Za-z]:[\\\\/]).+"}
+            }
+          }
+        },
+        "import_bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source_frame_id",
+              "image_id",
+              "original_annotation_id",
+              "native_region_id",
+              "imported_region",
+              "fallback_reason"
+            ],
+            "properties": {
+              "source_frame_id": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+              "image_id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+              "original_annotation_id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+              "native_region_id": {"type": "string", "minLength": 1, "maxLength": 256},
+              "imported_region": {"$ref": "model_output_v1.schema.json#/$defs/region"},
+              "fallback_reason": {
+                "oneOf": [
+                  {"type": "string", "minLength": 1, "maxLength": 128},
+                  {"type": "null"}
+                ]
+              }
+            }
+          }
+        },
+        "import_issues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "source_frame_id",
+              "image_id",
+              "original_annotation_id",
+              "native_region_id",
+              "code",
+              "blocking"
+            ],
+            "properties": {
+              "source_frame_id": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
+              "image_id": {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+              "original_annotation_id": {
+                "oneOf": [
+                  {"type": "integer", "minimum": 1, "maximum": 9007199254740991},
+                  {"type": "null"}
+                ]
+              },
+              "native_region_id": {"type": "string", "maxLength": 256},
+              "code": {"type": "string", "minLength": 1, "maxLength": 128},
+              "blocking": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "export_options": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task", "segmentation_attested", "allow_box_only_fallback"],
+      "properties": {
+        "task": {"enum": ["detection", "instance_segmentation"]},
+        "selected_frame_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 0, "maximum": 9007199254740991}
+        },
+        "segmentation_attested": {"type": "boolean"},
+        "allow_box_only_fallback": {"type": "boolean"}
+      }
+    },
+    "preparation_token": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session_id", "saved_revision"],
+      "properties": {
+        "session_id": {"type": "string", "minLength": 1},
+        "saved_revision": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

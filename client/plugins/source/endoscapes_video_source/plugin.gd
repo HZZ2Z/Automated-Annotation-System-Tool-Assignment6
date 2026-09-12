@@ -13,6 +13,7 @@ var _manifest: Dictionary = {}
 var _frame_entries: Array[Dictionary] = []
 var _records: Array[Dictionary] = []
 var _import_statistics: Dictionary = {}
+var _export_metadata: Dictionary = {}
 var _cache = CACHE_SCRIPT.new(12)
 var _expected_size := Vector2i.ZERO
 
@@ -46,6 +47,7 @@ func open_with_token(locator: String, token: Variant) -> PackedStringArray:
 	_frame_entries.assign(prepared.frame_entries)
 	_records.assign(prepared.records)
 	_import_statistics = prepared.get("statistics", {}).duplicate(true)
+	_export_metadata = prepared.get("export_metadata", {}).duplicate(true)
 	_cache.clear()
 	_expected_size = Vector2i.ZERO
 	last_error = ""
@@ -119,6 +121,45 @@ func get_import_statistics() -> Dictionary:
 	return _import_statistics.duplicate(true)
 
 
+## Optional Source capability. The returned value contains no Object, Texture,
+## Store or cache reference and may be serialized for a background worker.
+func get_export_descriptor() -> Dictionary:
+	if _root.is_empty() or _split_root.is_empty() or _frame_entries.is_empty():
+		return {}
+	var frames: Array[Dictionary] = []
+	for index in range(_frame_entries.size()):
+		var entry: Dictionary = _frame_entries[index]
+		var file_name := String(entry.image_path)
+		frames.append({
+			"source_frame_id": int(entry.frame_id),
+			"source_playback_index": index,
+			"file_name": file_name,
+			"source_path": _split_root.path_join(file_name),
+		})
+	var metadata_files: Array[Dictionary] = []
+	for definition: Dictionary in [
+		{"role": "detection", "name": "annotation_coco.json"},
+		{"role": "video", "name": "annotation_coco_vid.json"},
+		{"role": "ds", "name": "annotation_ds_coco.json"},
+	]:
+		var path := _split_root.path_join(String(definition.name))
+		if FileAccess.file_exists(path) and not DATASET_SCRIPT.new()._path_is_link(path):
+			metadata_files.append({"role": definition.role, "path": path})
+	var descriptor := {
+		"schema_version": 1,
+		"source_type": "endoscapes_coco",
+		"dataset_namespace": "endoscapes2023",
+		"dataset_root": _root,
+		"source_split": _split,
+		"video_id": _video_id,
+		"frames": frames,
+		"metadata_files": metadata_files,
+		"import_bindings": _export_metadata.get("import_bindings", []).duplicate(true),
+		"import_issues": _export_metadata.get("import_issues", []).duplicate(true),
+	}
+	return descriptor.duplicate(true)
+
+
 func close() -> void:
 	_root = ""
 	_split_root = ""
@@ -128,6 +169,7 @@ func close() -> void:
 	_frame_entries.clear()
 	_records.clear()
 	_import_statistics.clear()
+	_export_metadata.clear()
 	_cache.clear()
 	_expected_size = Vector2i.ZERO
 	last_error = ""

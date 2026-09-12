@@ -17,7 +17,6 @@ const POLYGON_OPS := preload("res://client/domain/polygon_ops.gd")
 const MASK_REGION_OPS := preload("res://client/domain/mask_region_ops.gd")
 const EDIT_SESSION := preload("res://client/domain/edit_session.gd")
 const MODEL_ASSIST_SESSION := preload("res://client/domain/model_assist_session.gd")
-const MODEL_ASSIST_SERVICE := preload("res://client/services/model_assist_service.gd")
 const MODEL_ASSIST_CANDIDATE := preload("res://client/domain/model_assist_candidate.gd")
 const FILL_SOLVER := preload("res://client/domain/fill_region_solver.gd")
 const BRUSH_BUFFER := preload("res://client/domain/brush_stroke_buffer.gd")
@@ -38,7 +37,6 @@ const ERASER_OVERLAY_COLOR := Color("#a855f7")
 const TOOL_IDS: Array[StringName] = [
 	&"box", &"subtract", &"lasso", &"fill",
 	&"paint", &"eraser", &"select", &"match_region",
-	&"model_assist",
 ]
 const BRUSH_OPTION := {
 	"id": &"brush_radius", "label": "Brush radius", "kind": &"float_range",
@@ -58,10 +56,7 @@ const TOOL_DESCRIPTORS: Array[Dictionary] = [
 	{"id": &"eraser", "node_name": "Eraser", "label": "Eraser", "implemented": true, "tooltip": "Erase every region touched by the stroke; no selection needed", "icon_path": "res://client/ui/icons/tools/erase.svg", "options": [BRUSH_OPTION]},
 	{"id": &"select", "node_name": "Select", "label": "Selection", "implemented": true, "default": true, "tooltip": "Select, move, or resize a region", "icon_path": "res://client/ui/icons/tools/selection.svg"},
 	{"id": &"match_region", "node_name": "Match", "label": "Match", "implemented": true, "tooltip": "先点待修正区域，再点参考区域；同步 class / kind，间隙不超过 1 个图像像素时尝试合并", "icon_path": "res://client/ui/icons/tools/match_region.svg"},
-	{"id": &"model_assist", "node_name": "ModelAssist", "label": "Model Assist", "presentation_text": "Model\nAssist", "implemented": true, "tooltip": "Prompt SAM2 on the current frame; click +, Shift-click -, Ctrl-drag a box", "icon_path": "res://client/ui/icons/tools/model_assist.svg"},
 ]
-
-var model_assist_service_factory: Callable
 
 var _vertex_editor = VERTEX_EDITOR.new()
 var _matcher = MATCH_CONTROLLER.new()
@@ -179,8 +174,6 @@ func _fill_session_panel() -> Dictionary:
 
 
 func invoke(action_id: StringName, payload: Dictionary = {}) -> PackedStringArray:
-	if action_id in [&"model_apply", &"model_cancel", &"model_retry", &"model_previous_candidate", &"model_next_candidate", &"model_recheck"]:
-		return _invoke_model_action(action_id)
 	if action_id == &"confirm_fill_repair":
 		return _confirm_fill_repair()
 	if action_id == &"cancel_fill_repair":
@@ -322,18 +315,16 @@ func activate(context: Dictionary) -> PackedStringArray:
 			errors.append("context.request_class_assignment: expected a valid Callable with 1 argument(s)")
 	if not taxonomy_value is Dictionary:
 		errors.append("context.taxonomy: expected a Dictionary")
-	_model_service = model_assist_service_factory.call() if model_assist_service_factory.is_valid() else MODEL_ASSIST_SERVICE.new()
-	_validate_model_service(_model_service, errors)
 	if not errors.is_empty():
-		_shutdown_model_service(_model_service)
-		_model_service = null
 		_report_errors(errors)
 		return errors
+	# Single-frame Model Assist is no longer mounted by the Edit frontend. SAM
+	# inference is owned exclusively by Batch, so activating normal edit tools
+	# must not start a Python preflight or resident worker.
+	_model_service = null
+	_model_preflight.clear()
+	_model_session_id = ""
 	_active = true
-	_model_session_id = _new_model_session_id()
-	_connect_model_service()
-	var preflight: Variant = _model_service.preflight()
-	_model_preflight = preflight.duplicate(true) if preflight is Dictionary else {}
 	_connect_viewport_cancel()
 	_emit_edit_state()
 	return errors
@@ -547,9 +538,6 @@ func handle_key(event: InputEvent) -> bool:
 				return _begin_keyboard_spatial(&"fill")
 			KEY_P:
 				return _begin_keyboard_spatial(&"eraser" if event.shift_pressed else &"paint")
-			KEY_M when not event.shift_pressed and not event.meta_pressed:
-				set_active_tool(&"model_assist")
-				return true
 	if key == KEY_A and not event.ctrl_pressed and not event.alt_pressed:
 		_begin_keyboard_add()
 		return true

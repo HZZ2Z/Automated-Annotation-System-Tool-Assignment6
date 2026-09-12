@@ -7,6 +7,9 @@ func availability() -> Dictionary: return {"available":false,"reason":"Provider 
 func begin(_context: Dictionary) -> PackedStringArray: return PackedStringArray(["Provider is not implemented"])
 func step() -> void: pass
 func cancel() -> void: pass
+## Owner teardown is stronger than cancelling one active analysis: providers may
+## also own availability probes or idle external workers.
+func shutdown() -> void: cancel()
 func is_running() -> bool: return false
 func progress_text() -> String: return ""
 ## 运行期间不得公开部分候选；调用方必须先确认 is_running() 为 false。

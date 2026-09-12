@@ -1,3 +1,18 @@
+# 合成标注样例生成器（annotation_data 包核心库）。
+#
+# 用途：以固定 seed 生成一份完整、可复现的合成标注样例数据集：120 帧合成
+# 内镜图像（PNG）、干净真值标注、注入已知缺陷的 Model Output V1 模型输出、
+# manifest 清单、expected_defects.json 缺陷对照与 hashes.json 摘要清单。
+# 同 seed 的核心文件字节级一致（SHA-256 可复现），供演示、测试与回归验证。
+#
+# 角色与协作：被 python/make_sample_input.py 调用（命令行外壳）；发布前经
+# annotation_data.contracts 的 schema 与跨字段语义校验，帧间距离用
+# annotation_data.similarity.normalized_mad（gray64-area-mad-v1）计算，
+# 标注 JSONL 经 annotation_data.jsonl.write_jsonl_atomic 原子写出。
+#
+# 输入：输出目录与 seed；输出：目录内 frames/frame_*.png、manifest.json、
+# model_output_v1.jsonl、expected_defects.json、hashes.json，
+# generate_sample 返回「相对路径 -> SHA-256」字典。
 """生成可重复的合成标注样例。
 
 样例同时包含干净的图像内容和预先设计的模型错误，用于演示、测试与回归验证。
@@ -74,6 +89,12 @@ _CLASS_COLORS_BGR = {
 }
 
 
+# 样例生成公开入口（内部按四个阶段流水，见函数内分阶段注释）。
+# 前置约束：output_dir 不得已存在（已存在抛 FileExistsError，拒绝覆盖）。
+# 副作用：创建 output_dir 与 frames/ 子目录，写入全部帧 PNG、manifest.json、
+# model_output_v1.jsonl、expected_defects.json 与 hashes.json。
+# 异常：帧 PNG 写盘失败抛 OSError；发布前校验不过抛 ValueError（见
+# _validate_outputs）；两者都会让命令行入口以非 0 退出码失败。
 def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
     """生成完整的合成样例，返回按相对路径索引的 SHA-256 摘要。
 
@@ -84,6 +105,8 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
     Returns:
         键为输出目录内相对路径、值为文件 SHA-256 摘要的字典。
     """
+    # 全模块唯一的随机数发生器：随机性只用于抽样每区域的颜色微扰，
+    # 其余布局与缺陷注入均为确定性算术，保证同 seed 可复现。
     rng = np.random.default_rng(seed)
     output_dir.mkdir(parents=True, exist_ok=False)
     frames_dir = output_dir / "frames"
@@ -93,6 +116,7 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
     color_jitter = rng.integers(-5, 6, size=(len(_REGION_CLASSES), 3))
     ground_truth: list[dict[str, Any]] = []
     frame_paths: list[Path] = []
+    # 来源摘要累加器：按帧序串接全部帧 PNG 字节，结果写入 manifest.source_sha256。
     source_hasher = hashlib.sha256()
     similarity_scores: list[float] = []
     previous_image: np.ndarray | None = None
@@ -107,6 +131,8 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
         frame_bytes = frame_path.read_bytes()
         source_hasher.update(frame_bytes)
         frame_paths.append(frame_path)
+        # 相邻帧距离：scores[i] 为帧 i 与 i+1 的 gray64-area-mad 距离
+        # （0..1，越小越相似），逐帧记录进 manifest.similarity_scores。
         if previous_image is not None:
             similarity_scores.append(normalized_mad(previous_image, image))
         previous_image = image
@@ -129,6 +155,7 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
         "schema_version": 1,
         "dataset_id": DATASET_ID,
         "source_name": SOURCE_ID,
+        # 全部帧 PNG 字节按帧序串接后的 SHA-256（由上方 source_hasher 累加）。
         "source_sha256": source_hasher.hexdigest(),
         "width": WIDTH,
         "height": HEIGHT,
@@ -142,6 +169,7 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
             }
             for frame in range(FRAME_COUNT)
         ],
+        # 相邻帧距离序列，长度为 FRAME_COUNT-1（见第一阶段）。
         "similarity_scores": similarity_scores,
         "model_version": MODEL_VERSION,
         "taxonomy_version": TAXONOMY_VERSION,
@@ -157,22 +185,31 @@ def generate_sample(output_dir: Path, seed: int = 6006) -> dict[str, str]:
     _write_json(defects_path, expected_defects)
 
     # 第四阶段：为所有内容文件建立确定性摘要，供完整性和回归测试使用。
+    # 参与摘要的内容文件：全部帧 PNG + 三份 JSON/JSONL；hashes.json 自身
+    # 不纳入（避免自引用）。
     hashed_paths = [*frame_paths, manifest_path, annotation_path, defects_path]
     hashes = {
         path.relative_to(output_dir).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in hashed_paths
     }
+    # 键按字典序排序，保证 hashes.json 自身字节稳定。
     hashes = dict(sorted(hashes.items()))
     _write_json(output_dir / "hashes.json", hashes)
     return hashes
 
 
+# 区域布局完全由 frame/序号/seed 的确定性算术推出，不经随机数发生器，
+# 保证同 seed 逐帧可复现。返回：20 个 region 字典的列表（id/class/kind/
+# conf/track_id + box 或 polygon）；region ID 与 track_id 跨帧稳定，
+# 供缺陷注入与跟踪类测试按 ID 精确定位。
 def _clean_regions(frame: int, seed: int) -> list[dict[str, Any]]:
     """构造指定帧的干净区域标注，包含边界框和多边形两种几何。"""
     # 相似帧区间共用同一个运动位置，仅保留极轻微的画面变化。
     motion_frame = SIMILAR_START if SIMILAR_START <= frame <= SIMILAR_END else frame
     regions: list[dict[str, Any]] = []
     for index, class_id in enumerate(_REGION_CLASSES):
+        # 基础网格：5 列（列距 120px）x 4 行（行距 75px）；x/y 再叠加由
+        # frame/index/seed 决定的 ±4/±3 像素确定性微移。
         x = 35 + (index % 5) * 120 + ((motion_frame + index * 3 + seed) % 9) - 4
         y = 35 + (index // 5) * 75 + ((motion_frame * 2 + index * 5 + seed // 10) % 7) - 3
         width = 48 + (index % 3) * 4
@@ -217,6 +254,9 @@ def _clean_regions(frame: int, seed: int) -> list[dict[str, Any]]:
     return regions
 
 
+# 渲染即真值：每个 region 按自身几何填充类别颜色并标注序号，使图像内容与
+# 标注严格一致（帧间差异完全可控，供相似度功能测试）。纯函数，无副作用。
+# 返回：HEIGHT x WIDTH 的 3 通道 BGR uint8 图像数组。
 def _render_frame(
     frame: int,
     seed: int,
@@ -268,6 +308,14 @@ def _render_frame(
     return image
 
 
+# 注入五类确定性缺陷：drift / wrong_class / missed_region /
+# hallucinated_region / track_id_swap；加上 SIMILAR_START-SIMILAR_END 的
+# 连续近似帧区间，共六类预置问题。每处注入都同步登记进缺陷清单，供测试
+# 与评审流程对照。
+# 参数 model_output：将被就地改写的模型输出副本；ground_truth：只读干净
+# 真值，用于计算清单中的 expected 字段。
+# 返回：expected_defects.json 的内容（schema_version/dataset_id/seed/
+# types/similar_run/defects）。
 def _plant_defects(
     model_output: list[dict[str, Any]],
     ground_truth: list[dict[str, Any]],
@@ -353,6 +401,8 @@ def _plant_defects(
         }
     )
 
+    # 缺陷清单顶层字段：similar_run 记录近似帧区间（第六类预置问题，并非
+    # 注入缺陷）；defects 为上面五类注入的逐条记录；seed 供复现对照。
     return {
         "schema_version": 1,
         "dataset_id": DATASET_ID,
@@ -369,11 +419,18 @@ def _plant_defects(
     }
 
 
+# 辅助查找：在单帧记录中按 region id 线性检索并返回该 region 字典。
+# 异常：目标 region 不存在时 next() 耗尽迭代器抛 StopIteration——样例内容
+# 全部由本模块生成，缺失视为编程错误，不做静默降级。
 def _region_by_id(record: dict[str, Any], region_id: str) -> dict[str, Any]:
     """按稳定区域 ID 取得标注记录；样例内容缺失时直接抛出异常。"""
     return next(region for region in record["regions"] if region["id"] == region_id)
 
 
+# 发布门禁：manifest 过 dataset-manifest-v1 schema 与跨字段语义校验，每帧
+# 记录过 model_output_v1 schema（均由 annotation_data.contracts 提供）。
+# 异常：任一校验失败即抛 ValueError，消息拼接全部 schema 错误；校验在
+# 写出任何 JSON/JSONL 文件之前执行，失败即不发布数据文件。
 def _validate_outputs(manifest: dict[str, Any], records: list[dict[str, Any]]) -> None:
     """发布前使用共享 Schema 和跨字段语义规则校验生成内容。"""
     manifest_errors = validate_instance(manifest, "dataset-manifest-v1.schema.json")
@@ -390,6 +447,9 @@ def _validate_outputs(manifest: dict[str, Any], records: list[dict[str, Any]]) -
             )
 
 
+# 稳定序列化：sort_keys 固定键序、allow_nan=False 拒绝非有限数、末尾补
+# 换行——同内容必产出相同字节，是哈希可复现的前提。
+# 副作用：以 UTF-8 文本覆写 path。
 def _write_json(path: Path, payload: Any) -> None:
     """以固定键顺序和末尾换行写入 JSON，保持输出字节稳定。"""
     path.write_text(

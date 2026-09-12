@@ -1,177 +1,140 @@
 # Project 6 自动标注系统
 
-这是一个以 Godot 4 为主客户端的人机协作标注工具：读取图片序列或视频帧，在原图上显示模型区域，提供可撤销的 2D 修正、相似连续帧批量传播、审核状态与版本化文件交接。本仓库交付工具与合同，不交付训练好的模型。
+以 Godot 4 为客户端的人机协作标注工具:读取图片序列或视频帧,在原图上叠加模型识别区域,支持可撤销的 2D 修正、相似连续帧批量传播、审核状态管理与版本化训练交接。本仓库交付工具与数据合同,不交付训练好的模型。
 
-![主标注界面](docs/前端标注.png)
-![批量处理界面](docs/批量.png)
+![主标注界面](docs/图片/前端标注.png)
+![批量处理界面](docs/图片/批量.png)
+
+## 交付概览
+
+| Assignment | 交付内容 | 状态 |
+|---|---|---|
+| Part 1 数据契约 · 样本 · 插件 | `model_output_v1` JSON Schema + Python/Godot 双端验证器;固定种子样本生成器(含 6 类植入缺陷);视频帧源;Source / Render / Edit / Export 四类插件与启动时注册表 | 完成 |
+| Part 2 显示与编辑 | 统一 image↔viewport 变换;8 个编辑工具(7 个 Assignment 工具 + Match，含顶点编辑、近似闭合 Fill);MITK 编辑范式对照;20 regions 实测 175 fps | 完成(人工 reviewer 复跑待记录) |
+| Part 3 视频流与批量标注 | 后台 FFmpeg 无丢帧导入;帧精确播放;**SAM 2 Video** 批量传播(默认)+ Poly 光流(显式备选) | 自动协议/安全 PASS;真实视频精度/效率未测 |
+| Part 4 交接与协作 | V3 会话、原子保存、diff、旧六文件包、自包含 `training_coco_v1`、`model_round_v1` | 新 COCO E01–E48 自动验收 PASS;真实训练未运行 |
+| Part 5 质量与测试 | 当前 889 项 Python 通过；聚合脚本 28 次 Godot 调用全部通过严格日志审计 | 全帧 COCO 导出、旧包和编辑流程共同回归 |
 
 ## 开发原则
 
-- 以 Assignment 和 MITK 的手动编辑范式为交互参考，只适配到 2D 视频 region，不声称与 MITK 等价。
-- 每一类状态只有一个明确所有权边界：Source 提供帧，Store 保管不可变基线与修正副本，History 只接受已验证命令。
-- Source、Render、Edit、Feedback 通过清晰接口解耦，插件故障被隔离为可读错误，不让 UI 崩溃。
-- 可维护和可复现优先于功能数量；生成样本、测试、基准和导出都必须可追溯。
-- Part 1 边界是版本化数据合同、可复现样本、帧源和四类插件；不把批量元数据塞进严格的 Model Output V1。
-
-## 交付目录
-
-仓库根目录就是 Assignment 示例中的 `annot_tool/`。各阶段通过版本化接口解耦，生成数据与本地验收产物不进入 GitHub：
-
-```text
-Project6_test/
-├── README.md          # 环境、安装、运行、reviewer 脚本和快捷键
-├── pyproject.toml     # 唯一 Python 依赖定义
-├── client/            # Godot 客户端、pipeline 接口与可替换 plugins
-├── core/              # 跨语言 schema 与共享合同
-├── python/            # 帧源、样本生成、验证及模型 worker
-├── sample/            # 本地确定性生成，不提交大样本
-├── tests/             # Python/Godot 测试、轻量 fixture 与 headless runner
-└── RESULTS.md         # 设计决策、测量和失败分析
-```
-
-`tests/output/`、视频帧、模型权重、数据集、缓存、`.local-acceptance/` 和本地交接包均被排除；reviewer 可用 README 命令重新生成样本与测试结果。
+- 以 Assignment 和 MITK 的手动编辑范式为交互参考,只适配到 2D 视频 region,不声称与 MITK 等价。
+- 每一类状态只有一个明确所有权边界:Source 提供帧,Store 保管不可变基线与修正副本,History 只接受已验证命令。
+- Source、Render、Edit、Export 通过清晰接口解耦,插件故障被隔离为可读错误,不让 UI 崩溃。
+- 可维护和可复现优先于功能数量;生成样本、测试、基准和导出都必须可追溯。
+- Part 1 边界是版本化数据合同、可复现样本、帧源和四类插件;不把批量元数据塞进严格的 Model Output V1。
 
 ## 快速开始
 
-已验证环境：Ubuntu 22.04、Godot 4.7.2-stable、Python 3.14.7、FFmpeg 6.1+（本机 6.1.2）、`opencv-python-headless==4.14.0.94`。Python 支持 `>=3.12,<3.15`。`pyproject.toml` 是唯一 Python 依赖源，`project_env.sh` 只校验环境并设置当前 shell，不修改系统。
+已验证环境:Ubuntu 22.04 · Godot 4.7.2-stable · Python 3.14.7(支持 `>=3.12,<3.15`)· FFmpeg 6.1+。依赖以 [pyproject.toml](pyproject.toml) 为唯一来源,固定版本。
 
 ```bash
 python3.14 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
-source project_env.sh
+source project_env.sh          # 校验 Python/FFmpeg/Godot 并导出 PROJECT6_PYTHON 等变量
 ffmpeg -version
 ```
 
-生成固定种子的 120 帧样本并用独立验证器检查：
+生成确定性样本并通过独立验证器:
 
 ```bash
 .venv/bin/python python/make_sample_input.py --output sample/assignment_v1 --seed 6006
 .venv/bin/python python/validate_model_output.py sample/assignment_v1/model_output_v1.jsonl
+# 预期最后一行:Validation errors: 0
 ```
 
-预期最后一行为 `Validation errors: 0`。样本包含 drift、wrong class、missed region、hallucinated region、track-id swap 和连续近似帧；同一 seed 的核心文件 SHA-256 一致。
+样本为 120 帧,含全部植入缺陷:漂移(帧 12–13)、错误类别(帧 24)、漏检、幻觉、track-id 交换,以及连续近似帧段(帧 40–59,供 Part 3 批量演示);每帧含一个 12 顶点凹 complex polygon。同一种子的核心文件 SHA-256 一致。
 
-启动客户端：
+启动客户端:
 
 ```bash
 "$GODOT_BIN" --editor --path .
 # 在编辑器中运行 client/app/main.tscn
 ```
 
-打开方式：
+打开数据源三种方式:**Open Source**(单张图像 / 归一化目录 / `training_coco_v1` 包)、**Open Video**(选择视频后 `Start import`,FFmpeg 后台原子导入为帧目录)、**Open Workspace**(工作区文件夹或 Endoscapes2023 根目录)。也可 Open 包含多个 `training_coco_v1_*` 的上级目录，再选择其中一包。包内 COCO 标注作为可编辑导入基线，新会话的审核状态全部重置为未验证；修改只保存到包外的 Project6 会话文件，不改写训练包。
 
-- “Open Source” 打开单张图像、带 `manifest.json` 的归一化目录，或由 `numeric_image_sequence_source` 识别的纯数字图片序列。
-- “Open Video” 选择视频后按 `Start import`；FFmpeg 子进程原子发布为归一化目录，旧数据源在导入完成前不被替换。
-- “Open Workspace” 读取普通工作区或标准 Endoscapes2023 根目录，并为每个媒体保持独立的 V3 审核会话。Endoscapes 会按 split/视频分组，而不是把原图与 `semseg`/`insseg` mask 递归展开为左树媒体。
+## Reviewer 验收脚本
 
-## Reviewer 逐项验收
+按顺序执行,每步都应得到预期结果;任何一步失败请记录操作与现象。
 
-1. 打开 `sample/assignment_v1`，确认图像保持宽高比，box、polygon、class、confidence 可见；调整 `Overlay opacity`，尝试滚轮缩放、中键平移和 `Fit`。
-2. 用 Select 点击、拖动、八柄缩放和键盘 1/5/10 px 微移；使用右侧列表或 `R` 重标签。
-3. 依次验证 9 个工具：Add Box、Subtract、Lasso、Fill、Paint、Eraser、Select、Match、Model Assist。Lasso 中选中已保存 polygon 后可直接拖动实际轮廓顶点；Match 先点待修正区域 A，再点参考区域 B。
-4. 对每种编辑执行 Undo/Redo；尝试自交 polygon 和会产生 hole/multipolygon 的操作，确认原子拒绝并显示原因。
-5. 播放区依次点 `Previous`、`Play`、`Pause`、`Next`，尝试 `Custom`、`3 s/frame`、`1 s/frame`、`Max`；确认 `actual FPS` 只读，`Time HH:MM:SS.mmm` 与帧索引一起显示。
-6. 用 `M` 进入 Model Assist：无选区时用正/负点和 box 创建 Poly，选中 Box/Poly 时只修正其几何；切换 candidate，检查 Apply/Cancel/Retry 以及一次 Undo/Redo。
-7. 在批量页选中已提交的 Box/Poly region，显式确认它可作为锚点，用默认 SAM 2 Video 向后生成 1–30 帧；逐帧检查只读候选、分段停止和重新锚定，再确认并验证一次 undo/redo。
-8. 触发 Save/Ctrl+S 和自动保存；在 Export 生成 verified-only 训练包和 all-frame 评审快照，检查 diff JSON/CSV、manifest 与 SHA-256。
-9. 在 Model Round 先预览模型返回，再提交为独立新轮次；确认旧 V3 字节归档，新轮次的 verification/batch/history 为空。
-
-人工验收请记录设备、日期、步骤和结果。自动化与可见脚本不等同于真实 reviewer 的主观交互验收；该边界在 `docs/requirements-traceability.md` 中保持为待验证。
+| # | 验证点 | 操作 | 预期 |
+|---|---|---|---|
+| 1 | 显示 | 打开 `sample/assignment_v1`;滚轮缩放、中键平移、`Fit`;调 `Overlay opacity` | 宽高比保持;box/polygon/类别/置信度可见;半透明只影响填充 |
+| 2 | 选择与变换 | Select 点击、拖动、八柄缩放;`Arrow`/`Shift+Arrow`/`Ctrl+Shift+Arrow` 微移 | 命中最上层区域;1/5/10 px 步进准确 |
+| 3 | 八个工具 | 依次使用 Add Box、Subtract、Lasso、Fill、Paint、Eraser、Select、Match | 各工具生效;Lasso 中可拖动已存 polygon 顶点;Match 先点 A 再点 B 完成合并 |
+| 4 | 撤销与拒绝 | 对每种编辑 `Ctrl+Z`/`Ctrl+Shift+Z`;构造自交 polygon | 撤销/重做完整;非法几何被原子拒绝并给出原因 |
+| 5 | 播放 | `Previous`/`Play`/`Pause`/`Next`;切换 `Custom`/`3s`/`1s`/`Max` | 帧号与 `HH:MM:SS.mmm` 同步显示;actual FPS 只读;不跳帧 |
+| 6 | SAM 批量传播 | Batch 选中已提交 region，设置 1–30 个目标，点击“生成并保存标注” | 一次点击即写入、保存并标为已确认；拓扑停止只保存合法前缀并跳到异常帧；一次 undo/redo 完整恢复 |
+| 7 | 保存与导出 | `Ctrl+S`；Endoscapes 在 Export 中选任务，帧范围留空=全部 Source 帧，也可显式选子集 | 原子保存；自包含原图 + COCO + diff + manifest；无标注帧是零目标图像，导出不会改审核状态 |
+| 8 | 模型轮次 | Model Round 预览并提交模型返回 | 旧轮次字节归档;新轮次 verification/batch 为空 |
 
 ## 快捷键
 
 | 操作 | 快捷键 |
 |---|---|
 | Select / Add Box / Subtract / Lasso / Fill / Paint / Eraser | `V` / `A` / `S` / `L` / `F` / `P` / `Shift+P` |
-| Match | 工具栏按钮（先 A 后 B） |
-| Model Assist | `M`（只切换工具；首个鼠标提示才发起请求） |
-| 选择上一/下一区域 | `[` / `]` |
-| 重标签 / 删除区域 | `R` / `Delete` |
-| 撤销 / 重做 | `Ctrl+Z` / `Ctrl+Shift+Z` 或 `Ctrl+Y` |
-| 移动 1/5/10 image px | `Arrow` / `Shift+Arrow` / `Ctrl+Shift+Arrow` |
-| 缩放选中区域 1/5/10 image px | `Alt+Arrow` / `Alt+Shift+Arrow` / `Ctrl+Alt+Shift+Arrow` |
+| Match | 工具栏按钮 |
+| 上一个 / 下一个区域 | `[` / `]` |
+| 重标签 / 删除 | `R` / `Delete` |
+| 撤销 / 重做 | `Ctrl+Z` / `Ctrl+Shift+Z` |
+| 移动 1/5/10 px | `Arrow` / `Shift+Arrow` / `Ctrl+Shift+Arrow` |
+| 缩放选中区域 1/5/10 px | `Alt+Arrow` / `Alt+Shift+Arrow` / `Ctrl+Alt+Shift+Arrow` |
 | 闭合 Lasso/Subtract | `Space` |
-| 确认草稿 / 删除最后顶点 / 取消 | `Enter` / `Backspace` / `Escape` |
-| 缩放 / 平移 / 恢复适配 | 滚轮 / 鼠标中键 / `Fit` |
+| 确认 / 删除最后顶点 / 取消 | `Enter` / `Backspace` / `Escape` |
+| 缩放 / 平移 / 适配 | 滚轮 / 中键拖动 / `Fit` |
 
-`Tab`/`Shift+Tab` 遍历工具、标注列表、类别对话框与 Fill 候选按钮。草稿期间 `Escape` 只取消草稿；空闲 Select 中右键或 `Escape` 清除选区。
+`Tab`/`Shift+Tab` 遍历工具、列表与对话框;文本框内快捷键让位给文本编辑。
 
-## 视图与播放实现
+## 架构
 
-`ViewportTransform` 向绘制与命中测试提供同一个 `Transform2D`。Renderer 缓存 image-space primitives 和 AABB，只在图像、record、selection、opacity 或 transform 变化时 dirty redraw，并裁剪完全离开视口的 primitive。可复现基准在 1280×800、20 regions 和 llvmpipe 上记录 175.27 fps 平均值和 9.572 ms p95；这是本机结果，不外推到其他 GPU。complex polygon 按单环非自交处理，hole 和 multipolygon 不属于 Model Output V1。完整方法和数据见 `RESULTS.md`。
+```mermaid
+flowchart LR
+    A["帧源<br/>(图片序列 / 视频导入 / 工作区)"] --> B["Source 插件<br/>帧 + 模型标注"]
+    B --> C["Render 插件<br/>原图 + 区域叠加"]
+    C --> D["Edit 工具<br/>选择 · 修正 · Match"]
+    D --> E["Store + History<br/>不可变基线 · 修正副本 · 撤销"]
+    E --> F["Export/Feedback<br/>旧交接包 / 自包含 COCO + diff"]
+    F --> G["模型组<br/>re-training → model_round_v1"]
+    G -. 新模型输出 .-> B
+```
 
-Part 3.1 整体为 **PASS**。视频由 `VideoImportController` 通过 `OS.create_process()` 无丢帧解码；`PlaybackController` 只请求 `current + 1`，不追钟跳帧；`PlaybackFpsMeter` 只统计已提交帧。显示为 explicit frame/time，实测对 10,000 帧源的缓存不超过 12 张纹理。
+Source、Render、Edit、Feedback 均为可替换插件,Registry 启动时扫描 `client/plugins` 加载。当前插件:Source `image_sequence_source` / `numeric_image_sequence_source` / `single_image_source` / `endoscapes_video_source` / `training_coco_package_source`,Render `canvas_region_renderer`,Edit `basic_edit_tools`,Export/Feedback `file_training_handoff`。模块所有权与数据流详见 [docs/architecture.md](docs/architecture.md),插件扩展规范见 [docs/plugin-api.md](docs/plugin-api.md)。
 
-## Endoscapes 按视频懒加载
+## 视图与播放
 
-在 “Open Workspace” 中选择 Endoscapes2023 根目录即可直接打开，不需要预先拷贝、重命名或生成 manifest。扫描在 `WorkspaceCatalogController` 后台任务中运行；顶部会显示“正在建立视频索引…”和“Cancel scan”，取消、失败或陈旧 generation 都不替换当前工作区。发现结果只保留 split/视频级条目，左树不持有未选中视频的逐帧路径。
+`ViewportTransform` 向绘制与命中测试提供同一个 `Transform2D`,dirty redraw 只在图像、record、selection、opacity 或 transform 变化时触发,Renderer 缓存 image-space primitives 并用 AABB 裁剪视口外区域。可复现基准(1280×800、20 regions、llvmpipe)实测 **175.27 fps** 平均、p95 **9.572 ms**,复现命令见 [RESULTS.md](RESULTS.md)。
 
-选中一个视频后，`WorkspaceMediaController` 才在后台打开 `endoscapes_video_source`。它只保留当前视频的有序帧路径和记录，播放位置连续，`frame_id` 保留 Endoscapes 原始帧号，像素纹理使用上限 12 的 LRU。切换或关闭时旧 Source 的帧表、标注和缓存会被清空，但不删除任何源文件。
+Part 3.1 整体为 **PASS**。视频由 `VideoImportController` 通过 `Start import` 无丢帧后台解码;播放提供 `Previous`/`Play`/`Pause`/`Next` 与 `Custom`/`3 s/frame`/`1 s/frame`/`Max` 节奏,显式帧号 + `Time HH:MM:SS.mmm` 与 actual FPS 只读显示;对 10,000 帧源纹理缓存仍不超过 12 张。
 
-官方 COCO `bbox` 转为 Model Output V1 box；compressed RLE 只在当前视频内解码，并且只有通过单连通域、无孔、非触边和几何有效性门禁后才添加 polygon。不安全的 mask 保留合法 box 并计入降级摘要；两种几何都无效时才跳过区域。官方标注是 `imported_labels` 种子，不伪造模型置信度或已审核状态；重开时，Project6 已保存标签和显式 `labels/<media_id>.json` 均优先于官方基线。
-
-本机最终真实数据集只读验收发现 201 个逻辑视频、0 个 media ID 冲突，扫描 0.428190 s；选中视频 004 时只保留其 633 条帧路径，导入 98 个区域（39 polygon、59 box fallback、0 跳过），15/15 次纹理加载成功且缓存峰值为 12。切换后旧 Source 的帧路径与缓存均为 0，源树元数据指纹前后一致。这些是当前主机的自动证据，不替代 1280×800 可见 UI 操作、逐帧人工对齐或其他硬件性能验收。复跑命令：
+Endoscapes 工作区经 "Open Workspace" 直接打开;真实数据集只读验收复跑(输出目录必须事先不存在,边界见 `docs/endoscapes-poly-acceptance.md`):
 
 ```bash
-source project_env.sh
 "$PROJECT6_PYTHON" python/run_endoscapes_lazy_source_acceptance.py \
   --dataset-root Dataset_test/endoscapes \
   --output .local-acceptance/endoscapes-lazy-source-new
 ```
 
-输出目录必须事先不存在；验收报告不记录数据集绝对路径。模块所有权见 `docs/architecture.md`，真实数据边界见 `docs/endoscapes-poly-acceptance.md`。
+## SAM 2 Video 运行时（可选，Batch 唯一入口）
 
-## 单帧 Model Assist
+SAM 只从 Batch 启动，并只读取下面四个环境变量；项目不自动安装 `sam2`、不下载权重，未配置时普通编辑、Poly 与 copy 不受影响。选中已提交的单个 Box/Poly，在主设置中选择 1–30 个目标帧，点击“生成并保存标注”：合法结果在一次原子命令中写入正式标注、审核摘要和 v3 audit，随后保存到磁盘并立即标为已确认，不显示候选预览或二次 Apply。“高级设置”可提高最低模型确定度，或启用相邻轮廓面积变化门禁；默认值保持原有接受范围，且不可放宽 V1 拓扑、边界、文件完整性和 0.99 栅格回环 IoU 底线。完成后 Batch 保持打开；默认折叠且与其他段落同样式的“2 日志”保留分析、校验、写入、保存和导航记录；没有结果时不显示空的生成状态卡。遇到 V1 不可表示拓扑时只保存合法前缀并停在精确异常帧，用户确认日志后可显式进入普通编辑工具修正，再返回 Batch 重新生成。单帧 Model Assist 前端、`M` 快捷键及其 action row 已退役，Edit 插件激活不会启动其 Python 预检。`poly-sim-flow-edge-v1` 仅为显式备选；SAM 失败不静默回退。
 
-`Model Assist` 是标注页的第九个单帧工具，不是 Batch 算法；第八个保留给 Match。无选区时它生成待分类新 Poly；选中已有 Box/Poly 时只修正该区域的几何，保留 ID、类别和属性。左键添加正点，`Shift+左键` 添加负点，`Ctrl+拖动` 设置唯一 box，`Backspace` 撤销最后一个提示。
+```bash
+export PROJECT6_MODEL_PYTHON=/path/to/conda/env/bin/python   # 需已安装官方 sam2 + torch
+export PROJECT6_SAM2_CONFIG=/path/to/sam2.1/configs/sam2.1/sam2.1_hiera_t.yaml
+export PROJECT6_SAM2_CHECKPOINT=/path/to/sam2.1_hiera_tiny.pt
+export PROJECT6_SAM2_DEVICE=auto   # auto | cpu | cuda
+```
 
-首个提示会冻结原始帧 ID、连续播放索引、图像 SHA-256、record SHA-256 和修正目标。过期或已取消结果不能写入 Store；候选 mask 必须是 worker 任务目录内的有哈希二值 PNG，并转换为无孔、单连通、非自交的 Model Output V1 Poly。创建与修正都只以一条命令进入 undo/redo。
+## 本地验证记录
 
-运行时只从 `PROJECT6_MODEL_PYTHON`、`PROJECT6_SAM2_CONFIG`、`PROJECT6_SAM2_CHECKPOINT` 和 `PROJECT6_SAM2_DEVICE=auto|cpu|cuda` 读取显式配置。非阻塞 preflight 会在工具状态中显示 CPU/CUDA badge；工具不会为用户自动安装 `sam2` 或下载 checkpoint。可复用的 `model-assist-v1` 真实模型验收入口是 `python/model_assist_smoke.py`；本机已用 Meta 官方 SAM 2.1 Tiny 和 RTX 5070 Ti Laptop GPU 在本地手术帧上完成 CUDA `hello -> set_image -> predict -> shutdown` smoke PASS，生成 3 个受门禁候选。Godot 已可使用该运行时，但尚未把下列全部人工 UI 步骤记录为正式验收。命令、报告字段与边界见 [Model Assist 真实 SAM 2 验收](docs/model-assist-acceptance.md)。fake-worker 自动证据与真实 SAM PASS 始终分开记录。
-
-## 数据合同与插件
-
-`core/schemas/model_output_v1.schema.json` 是严格的 JSON Schema Draft 2020-12；`python/annotation_data/contracts.py` 与 `python/validate_model_output.py` 是 Python 验证边界，`client/domain/model_output_validator.gd` 实现 Godot 等价校验。`source: sample_v1` 属于合法模型样本；人工导出使用 `"source":"human_corrected"`。模型基线字节始终不可变。
-
-Registry 启动时扫描 `client/plugins` 并验证 manifest、API version、Stage 类型和入口脚本。当前工作插件：
-
-- Source：`image_sequence_source`、`numeric_image_sequence_source`、`single_image_source`、`endoscapes_video_source`；
-- Render：`canvas_region_renderer`；
-- Edit：`basic_edit_tools`；
-- Export / Feedback：`file_training_handoff`。
-
-新增插件只需在相应 stage 下添加 `plugin.json` 与 Stage 实现，不修改 Registry 或 core。精确字段、方法签名、生命周期、深拷贝与故障隔离见 `docs/plugin-api.md`，整体所有权见 `docs/architecture.md`。
-
-## 批量标注与训练交接
-
-Batch 默认策略是 `sam_video`（官方 SAM 2 Video Predictor）。先在关键帧提交一个 Box/Poly region，选中它并勾选“我已确认当前 region 可作为传播起点”，再按 Source 顺序向后请求 1–30 个目标；关键帧不计入目标。候选在预览期间为只读临时状态，不写 Store、review、标签文件或训练包；“确认并写入”才使用一条 `ApplyPropagationCommand` 按 region ID 原子合并所有目标，一次 undo/redo 同时恢复 records、review 和 batch audit。
-
-无法表达为 Model Output V1 单环 Poly 的某一帧会在该帧分段停止，保留之前的合法候选；用户可在停止帧用单帧 Model Assist 修正、提交并重新确认锚点，然后开启新 Batch。协议、路径、hash、Source/Store/review/session 不一致或进程错误使整批作废。SAM 失败时不会静默改用其他算法；`polygon_flow`/`poly-sim-flow-edge-v1` 与 `copy` 仅作为用户明确选择的备选。Poly 方法的历史证据和独立门禁见 `docs/poly-propagation.md`。
-
-SAM Video 与单帧 Model Assist 共用且只读取四个外部配置：`PROJECT6_MODEL_PYTHON`、`PROJECT6_SAM2_CONFIG`、`PROJECT6_SAM2_CHECKPOINT` 和 `PROJECT6_SAM2_DEVICE=auto|cpu|cuda`；客户端不自动安装或下载。本轮新鲜全量与聚焦门禁均通过，因此“自动协议/安全”记为 **PASS**。真实 SAM Video 功能、可见 UI、独立真值精度、配对人工效率与 CUDA 性能均仍为 **NOT RUN**；既有的单图 SAM CPU smoke 不是视频证据。验收合同见 `docs/sam-video-batch-acceptance.md`。
-
-Part 4 用 V3 会话分离不可变模型基线、人工修正、verification 与 batch metadata。Save 使用同目录临时文件、flush、回读验证和原子替换。默认 `training_update_v2` 只包含已验证帧；`review_export_v1` 用于全帧评审快照。模型回传的 `model_round_v1` 必须指向真实父训练包，预览后才能创建独立新轮次。详见 `docs/part4-protocol.md` 和 `docs/part4-review.md`。
-
-一键训练导出仍停留在原有 Task 4 review boundary，当时未解决的 review issues 保持原状；SAM Video Batch 未修复、升级或宣称完成该流程。
-
-CLI 全环演示（目标目录必须不存在）：
+按发布边界，GitHub 仓库不包含 `tests/`、测试输出和两个真实模型 smoke 驱动；它们只保留在完整的本地开发工作区。下面的命令用于维护者在该完整工作区复核，不是公开仓库附带的运行入口。
 
 ```bash
 source project_env.sh
-"$PROJECT6_PYTHON" python/part4.py demo --output /tmp/project6-part4-demo
-"$PROJECT6_PYTHON" python/part4.py validate-package /tmp/project6-part4-demo/handoff/training_update_v2_*
+bash tests/run_tests.sh    # Python + Godot 全量门禁
 ```
 
-## 测试与基准
-
-完整自动化：
-
-```bash
-source project_env.sh
-bash tests/run_tests.sh
-```
-
-单独基准入口：
+可复现基准单独运行(临时输出目录必须事先不存在):
 
 ```bash
 "$GODOT_BIN" --path . --script tests/benchmarks/godot/display_benchmark.gd -- --output /tmp/part2_display.json --warmup 2 --duration 10
@@ -181,23 +144,34 @@ bash tests/run_tests.sh
 "$GODOT_BIN" --headless --path . --script tests/benchmarks/godot/video_import_benchmark.gd -- --input /tmp/input.mkv --output /tmp/part3-import --result /tmp/part3_import.json
 ```
 
-临时输出目录必须预先不存在。Godot 的 corrupt-PNG 恢复 fixture 会故意打印解码错误；应以最终 `PASS: complete Godot test suite` 和进程状态 0 为准。
+本轮新鲜结果：**889 Python tests passed (56.60 s)**；权威 `tests/run_tests.sh` 中 **28 次 Godot 调用全部退出 0 并通过严格日志审计**。默认全 Source 帧、上版基线、无标注零目标帧、未审核来源状态、训练包可编辑导入与篡改拒绝，以及 SAM 质量门槛审计均有回归。COCO 逐项证据见 [training-coco-v1-acceptance.md](docs/Part%204%20设计与复现/training-coco-v1-acceptance.md)。
 
-## 完成度与边界
+## 演示视频
 
-根 README、RESULTS 和需求台账是 GitHub 交付的权威文档；本地 `交付/` 不上传。当前自动化与单帧真实模型 smoke 通过不代表真实 SAM Video 精度或通用人机功效已被证明。Part 2.2/2.3 的最终人工 reviewer 复跑、Model Assist 完整可见 UI 清单以及 SAM Video 的真实功能/质量/效率验收仍需分别记录。演示视频仅保留在本地交接包中，不进入 GitHub。
-
-不在本次交付范围：3D 体数据、hole/multipolygon 合同、真实训练服务、实际重训结果、Close Gaps、Region Growing 和 Live Wire。
+[docs/Project6_Demo.mp4](docs/Project6_Demo.mp4)(≤3 分钟,配套字幕 [Project6_Demo.srt](docs/Project6_Demo.srt))。演示流程:打开样本 → 逐类修正植入缺陷 → 批量标注近似帧段 → 导出与 diff → 提交训练包。
 
 ## 文档索引
 
-- `RESULTS.md`：设计决策、测量与失败分析。
-- `docs/architecture.md`：架构图、所有权和数据流。
-- `docs/plugin-api.md`：API version 1 插件合同。
-- `docs/requirements-traceability.md`：Assignment 逐条追踪与状态。
-- `docs/part4-protocol.md`：模型组与工具组的协作接口。
-- `docs/part4-review.md`：Part 4 CLI/UI 复现流程。
-- `docs/poly-propagation.md`：可编辑 polygon 运动传播的边界和门禁。
-- `docs/sam-video-batch-acceptance.md`：SAM 2 Video 真实功能、UI、精度、效率与 CUDA 的分类验收合同。
-- `docs/model-assist-acceptance.md`：真实 SAM 2 smoke 与人工 UI 验收边界。
-- `docs/endoscapes-poly-acceptance.md`：Endoscapes 真实数据与 Poly 传播验收边界。
+| 文档 | 内容 |
+|---|---|
+| [RESULTS.md](RESULTS.md) | 设计决策、测量数据、失败分析 |
+| [docs/architecture.md](docs/architecture.md) | 架构图、模块所有权、数据流 |
+| [docs/plugin-api.md](docs/plugin-api.md) | 插件 API v1 合同 |
+| [docs/requirements-traceability.md](docs/requirements-traceability.md) | Assignment 逐条追踪与状态 |
+| [docs/Part 4 模型组接口协议/part4-protocol.md](docs/Part%204%20模型组接口协议/part4-protocol.md) | 模型组交接协议(附一页 PDF) |
+| [docs/Part 4 设计与复现/part4-review.md](docs/Part%204%20设计与复现/part4-review.md) | Part 4 CLI/UI 复现流程 |
+| [docs/Part 4 设计与复现/training-coco-v1-acceptance.md](docs/Part%204%20设计与复现/training-coco-v1-acceptance.md) | 自包含 COCO 合同、E01–E48、真实/合成包与回退边界 |
+| [docs/sam-video-batch-acceptance.md](docs/sam-video-batch-acceptance.md) | SAM 2 Video 验收合同 |
+| [docs/model-assist-acceptance.md](docs/model-assist-acceptance.md) | 已退役单帧 Model Assist 的历史验收记录（非当前 UI） |
+| [docs/poly-propagation.md](docs/poly-propagation.md) | Poly 备选算法与门禁 |
+| [docs/endoscapes-lazy-source-design.md](docs/endoscapes-lazy-source-design.md) | Endoscapes 懒加载源设计 |
+| [docs/Endoscapes 真实数据源/endoscapes-poly-acceptance.md](docs/Endoscapes%20真实数据源/endoscapes-poly-acceptance.md) | 真实数据验收边界 |
+
+## 完成度边界
+
+诚实汇报,不做超出证据的声明:
+
+- 真实 SAM Video 的功能、可见 UI、独立真值精度、人工效率与 CUDA 性能均 **未测量**(NOT RUN)；已通过的是自动协议/安全门禁。既有单帧真实 SAM smoke（CPU 与 CUDA）仅为历史后端证据，不能替代 Batch 验收。
+- Part 2 的人工 reviewer 复跑尚未正式记录；单帧 Model Assist UI 已退役，不再列为待验收功能。
+- Endoscapes 已实际生成并视觉抽查检测 COCO 包；真实会话只有 box，实例分割正确返回 `SEGMENTATION_REQUIRED`，不声称真实分割交付。
+- Part 4 模型返回仍是模拟数据，不代表实际重训。不在范围：3D 体数据、通用真实训练服务。

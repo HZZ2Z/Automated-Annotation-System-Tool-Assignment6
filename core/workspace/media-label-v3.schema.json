@@ -117,7 +117,8 @@
           "schema_version": {
             "enum": [
               1,
-              2
+              2,
+              3
             ]
           },
           "type": {
@@ -279,20 +280,137 @@
                 }
               }
             }
+          },
+          "provider_id": {
+            "type": "string",
+            "const": "sam_video"
+          },
+          "keyframe_playback_index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "region_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^(?!.*[\\\\/])[^\\u0000-\u001F\u007F]+$"
+          },
+          "direction": {
+            "const": "forward"
+          },
+          "requested_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "generated_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          },
+          "minimum_score": {
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 1
+          },
+          "maximum_area_change_percent": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 500
+          },
+          "target_playback_indices": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 30,
+            "uniqueItems": true,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "stop_frame": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 999999
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stop_reason": {
+            "enum": [
+              "",
+              "source_end",
+              "verified_target",
+              "model_topology",
+              "quality_threshold",
+              "user_range"
+            ]
+          },
+          "checkpoint_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "device": {
+            "enum": [
+              "cpu",
+              "cuda"
+            ]
+          },
+          "model_version": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._+\\-]{0,63}$"
+          },
+          "elapsed_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "risk_summary": {
+            "type": "array",
+            "maxItems": 30,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "frame_id",
+                "kinds"
+              ],
+              "properties": {
+                "frame_id": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 999999
+                },
+                "kinds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 4,
+                  "uniqueItems": true,
+                  "items": {
+                    "enum": [
+                      "sparse_input",
+                      "area_change",
+                      "frame_difference",
+                      "flow_consistency"
+                    ]
+                  }
+                }
+              }
+            }
           }
         },
         "dependentRequired": {
-          "metric_id": [
-            "threshold",
-            "max_frames",
-            "keyframe_digest",
-            "created_at",
-            "start_index",
-            "end_index",
-            "left_stop",
-            "right_stop",
-            "changed_count",
-            "covered_count"
+          "minimum_score": [
+            "maximum_area_change_percent"
+          ],
+          "maximum_area_change_percent": [
+            "minimum_score"
           ]
         },
         "allOf": [
@@ -341,6 +459,100 @@
                       "edge_refinement"
                     ]
                   }
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "schema_version": {
+                  "enum": [
+                    1,
+                    2
+                  ]
+                }
+              },
+              "required": [
+                "schema_version",
+                "metric_id"
+              ]
+            },
+            "then": {
+              "required": [
+                "threshold",
+                "max_frames",
+                "keyframe_digest",
+                "created_at",
+                "start_index",
+                "end_index",
+                "left_stop",
+                "right_stop",
+                "changed_count",
+                "covered_count"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "schema_version": {
+                  "const": 3
+                }
+              },
+              "required": [
+                "schema_version"
+              ]
+            },
+            "then": {
+              "required": [
+                "provider_id",
+                "metric_id",
+                "keyframe_playback_index",
+                "keyframe_digest",
+                "region_id",
+                "direction",
+                "requested_count",
+                "generated_count",
+                "target_playback_indices",
+                "stop_frame",
+                "stop_reason",
+                "checkpoint_sha256",
+                "device",
+                "model_version",
+                "elapsed_ms",
+                "risk_summary",
+                "created_at"
+              ],
+              "properties": {
+                "mode": {
+                  "const": "merge"
+                },
+                "metric_id": {
+                  "const": "sam-video-v1"
+                }
+              },
+              "not": {
+                "anyOf": [
+                  {"required": ["metric"]},
+                  {"required": ["threshold"]},
+                  {"required": ["max_frames"]},
+                  {"required": ["frame_step"]},
+                  {"required": ["start_index"]},
+                  {"required": ["end_index"]},
+                  {"required": ["left_stop"]},
+                  {"required": ["right_stop"]},
+                  {"required": ["changed_count"]},
+                  {"required": ["covered_count"]},
+                  {"required": ["edge_refinement"]}
+                ]
+              }
+            },
+            "else": {
+              "not": {
+                "anyOf": [
+                  {"required": ["minimum_score"]},
+                  {"required": ["maximum_area_change_percent"]}
                 ]
               }
             }

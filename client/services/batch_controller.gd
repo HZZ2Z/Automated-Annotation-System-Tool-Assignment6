@@ -9,7 +9,7 @@ const POLYGONS := preload("res://client/domain/polygon_ops.gd")
 const MASK_OPS := preload("res://client/domain/mask_region_ops.gd")
 const APPLY_PROPOSALS := preload("res://client/domain/commands/apply_propagation_command.gd")
 const PROVIDER_METHODS := [
-	"availability", "begin", "step", "cancel", "is_running", "progress_text", "get_result", "validate_source",
+	"availability", "begin", "step", "cancel", "shutdown", "is_running", "progress_text", "get_result", "validate_source",
 ]
 var _source: Variant
 var _store: Variant
@@ -36,13 +36,23 @@ func configure_sam_context(reader: Callable) -> PackedStringArray:
 	_sam_probe = reader
 	return PackedStringArray()
 
-func start_sam_video_analysis(key_index: int, region_id: String, propagation_count: int, anchor_attested: bool) -> PackedStringArray:
+func start_sam_video_analysis(
+	key_index: int,
+	region_id: String,
+	propagation_count: int,
+	minimum_score: float = 0.50,
+	maximum_area_change_percent: float = 0.0,
+) -> PackedStringArray:
 	cancel()
 	_strategy = "sam_video"
 	if _source == null or _store == null or not _sam_probe.is_valid():
 		return PackedStringArray(["SAM requires a Source, Store and live selection/edit context; reopen the Batch page"])
-	if not anchor_attested or region_id.is_empty() or propagation_count < 1 or propagation_count > 30:
-		return PackedStringArray(["Select one committed Box/Poly, confirm the anchor and request 1–30 targets"])
+	if region_id.is_empty() or propagation_count < 1 or propagation_count > 30:
+		return PackedStringArray(["Select one committed Box/Poly and request 1–30 targets"])
+	if not is_finite(minimum_score) or minimum_score < 0.50 or minimum_score > 1.0 \
+			or not is_finite(maximum_area_change_percent) \
+			or maximum_area_change_percent < 0.0 or maximum_area_change_percent > 500.0:
+		return PackedStringArray(["SAM quality thresholds are outside their allowed ranges"])
 	if key_index < 0 or key_index >= _entries.size() - 1:
 		return PackedStringArray(["SAM requires at least one Source entry after the keyframe"])
 	var live: Variant = _sam_probe.call()
@@ -101,6 +111,7 @@ func start_sam_video_analysis(key_index: int, region_id: String, propagation_cou
 		"session_snapshot": _sam_snapshot.duplicate(true), "review_state": _sam_snapshot.review_state.duplicate(true),
 		"key_record": _key_record.duplicate(true), "region": selected, "target_entries": targets,
 		"propagation_count": targets.size(), "requested_count": propagation_count, "image_size": image.get_size(),
+		"minimum_score": minimum_score, "maximum_area_change_percent": maximum_area_change_percent,
 		"service_context": service_context, "range_stop": stop, "risks": risks}
 	_active_provider = _providers.get(&"sam_video")
 	if _active_provider == null: return PackedStringArray(["SAM video provider is not configured"])
@@ -252,6 +263,12 @@ func cancel() -> void:
 	_sam_request.clear()
 	_sam_elapsed_ms = -1
 	last_error = ""
+
+func shutdown() -> void:
+	cancel()
+	for provider: Variant in _providers.values():
+		if provider != null and provider.has_method("shutdown"):
+			provider.shutdown()
 
 func find_next_contiguous_run(after_index: int, min_length: int = 2) -> Vector2i:
 	if min_length < 2 or after_index < -1 or after_index >= _entries.size() - 1:
@@ -476,6 +493,7 @@ func _sam_operation_marker() -> Dictionary:
 	return {"schema_version":3,"type":"range_propagate","mode":"merge","provider_id":"sam_video","metric_id":_plan.metric_id,
 		"keyframe":_key_record.frame,"keyframe_playback_index":_preview.first,"keyframe_digest":_store.record_digest(int(_key_record.frame)),
 		"region_id":_plan.region_id,"direction":"forward","requested_count":_plan.requested_count,"generated_count":affected.size(),
+		"minimum_score":_sam_request.minimum_score,"maximum_area_change_percent":_sam_request.maximum_area_change_percent,
 		"start_frame":_key_record.frame,"end_frame":affected[-1],"affected_frames":affected,"target_playback_indices":indices,
 		"stop_frame":stop_frame,"stop_reason":stop_reason,"checkpoint_sha256":runtime.checkpoint_sha256,"device":runtime.device,
 		"model_version":runtime.model_version,"elapsed_ms":runtime.elapsed_ms,"risk_summary":risk_summary,

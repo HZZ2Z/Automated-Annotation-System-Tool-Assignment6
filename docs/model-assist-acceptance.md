@@ -1,6 +1,8 @@
-# Model Assist 真实 SAM 2 验收
+# Model Assist 历史验收记录（前端已退役）
 
-这套流程只验证标注页的单帧 Model Assist 工具；它的 image predictor 会话与 Batch 的 video predictor 会话完全隔离。新的 Batch SAM 2 Video smoke、case allowlist 和五分区证据见 [SAM 2 Video Batch 有界验收](sam-video-batch-acceptance.md)，两套结果不能互相替代；Batch 的 `functional` 只有在 `runtime_smoke` 与显式绑定的可见 UI 八项检查都 PASS 时才可 PASS。Poly 光流与边缘精修仍作为明确命名的高级/降级策略保留，但不再是 Batch 默认路径。
+> 当前产品不再挂载单帧 Model Assist 工具、`M` 快捷键或 `model_*` action；Edit 激活也不启动其 preflight。本文仅保留 2026-09-11 以前的实现与 smoke 证据，不代表当前 UI。所有现行 SAM 推理与验收以 Batch / `sam-video-v1` 为准。
+
+这套历史流程只验证当时标注页的单帧 Model Assist 工具；它的 image predictor 会话与 Batch 的 video predictor 会话完全隔离。当前 Batch SAM 2 Video smoke、case allowlist 和五分区证据见 [SAM 2 Video Batch 有界验收](sam-video-batch-acceptance.md)，两套结果不能互相替代；Batch 的 `functional` 只有在 `runtime_smoke` 与显式绑定的可见 UI 八项检查都 PASS 时才可 PASS。Poly 光流与边缘精修仍作为明确命名的显式备选保留，但不再是 Batch 默认路径。
 
 ## 运行时边界
 
@@ -23,6 +25,8 @@ export PROJECT6_SAM2_DEVICE=auto
 `PROJECT6_SAM2_CONFIG` 的 UI 合同是绝对路径；worker 校验它位于已安装 `sam2` 包的 `configs/` 下，再转换为官方 Hydra 需要的 `configs/...` 包内名称。不接受包外的同名 YAML。`auto` 在 CUDA 可用时选 CUDA，否则选 CPU；显式要求 `cuda` 但不可用时必须失败。
 
 ## 只读 smoke
+
+该历史 smoke 驱动只保留在完整本地验收工作区，按发布边界不随 GitHub 版本上传。
 
 先用项目 Python 启动验收驱动，再由 `--python` 选中的外部解释器运行生产 worker：
 

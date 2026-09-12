@@ -8,10 +8,14 @@ const JOB := preload("res://client/services/background_job.gd")
 const PACKAGE := preload("res://client/feedback/training_package.gd")
 const MODEL_ROUND := preload("res://client/workspace/model_round_controller.gd")
 const REVIEW := preload("res://client/domain/commands/review_frames_command.gd")
-const KINDS := ["training_update_v2", "review_export_v1"]
+const CODEC := preload("res://client/workspace/review_session_codec.gd")
+const COCO_SERVICE := preload("res://client/services/coco_export_service.gd")
+const COCO_KIND := "training_coco_v1"
+const KINDS := ["training_update_v2", "review_export_v1", COCO_KIND]
 
 var _host: Variant
 var _job: Variant
+var _coco_service: Variant
 var _package = PACKAGE.new()
 var _snapshot: Dictionary = {}
 var _store: Variant
@@ -23,6 +27,8 @@ var _revision := -1
 var _generation := 0
 var _phase := ""
 var _composing := false
+var _coco_context: Dictionary = {}
+var _coco_preparation_digest := ""
 var last_result: Dictionary = {}
 
 func setup(host: Variant) -> void:
@@ -30,6 +36,9 @@ func setup(host: Variant) -> void:
 	_job = JOB.new()
 	add_child(_job)
 	_job.progress.connect(func(value: Dictionary): progress.emit(value))
+	_coco_service = COCO_SERVICE.new()
+	add_child(_coco_service)
+	_coco_service.progress.connect(func(value: Dictionary): progress.emit(value))
 
 func prepare() -> Dictionary:
 	if is_busy(): return _error("An export task is already running")
@@ -66,6 +75,122 @@ func prepare_one_click() -> Dictionary:
 	result.merge(_context(generation), false)
 	result.success = true
 	result["auto_baseline_bound"] = auto_baseline_bound
+	return _end_composing(result)
+
+
+func supports_coco_export() -> bool:
+	var source: Variant = _host._source if _host != null else null
+	return (
+		source != null
+		and source.has_method("get_export_descriptor")
+		and not source.get_export_descriptor().is_empty()
+	)
+
+
+## Pure training export: consume existing content verification without changing
+## review state, then ask the shared Python worker for an exact preview.
+func prepare_coco(
+	task: String = "detection",
+	selected_frame_ids: Variant = null,
+	segmentation_attested: bool = false,
+	allow_box_only_fallback: bool = false,
+) -> Dictionary:
+	if is_busy(): return _error("An export task is already running")
+	_composing = true
+	var prepared := await _prepare(false)
+	if not prepared.get("success", false):
+		return _end_composing(prepared)
+	var generation := int(prepared.generation)
+	if not supports_coco_export():
+		return _end_composing(_coded_error(
+			"source_metadata_required",
+			"Current Source does not provide training_coco_v1 export metadata",
+		))
+	var descriptor: Dictionary = _source.get_export_descriptor()
+	var options := {
+		"task": task,
+		"segmentation_attested": segmentation_attested,
+		"allow_box_only_fallback": allow_box_only_fallback,
+	}
+	if selected_frame_ids != null:
+		options["selected_frame_ids"] = Array(selected_frame_ids)
+	_coco_context = {
+		"schema_version": 1,
+		"package_type": COCO_KIND,
+		"saved_snapshot": CODEC.new().encode(_snapshot),
+		"source_descriptor": descriptor.duplicate(true),
+		"export_options": options,
+		"preparation_token": {
+			"session_id": _session_id,
+			"saved_revision": _revision,
+		},
+	}
+	var errors: PackedStringArray = _coco_service.start_prepare(_coco_context)
+	if not errors.is_empty():
+		_clear_coco_preview()
+		return _end_composing(_coded_error("background_start_failed", errors))
+	_set_phase("coco_preview")
+	var returned: Dictionary = await _coco_service.finished
+	_set_phase("")
+	var result := _decorate_coco_result(returned, generation)
+	if (
+		generation != _generation
+		or not _same_session()
+		or _store.current_revision() != _revision
+		or _session.saved_revision() < _revision
+	):
+		_clear_coco_preview()
+		var stale := _stale_error(
+			generation, "Session or content changed during COCO export preparation")
+		stale.merge({
+			"issues": [{"code": "STALE_CONTEXT", "message": stale.errors[0]}],
+			"package_type": COCO_KIND,
+			"task": task,
+		}, true)
+		return _end_composing(stale)
+	if result.get("success", false):
+		_coco_preparation_digest = String(result.get("preparation_digest", ""))
+	else:
+		_clear_coco_preview()
+	return _end_composing(result)
+
+
+## Confirmation acknowledges scope only; it never creates review records. The
+## worker re-prepares and rehashes the frozen inputs before atomic publication.
+func publish_coco(output_parent: String, scope_attested: bool) -> Dictionary:
+	if is_busy(): return _error("An export task is already running")
+	if not scope_attested:
+		return _coded_error(
+			"attestation_required",
+			"Confirm the included Source-frame scope and zero-target semantics",
+		)
+	var errors := _prepared_errors(COCO_KIND)
+	if output_parent.strip_edges().is_empty():
+		errors.append("Choose an output directory")
+	if _coco_context.is_empty() or _coco_preparation_digest.is_empty():
+		errors.append("Prepare a COCO export preview first")
+	if not errors.is_empty():
+		return _coded_error(
+			"stale_context" if not _same_session() else "prepare_required", errors)
+	if _store.current_revision() != _revision or _session.saved_revision() < _revision:
+		var stale := _coded_error(
+			"stale_context", "Content changed after COCO preview; prepare again")
+		stale.stale = true
+		return stale
+	_composing = true
+	var generation := _generation
+	errors = _coco_service.start_export(
+		_coco_context,
+		ProjectSettings.globalize_path(output_parent.strip_edges()).simplify_path(),
+		_coco_preparation_digest,
+	)
+	if not errors.is_empty():
+		return _end_composing(_coded_error("background_start_failed", errors))
+	_set_phase("coco_publish")
+	var returned: Dictionary = await _coco_service.finished
+	_set_phase("")
+	var result := _decorate_coco_result(returned, generation)
+	last_result = result
 	return _end_composing(result)
 
 
@@ -117,12 +242,13 @@ func confirm_and_publish(output_parent: String, attested: bool) -> Dictionary:
 		published["error_code"] = "stale_context" if published.get("stale", false) or generation != _generation else "publication_failed"
 	return _end_composing(published)
 
-func _prepare() -> Dictionary:
+func _prepare(require_feedback: bool = true) -> Dictionary:
 	_generation += 1
 	var generation := _generation
 	_snapshot = {}
+	_clear_coco_preview()
 	state_changed.emit()
-	var errors := _entry_errors()
+	var errors := _entry_errors(require_feedback)
 	if not errors.is_empty(): return _error(errors)
 	_store = _host._store
 	_session = _host._workspace_session
@@ -137,12 +263,20 @@ func _prepare() -> Dictionary:
 	var result := _context(generation)
 	if generation != _generation:
 		result.cancelled = true
+		result.error_code = "stale_context"
 	elif not _same_session():
 		result.stale = true
+		result.error_code = "stale_context"
 		result.errors.append("Session changed while preparing export")
 	elif not errors.is_empty():
 		result.errors = errors
+		result.error_code = "save_failed"
+		result.issues = []
+		for message: String in errors:
+			result.issues.append({"code": "SAVE_FAILED", "message": message})
 	elif _store.current_revision() != _revision or _session.saved_revision() < _revision:
+		result.stale = true
+		result.error_code = "stale_context"
 		result.errors.append("Content changed during export preparation; prepare again")
 	else:
 		_snapshot = _store.freeze_snapshot()
@@ -310,17 +444,26 @@ func _coded_error(code: String, errors: Variant) -> Dictionary:
 func cancel() -> void:
 	_generation += 1
 	_snapshot = {}
+	_clear_coco_preview()
 	if _job != null: _job.cancel()
+	if _coco_service != null: _coco_service.cancel()
 	state_changed.emit()
 
 func cancel_and_drain() -> void:
 	cancel()
+	if _coco_service != null:
+		await _coco_service.cancel_and_drain()
 	while is_busy(): await get_tree().process_frame
 
 func is_busy() -> bool:
-	return _composing or not _phase.is_empty() or (_job != null and _job.is_running())
+	return (
+		_composing
+		or not _phase.is_empty()
+		or (_job != null and _job.is_running())
+		or (_coco_service != null and _coco_service.is_running())
+	)
 
-func is_publishing() -> bool: return _phase == "publish"
+func is_publishing() -> bool: return _phase in ["publish", "coco_publish"]
 func get_snapshot() -> Dictionary: return _snapshot
 func generation() -> int: return _generation
 
@@ -349,7 +492,7 @@ func _run_worker(phase: String, work: Callable, options: Dictionary) -> Dictiona
 	_set_phase("")
 	return result
 
-func _entry_errors() -> PackedStringArray:
+func _entry_errors(require_feedback: bool = true) -> PackedStringArray:
 	if _host == null or _host._source == null or _host._current_frame < 0:
 		return PackedStringArray(["Open a source before exporting"])
 	if _host._is_class_dialog_active(): return _host._modal_refusal("Export")
@@ -361,7 +504,7 @@ func _entry_errors() -> PackedStringArray:
 		return PackedStringArray(["Finish video import before exporting"])
 	if not _host._prepare_edit_navigation():
 		return PackedStringArray([_host._edit_navigation_message()])
-	if _host._feedback_plugin == null or not _host._feedback_plugin.has_method("export_package"):
+	if require_feedback and (_host._feedback_plugin == null or not _host._feedback_plugin.has_method("export_package")):
 		return PackedStringArray(["Current Feedback plugin does not support training_update_v2 export_package"])
 	if _host._workspace_session == null or String(_host._workspace_session.status().session_id).is_empty():
 		return PackedStringArray(["No committed review session is available for export"])
@@ -388,6 +531,32 @@ func _error(errors: Variant) -> Dictionary:
 	var result := _context(_generation)
 	result.errors = PackedStringArray([errors]) if errors is String else PackedStringArray(errors)
 	return result
+
+
+func _decorate_coco_result(returned: Dictionary, generation: int) -> Dictionary:
+	var result := _context(generation)
+	result.merge(returned, true)
+	result["session_id"] = _session_id
+	result["revision"] = _revision
+	result["generation"] = generation
+	result["stale"] = not _same_session()
+	if generation != _generation:
+		result["cancel_requested"] = true
+		if not result.get("success", false):
+			result["cancelled"] = true
+	if not result.get("success", false) and not result.has("error_code"):
+		var issues: Array = result.get("issues", [])
+		result["error_code"] = (
+			String(issues[0].get("code", "package_invalid")).to_lower()
+			if not issues.is_empty() and issues[0] is Dictionary
+			else "package_invalid"
+		)
+	return result
+
+
+func _clear_coco_preview() -> void:
+	_coco_context = {}
+	_coco_preparation_digest = ""
 
 func _set_phase(value: String) -> void:
 	_phase = value

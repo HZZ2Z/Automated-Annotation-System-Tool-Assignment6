@@ -161,8 +161,13 @@ func prepare_video(representative_frame: String, token: Variant = null) -> Dicti
 		"fallback_reasons": imported.get("fallback_reasons", {}).duplicate(true),
 		"skipped_reasons": imported.get("skipped_reasons", {}).duplicate(true),
 	}
+	var export_metadata := {
+		"schema_version": 1,
+		"import_bindings": imported.get("import_bindings", []).duplicate(true),
+		"import_issues": imported.get("import_issues", []).duplicate(true),
+	}
 	return _preparation(true, manifest, manifest_frames, records, context,
-		PackedStringArray(), statistics)
+		PackedStringArray(), statistics, export_metadata)
 
 
 func inspect_locator(locator: String) -> Dictionary:
@@ -264,6 +269,7 @@ func _preparation(
 	context: Dictionary,
 	errors: PackedStringArray,
 	statistics: Dictionary = {},
+	export_metadata: Dictionary = {},
 ) -> Dictionary:
 	return {
 		"ok": ok,
@@ -272,5 +278,6 @@ func _preparation(
 		"records": records.duplicate(true),
 		"context": context.duplicate(true),
 		"statistics": statistics.duplicate(true),
+		"export_metadata": export_metadata.duplicate(true),
 		"errors": PackedStringArray(errors),
 	}

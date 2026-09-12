@@ -5,5 +5,5 @@
   "stage": "source",
   "entry": "plugin.gd",
   "priority": 90,
-  "capabilities": ["frames", "model_annotations", "locator.endoscapes_video", "workspace.discovery"]
+  "capabilities": ["frames", "model_annotations", "locator.endoscapes_video", "workspace.discovery", "export.training_coco_v1"]
 }

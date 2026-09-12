@@ -9,6 +9,7 @@ const PACKAGE = preload("res://client/feedback/training_package.gd")
 const STORE = preload("res://client/domain/annotation_store.gd")
 const VALIDATOR = preload("res://client/domain/model_output_validator.gd")
 const BASELINE_RESOLVER = preload("res://client/workspace/export_baseline_resolver.gd")
+const COCO_PARENT = preload("res://client/services/coco_parent_validator.gd")
 
 static func prepare_round(context: Dictionary, input_path: String, token = null) -> Dictionary:
 	return _prepare(context,input_path,false,token)
@@ -110,13 +111,12 @@ static func _prepare(context: Dictionary, input_path: String, binding: bool, tok
 			return _failure("Model round media, taxonomy or complete source frame mapping mismatch")
 		var parent_path = String(context.get("parent_package_path",""))
 		if parent_path.is_empty(): return _failure("Select the parent training package directory")
-		errors = PACKAGE.validate_package(parent_path)
-		if not errors.is_empty(): return _failure("Invalid parent package: " + "; ".join(errors))
-		var parent = document.read_document(parent_path.path_join("manifest.json"))
-		if not parent.success: return parent
+		var parent = _read_parent_descriptor(parent_path, document, token)
+		if not parent.success:
+			return parent
 		parent_sha = parent.sha256
-		var p = parent.payload
-		if p.package_type != "training_update_v2" or p.package_id != manifest.parent_package_id or p.round_id != snapshot.round_id or p.model_revision != snapshot.model_revision or p.taxonomy_version != snapshot.taxonomy_version or not PACKAGE.DIFF.equivalent(p.media,_media(snapshot)) or not PACKAGE.DIFF.equivalent(p.baseline,{"kind":snapshot.baseline_kind,"digest":snapshot.baseline_digest}) or not PACKAGE.DIFF.equivalent(p.source_frame_entries,snapshot.frame_entries):
+		var p: Dictionary = parent.descriptor
+		if p.package_id != manifest.parent_package_id or p.round_id != snapshot.round_id or p.model_revision != snapshot.model_revision or p.taxonomy_version != snapshot.taxonomy_version or not PACKAGE.DIFF.equivalent(p.media,_media(snapshot)) or not PACKAGE.DIFF.equivalent(p.baseline,{"kind":snapshot.baseline_kind,"digest":snapshot.baseline_digest}) or not PACKAGE.DIFF.equivalent(p.source_frame_entries,snapshot.frame_entries):
 			return _failure("Parent training package does not belong to this media, baseline and round")
 		annotation_path = input_path.get_base_dir().path_join(manifest.annotations.path)
 	var loaded = _read_records(annotation_path)
@@ -246,6 +246,47 @@ static func _read_records(path: String) -> Dictionary:
 		records.append(parser.data)
 	if records.is_empty(): return _failure("Model annotations require complete nonempty frame coverage")
 	return {"success":true,"errors":[],"records":records,"bytes":bytes.size(),"sha256":document._digest(bytes)}
+
+
+static func _read_parent_descriptor(
+	parent_path: String,
+	document: Variant,
+	token: Variant,
+) -> Dictionary:
+	var manifest_path := parent_path.path_join("manifest.json")
+	var before: Dictionary = document.read_document(manifest_path)
+	if not before.success:
+		return _failure("Invalid parent package: " + "; ".join(before.errors))
+	if not before.payload is Dictionary:
+		return _failure("Invalid parent package manifest")
+	var descriptor: Dictionary
+	match before.payload.get("package_type"):
+		"training_update_v2":
+			var errors := PACKAGE.validate_package(parent_path)
+			if not errors.is_empty():
+				return _failure("Invalid parent package: " + "; ".join(errors))
+			descriptor = before.payload.duplicate(true)
+		"training_coco_v1":
+			var validated := COCO_PARENT.read_descriptor(parent_path, token)
+			if validated.get("cancelled", false):
+				return _failure("Round operation cancelled")
+			if not validated.get("success", false):
+				return _failure("Invalid parent package: " + "; ".join(
+					PackedStringArray(validated.get("errors", []))))
+			descriptor = validated.descriptor.duplicate(true)
+		_:
+			return _failure("Parent package type must be training_update_v2 or training_coco_v1")
+	var after: Dictionary = document.read_document(manifest_path)
+	if not after.success or after.sha256 != before.sha256:
+		return _failure("Parent package manifest changed during validation")
+	if descriptor.get("package_id") != after.payload.get("package_id"):
+		return _failure("Validated parent descriptor differs from its manifest")
+	return {
+		"success": true,
+		"errors": [],
+		"descriptor": descriptor,
+		"sha256": after.sha256,
+	}
 
 static func _media(snapshot: Dictionary) -> Dictionary:
 	var media = {}

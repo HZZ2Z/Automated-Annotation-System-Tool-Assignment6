@@ -21,17 +21,14 @@ var _threshold_row: HBoxContainer
 var _mode: OptionButton
 var _algorithm: OptionButton
 var _algorithm_hint: Label
-var _anchor_attestation: CheckButton
 var _propagation_count: SpinBox
+var _sam_min_score: SpinBox
+var _sam_min_score_row: HBoxContainer
+var _sam_area_change: SpinBox
+var _sam_area_change_row: HBoxContainer
 var _runtime_badge: Label
 var _reanchor: Button
 var _show_preview: CheckButton
-var _sam_preview_row: HBoxContainer
-var _sam_preview_previous: Button
-var _sam_preview_next: Button
-var _sam_preview_label: Label
-var _sam_preview_indices: Array[int] = []
-var _sam_preview_position := -1
 var _auto: CheckButton
 var _apply: Button
 var _verify_range: Button
@@ -43,6 +40,11 @@ var _setting := false
 var _content: VBoxContainer
 var _advanced: VBoxContainer
 var _details: Label
+var _log_panel: VBoxContainer
+var _log_disclosure: Button
+var _advanced_disclosure: Button
+var _log_entries: Array[String] = []
+var _last_progress_log := ""
 var _key_label: Label
 var _mode_hint: Label
 var _preview_note: Label
@@ -56,6 +58,16 @@ var _next_contiguous: Button
 var _sam_availability: Dictionary = {}
 var _sam_context_signature: Dictionary = {}
 var _reanchor_context: Dictionary = {}
+var _sam_committing := false
+var _sam_pending_navigation: Dictionary = {}
+var _result_heading: Label
+var _result_card: PanelContainer
+var _action_row: HBoxContainer
+var _review_heading: Label
+var _review_card: PanelContainer
+var _review_row: HBoxContainer
+var _next_unverified: Button
+var _timeline_hint: Label
 
 func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_host = host
@@ -110,10 +122,8 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_algorithm.select(0)
 	_panel.add_child(_algorithm)
 	_algorithm.item_selected.connect(_select_algorithm)
-	_anchor_attestation = CheckButton.new()
-	_anchor_attestation.text = "我已确认当前 region 可作为传播起点"
-	_panel.add_child(_anchor_attestation)
-	_anchor_attestation.toggled.connect(func(_pressed: bool): refresh_current())
+	_runtime_badge = _label("")
+	_runtime_badge.visible = false
 	var count_row := HBoxContainer.new()
 	_panel.add_child(count_row)
 	var count_caption := Label.new()
@@ -124,8 +134,38 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_propagation_count.allow_lesser = false
 	_propagation_count.tooltip_text = "关键帧之后的 Source 条目数，关键帧不计入。"
 	_propagation_count.value_changed.connect(func(_value: float): _sam_intent_changed())
-	_runtime_badge = _label("")
-	_runtime_badge.visible = false
+	_algorithm_hint = _label("SAM 会向后传播当前已提交的单个 Box/Poly，合法结果直接保存并标为已确认。")
+	_analyze = _button("生成并保存标注", analyze)
+	_analyze.custom_minimum_size.y = 40
+	var analyze_primary := StyleBoxFlat.new()
+	analyze_primary.bg_color = Color("#365b77")
+	analyze_primary.set_corner_radius_all(4)
+	_analyze.add_theme_stylebox_override("normal", analyze_primary)
+	_advanced_disclosure = _button("▶ 高级设置", Callable(), false)
+	_advanced_disclosure.toggle_mode = true
+	_advanced_disclosure.flat = true
+	_advanced = VBoxContainer.new()
+	_advanced.add_theme_constant_override("separation", 8)
+	_panel.add_child(_advanced)
+	var primary_panel := _panel
+	_panel = _advanced
+	_sam_min_score_row = HBoxContainer.new()
+	_panel.add_child(_sam_min_score_row)
+	var score_caption := Label.new()
+	score_caption.text = "最低模型确定度"
+	_sam_min_score_row.add_child(score_caption)
+	_sam_min_score = _spin(_sam_min_score_row, 0.50, 1.0, 0.50, 0.01)
+	_sam_min_score.tooltip_text = "低于该分数时停止并保留此前合法结果；0.50 保持原有接受范围。"
+	_sam_min_score.value_changed.connect(func(_value: float): _sam_intent_changed())
+	_sam_area_change_row = HBoxContainer.new()
+	_panel.add_child(_sam_area_change_row)
+	var area_caption := Label.new()
+	area_caption.text = "相邻面积变化容许值"
+	_sam_area_change_row.add_child(area_caption)
+	_sam_area_change = _spin(_sam_area_change_row, 0.0, 500.0, 0.0, 5.0)
+	_sam_area_change.suffix = "%"
+	_sam_area_change.tooltip_text = "相邻两帧轮廓面积变化超过该百分比时停止；0 表示不启用额外面积门禁。"
+	_sam_area_change.value_changed.connect(func(_value: float): _sam_intent_changed())
 	_threshold_row = HBoxContainer.new()
 	_panel.add_child(_threshold_row)
 	var caption := Label.new()
@@ -134,8 +174,51 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_threshold = _spin(_threshold_row, 0.001, 1.0, 0.10, 0.001)
 	_threshold.tooltip_text = "只控制相邻/关键帧相似度；默认 0.10 优先形成待检查候选。每批最多 30 帧。"
 	_threshold.value_changed.connect(func(_value: float): cancel())
-	_analyze = _button("生成 SAM 候选", analyze)
-	_section("2  应用标注")
+	_mode = OptionButton.new()
+	_mode.add_item("覆盖目标标注")
+	_mode.add_item("合并，保留其他标注")
+	_mode.select(1)
+	_panel.add_child(_mode)
+	_mode.item_selected.connect(_select_mode)
+	_mode_hint = _label("更新同 ID 的 Poly，保留目标帧独有区域。")
+	_mode_hint.add_theme_color_override("font_color", Color("#b4bac5"))
+	_auto = CheckButton.new()
+	_auto.text = "确认后自动前进"
+	_auto.button_pressed = true
+	_panel.add_child(_auto)
+	_advanced.visible = false
+	_advanced_disclosure.toggled.connect(_toggle_advanced)
+	_panel = primary_panel
+
+	var log_card := PanelContainer.new()
+	var log_style := StyleBoxFlat.new()
+	log_style.bg_color = Color("#27292d")
+	log_style.set_corner_radius_all(5)
+	log_style.content_margin_left = 10
+	log_style.content_margin_right = 10
+	log_style.content_margin_top = 9
+	log_style.content_margin_bottom = 9
+	log_card.add_theme_stylebox_override("panel", log_style)
+	_content.add_child(log_card)
+	var log_root := VBoxContainer.new()
+	log_root.add_theme_constant_override("separation", 7)
+	log_card.add_child(log_root)
+	_log_disclosure = Button.new()
+	_log_disclosure.text = "▶ 2  日志"
+	_log_disclosure.toggle_mode = true
+	_log_disclosure.flat = true
+	_log_disclosure.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_style_section_disclosure(_log_disclosure)
+	log_root.add_child(_log_disclosure)
+	_log_panel = VBoxContainer.new()
+	log_root.add_child(_log_panel)
+	_panel = _log_panel
+	_details = _label("尚无运行日志。")
+	_log_panel.visible = false
+	_log_disclosure.toggled.connect(_toggle_log)
+
+	_result_heading = _section("候选结果")
+	_result_card = _panel.get_parent() as PanelContainer
 	_range_controls = HBoxContainer.new()
 	_panel.add_child(_range_controls)
 	_first_entry = OptionButton.new()
@@ -160,14 +243,6 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.pressed.connect(_boundary.bind(pair[1]))
 		_edges.add_child(button)
-	_mode = OptionButton.new()
-	_mode.add_item("覆盖目标标注")
-	_mode.add_item("合并，保留其他标注")
-	_mode.select(1)
-	_panel.add_child(_mode)
-	_mode.item_selected.connect(_select_mode)
-	_mode_hint = _label("更新同 ID 的 Poly，保留目标帧独有区域。")
-	_mode_hint.add_theme_color_override("font_color", Color("#b4bac5"))
 	_summary = _label("尚未选择范围")
 	_next_contiguous = _button("跳到下一段连续帧", _jump_to_next_contiguous, false)
 	_next_contiguous.visible = false
@@ -175,25 +250,10 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_show_preview.text = "预览传播结果"
 	_panel.add_child(_show_preview)
 	_show_preview.toggled.connect(_toggle_preview)
-	_sam_preview_row = HBoxContainer.new()
-	_sam_preview_row.visible = false
-	_panel.add_child(_sam_preview_row)
-	_sam_preview_previous = Button.new()
-	_sam_preview_previous.text = "上一候选"
-	_sam_preview_previous.pressed.connect(_move_sam_preview.bind(-1))
-	_sam_preview_row.add_child(_sam_preview_previous)
-	_sam_preview_label = Label.new()
-	_sam_preview_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_sam_preview_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_sam_preview_row.add_child(_sam_preview_label)
-	_sam_preview_next = Button.new()
-	_sam_preview_next.text = "下一候选"
-	_sam_preview_next.pressed.connect(_move_sam_preview.bind(1))
-	_sam_preview_row.add_child(_sam_preview_next)
-	var action_row := HBoxContainer.new()
-	_panel.add_child(action_row)
+	_action_row = HBoxContainer.new()
+	_panel.add_child(_action_row)
 	_apply = _button("应用到所选帧", apply)
-	_apply.reparent(action_row)
+	_apply.reparent(_action_row)
 	_apply.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_apply.custom_minimum_size.y = 36
 	var primary := StyleBoxFlat.new()
@@ -201,13 +261,16 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	primary.set_corner_radius_all(4)
 	_apply.add_theme_stylebox_override("normal", primary)
 	_cancel = _button("取消本批", cancel, false)
-	_cancel.reparent(action_row)
+	_cancel.reparent(_action_row)
 	_cancel.flat = true
 	_reanchor = _button("跳到停止帧重新锚定", _request_reanchor, false)
 	_reanchor.visible = false
-	_section("3  检查并确认")
-	var review_row := HBoxContainer.new()
-	_panel.add_child(review_row)
+	_retry = _button("重试保存", retry_save, false)
+	_retry.visible = false
+	_review_heading = _section("3  检查并确认")
+	_review_card = _panel.get_parent() as PanelContainer
+	_review_row = HBoxContainer.new()
+	_panel.add_child(_review_row)
 	_verify_current = Button.new()
 	_verify_current.text = "确认本帧"
 	_verify_current.pressed.connect(_toggle_current_verification)
@@ -216,34 +279,17 @@ func setup(host: Variant, sidebar: VBoxContainer) -> void:
 	_verify_range.pressed.connect(verify_range)
 	for button: Button in [_verify_current, _verify_range]:
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		review_row.add_child(button)
+		_review_row.add_child(button)
 		_guarded_buttons.append(button)
-	_button("下一待检查帧", next_unverified)
-	_retry = _button("重试保存", retry_save, false)
-	_retry.visible = false
+	_next_unverified = _button("下一待检查帧", next_unverified)
+	_timeline_hint = _label("时间轴：斜线为待检查，勾号为已确认。\n金色为已保存批次。")
 	_panel = _content
-	var disclosure := _button("高级设置", Callable(), false)
-	disclosure.toggle_mode = true
-	disclosure.flat = true
-	_advanced = VBoxContainer.new()
-	_advanced.add_theme_constant_override("separation", 8)
-	_content.add_child(_advanced)
-	_panel = _advanced
-	_auto = CheckButton.new()
-	_auto.text = "确认后自动前进"
-	_auto.button_pressed = true
-	_panel.add_child(_auto)
-	_algorithm_hint = _label("SAM 只向后传播当前已提交的单个 Box/Poly，候选需人工确认。")
-	_details = _label("分析后可在此查看范围停止原因。")
-	_label("时间轴：斜线为待检查，勾号为已确认。\n蓝色为候选段，金色为已应用批次。")
-	_advanced.visible = false
-	disclosure.toggled.connect(func(expanded: bool): _advanced.visible = expanded)
 	_annotation_tab.pressed.connect(func(): _show_tab(false))
 	_batch_tab.pressed.connect(func(): _show_tab(true))
 	_show_tab(false)
 	refresh_current()
 
-func _section(title: String) -> void:
+func _section(title: String) -> Label:
 	var card := PanelContainer.new()
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color("#27292d")
@@ -259,6 +305,52 @@ func _section(title: String) -> void:
 	card.add_child(_panel)
 	var heading := _label(title)
 	heading.add_theme_color_override("font_color", Color("#c1cbd8"))
+	return heading
+
+func _style_section_disclosure(button: Button) -> void:
+	button.add_theme_color_override("font_color", Color("#c1cbd8"))
+	button.add_theme_color_override("font_hover_color", Color("#c1cbd8"))
+	button.add_theme_color_override("font_pressed_color", Color("#c1cbd8"))
+	button.add_theme_font_size_override("font_size", 14)
+	for state: String in ["normal", "hover", "pressed", "focus"]:
+		button.add_theme_stylebox_override(state, StyleBoxEmpty.new())
+
+func _toggle_advanced(expanded: bool) -> void:
+	_advanced.visible = expanded
+	_advanced_disclosure.text = ("▼" if expanded else "▶") + " 高级设置"
+
+func _toggle_log(expanded: bool) -> void:
+	_log_panel.visible = expanded
+	_log_disclosure.text = ("▼" if expanded else "▶") + " 2  日志"
+
+func _begin_batch_log() -> void:
+	_log_entries.clear()
+	_last_progress_log = ""
+	_append_log("开始：%s" % _algorithm.get_item_text(_algorithm.selected))
+	if _algorithm.selected == 0:
+		_append_log("参数：向后传播 %d 帧；最低模型确定度 %.2f；相邻面积变化容许值 %s" % [
+			int(_propagation_count.value), _sam_min_score.value,
+			"不限制" if _sam_area_change.value <= 0.0 else "%.0f%%" % _sam_area_change.value])
+	else:
+		_append_log("参数：相似帧差异阈值 %.3f；%s" % [
+			_threshold.value, _mode.get_item_text(_mode.selected)])
+
+func _append_log(message: String) -> void:
+	var normalized := message.strip_edges()
+	if normalized.is_empty() or (_log_entries.size() > 0 and _log_entries[-1] == normalized):
+		return
+	_log_entries.append(normalized)
+	if _log_entries.size() > 120:
+		_log_entries.pop_front()
+	if _details != null:
+		_details.text = "\n".join(_log_entries)
+
+func _append_progress_log(message: String) -> void:
+	var normalized := message.strip_edges()
+	if normalized.is_empty() or normalized == _last_progress_log:
+		return
+	_last_progress_log = normalized
+	_append_log("运行：%s" % normalized)
 
 func _toggle_current_verification() -> void:
 	if _store != null and _store.is_verified(_host._current_record_frame()):
@@ -306,6 +398,8 @@ func bind_source() -> void:
 func clear() -> void:
 	_end_sam_preview_display()
 	if _store != null:
+		if _store.has_method("clear_sam_auto_review_scope"):
+			_store.clear_sam_auto_review_scope()
 		if _store.corrected_records_replaced.is_connected(_changed):
 			_store.corrected_records_replaced.disconnect(_changed)
 		if _store.review_state_changed.is_connected(_changed):
@@ -314,12 +408,16 @@ func clear() -> void:
 	_sam_context_signature.clear()
 	_sam_availability.clear()
 	_reanchor_context.clear()
-	if _anchor_attestation != null:
-		_anchor_attestation.set_pressed_no_signal(false)
+	_sam_pending_navigation.clear()
+	_sam_committing = false
 	if _key_label != null:
 		_key_label.text = "在播放器中选一帧，先修正它的标注。"
 		_summary.text = "尚未选择范围"
 		_info.visible = false
+	_log_entries.clear()
+	_last_progress_log = ""
+	if _details != null:
+		_details.text = "尚无运行日志。"
 	controller.configure(null, null, null, [])
 	_range = Vector2i(-1, -1)
 	_preview = false
@@ -331,11 +429,14 @@ func clear() -> void:
 func analyze() -> void:
 	if not _ready_for_action():
 		return
-	var attested := _anchor_attestation.button_pressed
-	_clear_transient(false)
+	_sam_pending_navigation.clear()
+	_clear_transient()
+	_begin_batch_log()
 	var errors: PackedStringArray
 	if _algorithm.selected == 0:
-		errors = controller.start_sam_video_analysis(_host.get_current_frame(), _host._get_selected_region_id(), int(_propagation_count.value), attested)
+		errors = controller.start_sam_video_analysis(
+			_host.get_current_frame(), _host._get_selected_region_id(), int(_propagation_count.value),
+			_sam_min_score.value, _sam_area_change.value)
 	elif _algorithm.selected == 1:
 		errors = controller.start_polygon_analysis(_host.get_current_frame(), _threshold.value)
 	else:
@@ -345,6 +446,7 @@ func analyze() -> void:
 		return
 	_info.text = controller.progress_text()
 	_info.visible = true
+	_append_progress_log(_info.text)
 	set_process(true)
 	refresh_current()
 
@@ -361,6 +463,7 @@ func _process(_delta: float) -> void:
 	controller.step_analysis()
 	if controller.is_analyzing():
 		_info.text = controller.progress_text()
+		_append_progress_log(_info.text)
 		return
 	set_process(false)
 	var plan: Dictionary = controller.get_plan()
@@ -370,11 +473,9 @@ func _process(_delta: float) -> void:
 		return
 	_range = Vector2i(plan.start_index, plan.end_index)
 	if str(plan.get("provider_id", "")) == "sam_video":
-		_info.visible = false
 		_runtime_badge.text = str(plan.get("runtime", {}).get("badge", ""))
 		_runtime_badge.visible = not _runtime_badge.text.is_empty()
-		_present_sam_plan(plan)
-		refresh_current()
+		await _commit_sam_plan(plan)
 		return
 	_setting = true
 	var range_errors := _range_model.configure(_host._frame_entries, int(plan.start_index), int(plan.key_index), int(plan.end_index))
@@ -404,7 +505,8 @@ func _process(_delta: float) -> void:
 	_setting = false
 	_info.visible = false
 	_key_label.text = "参考帧 %d · %d 个区域" % [plan.keyframe, _host._store.get_corrected_record(plan.keyframe).regions.size()]
-	_details.text = _advanced_diagnostics(plan)
+	_append_log("分析完成：候选范围 %s–%s。" % [str(plan.get("start_index", "-")), str(plan.get("end_index", "-"))])
+	_append_log(_advanced_diagnostics(plan))
 	_update_preview()
 	refresh_current()
 
@@ -414,9 +516,6 @@ func _update_preview() -> void:
 	_mode_hint.text = ("只保留传播得到的参考 Poly。" if _mode.selected == 0 else "更新同 ID 的 Poly，保留目标帧独有区域。") if _algorithm.selected == 1 else ("替换目标帧的全部标注。" if _mode.selected == 0 else "同 ID 更新，保留目标帧独有区域。")
 	var plan: Dictionary = controller.get_plan()
 	if plan.is_empty():
-		return
-	if str(plan.get("provider_id", "")) == "sam_video":
-		_update_sam_preview(plan)
 		return
 	var first := _selected_range_index(_first_entry)
 	var last := _selected_range_index(_last_entry)
@@ -458,9 +557,11 @@ func apply() -> void:
 		return
 	_show_preview.set_pressed_no_signal(false)
 	_preview = false
+	_append_log("写入：候选已通过校验并原子应用。")
 	_host._refresh_after_edit(false)
 	if await _save():
 		_summary.text = "批量候选已确认并保存。"
+		_append_log("完成：批量候选已确认并保存。")
 		_status("批量候选已确认并保存。")
 		_host.seek(first)
 	refresh_current()
@@ -513,21 +614,30 @@ func _next_after(index: int) -> void:
 func retry_save() -> void:
 	if available() and await _save():
 		_retry.visible = false
-		_status("已保存。")
+		if not _sam_pending_navigation.is_empty():
+			var pending := _sam_pending_navigation.duplicate(true)
+			_sam_pending_navigation.clear()
+			_status("已保存 SAM 标注。")
+			_finish_sam_navigation(pending)
+		else:
+			_status("已保存。")
 
 func _save() -> bool:
 	var expected_store = _store
 	var expected_revision: int = _store.current_revision()
 	var expected_frame: int = _host.get_current_frame()
+	_append_log("保存：正在写入工作区标注文件。")
 	var errors: PackedStringArray = await _host._flush_workspace_changes()
 	if _store != expected_store or _store.current_revision() != expected_revision or _host.get_current_frame() != expected_frame:
+		_append_log("保存中止：上下文在保存期间发生变化。")
 		return false
 	if not errors.is_empty():
 		_retry.visible = true
-		_details.text = errors[0]
+		_append_log("保存失败：%s" % errors[0])
 		_status("保存失败，已停止前进。请重试保存。")
 		return false
 	_retry.visible = false
+	_append_log("保存完成：工作区标注文件已落盘。")
 	return true
 
 func _ready_for_action() -> bool:
@@ -550,11 +660,16 @@ func _boundary(which: String) -> void:
 		return
 	_host.seek(index)
 
-func cancel(clear_attestation: bool = true) -> void:
-	_clear_transient(clear_attestation)
+func cancel() -> void:
+	if _sam_committing:
+		return
+	if controller.is_analyzing() or not controller.get_plan().is_empty():
+		_append_log("已取消当前批次；未确认候选未写入。")
+	_sam_pending_navigation.clear()
+	_clear_transient()
 	refresh_current()
 
-func _clear_transient(clear_attestation: bool = true) -> void:
+func _clear_transient() -> void:
 	_end_sam_preview_display()
 	controller.cancel()
 	set_process(false)
@@ -566,8 +681,6 @@ func _clear_transient(clear_attestation: bool = true) -> void:
 	_summary.text = "尚未选择范围"
 	_reanchor_context.clear()
 	_reanchor.visible = false
-	if clear_attestation:
-		_anchor_attestation.set_pressed_no_signal(false)
 	_info.visible = false
 
 func is_previewing() -> bool:
@@ -579,21 +692,12 @@ func _toggle_preview(enabled: bool) -> void:
 		return
 	_preview = enabled and not controller.get_plan().is_empty()
 	if not _preview:
-		var had_sam_preview := not _sam_preview_indices.is_empty()
-		_end_sam_preview_display(false)
-		if not had_sam_preview:
-			_host._refresh_current_annotations()
-	elif str(controller.get_plan().get("provider_id", "")) == "sam_video":
-		if _sam_preview_position < 0 and not _sam_preview_indices.is_empty():
-			_sam_preview_position = 0
-		_show_sam_preview_at_cursor()
+		_end_sam_preview_display()
+		_host._refresh_current_annotations()
 	refresh_current()
 
 func _render_preview() -> void:
 	if not _preview:
-		return
-	if str(controller.get_plan().get("provider_id", "")) == "sam_video":
-		_show_sam_preview_at_cursor()
 		return
 	var proposed: Dictionary = controller.proposed_record(_host._current_record_frame())
 	if proposed.is_empty():
@@ -606,25 +710,41 @@ func refresh_current() -> void:
 		return
 	_observe_sam_context()
 	var active := available()
-	var enabled: bool = active and not controller.is_analyzing() and not _host._is_class_dialog_active()
+	var enabled: bool = active and not controller.is_analyzing() and not _sam_committing \
+		and not _host._is_class_dialog_active()
 	var sam_selected := _algorithm.selected == 0
 	_mode.disabled = not enabled
 	_mode.visible = not sam_selected
 	_mode_hint.visible = not sam_selected
 	_edges.visible = not sam_selected
-	_anchor_attestation.visible = sam_selected
 	_propagation_count.get_parent().visible = sam_selected
+	_sam_min_score_row.visible = sam_selected
+	_sam_area_change_row.visible = sam_selected
 	_threshold.editable = enabled
 	_threshold_row.visible = not sam_selected
 	_algorithm.disabled = not active
+	_result_heading.text = "生成状态" if sam_selected else "候选结果"
+	_range_controls.visible = not sam_selected and _range_model.indices().size() > 1
+	_show_preview.visible = not sam_selected
+	_apply.visible = not sam_selected
+	_review_heading.visible = true
+	_review_row.visible = true
+	_next_unverified.visible = true
+	_auto.visible = not sam_selected
+	_reanchor.visible = sam_selected and not _reanchor_context.is_empty()
 	for button: Button in _guarded_buttons:
 		button.disabled = not enabled
 	var can_apply := controller.can_apply()
 	var plan := controller.get_plan()
+	var has_result_output := controller.is_analyzing() or _sam_committing or not plan.is_empty() \
+		or _summary.text.strip_edges() not in ["", "尚未选择范围"]
+	_result_card.visible = has_result_output
+	_review_card.visible = not sam_selected
 	var had_published_sam := _range.x >= 0
-	if sam_selected and plan.is_empty() and had_published_sam and not controller.is_analyzing():
+	if sam_selected and plan.is_empty() and had_published_sam \
+			and not controller.is_analyzing() and not _sam_committing:
 		var invalidation_message: String = str(controller.last_error)
-		_clear_transient(true)
+		_clear_transient()
 		if not invalidation_message.is_empty():
 			_status(invalidation_message)
 		can_apply = false
@@ -633,11 +753,11 @@ func refresh_current() -> void:
 	_verify_current.disabled = not enabled or _preview
 	_first_entry.disabled = not enabled or controller.get_plan().is_empty() or _range_model.indices().size() <= 1
 	_last_entry.disabled = _first_entry.disabled
-	var zero_sam_candidates := str(plan.get("provider_id", "")) == "sam_video" \
-		and int(plan.get("generated_count", 0)) == 0
-	_show_preview.disabled = not enabled or plan.is_empty() or zero_sam_candidates
-	_preview_note.visible = _preview
-	_cancel.visible = controller.is_analyzing() or not controller.get_plan().is_empty()
+	_show_preview.disabled = not enabled or plan.is_empty()
+	_preview_note.visible = _preview and not sam_selected
+	_cancel.visible = controller.is_analyzing() if sam_selected \
+		else controller.is_analyzing() or not controller.get_plan().is_empty()
+	_action_row.visible = not sam_selected or _cancel.visible
 	for button: Button in _edges.get_children():
 		button.disabled = not enabled or _range.x < 0
 	if not active:
@@ -665,7 +785,12 @@ func refresh_current() -> void:
 	_render_preview()
 
 func _changed(_frames: Variant = null) -> void:
-	_clear_transient(true)
+	if _sam_committing:
+		_refresh_timeline()
+		return
+	_sam_pending_navigation.clear()
+	_retry.visible = false
+	_clear_transient()
 	_summary.text = "标注已变化，应用前请重新查找。"
 	_refresh_timeline()
 	refresh_current()
@@ -693,7 +818,7 @@ func _status(message: String) -> void:
 			contains_chinese = true
 			break
 	if not contains_chinese:
-		_details.text = message
+		_append_log("底层信息：%s" % message)
 		text = {
 			"Preview expired; analyze again": "候选范围已失效，请重新查找。",
 			"Annotations already match; no batch was created": "标注已一致，无需应用。",
@@ -703,7 +828,8 @@ func _status(message: String) -> void:
 			"The reference frame has no polygon; draw or correct a polygon first": "参考帧没有 Poly，请先绘制或修正轮廓。",
 			"Source frame mapping changed; analyze again": "帧来源已变化，请重新分析。",
 			"Keyframe changed; analyze again": "参考帧已变化，请重新分析。",
-		}.get(message, "操作未完成，请重试；详细原因见高级设置。")
+			}.get(message, "操作未完成，请重试；详细原因见日志。")
+	_append_log("状态：%s" % text)
 	_info.text = text
 	_info.visible = text.contains("失败") or text.contains("请") or text.contains("失效")
 	_host._set_status(text)
@@ -794,8 +920,8 @@ func _select_algorithm(index: int) -> void:
 	cancel()
 	if index == 1:
 		_mode.select(1)
-	_analyze.text = ["生成 SAM 候选", "分析 Poly 光流与边缘", "以当前帧查找相似段"][index]
-	_algorithm_hint.text = ["SAM 只向后传播当前已提交的单个 Box/Poly，候选需人工确认。",
+	_analyze.text = ["生成并保存标注", "分析 Poly 光流与边缘", "以当前帧查找相似段"][index]
+	_algorithm_hint.text = ["SAM 只向后传播当前已提交的单个 Box/Poly，合法结果直接保存并标为已确认。",
 		"只传播参考帧的 Poly；光流不足时尝试亮区定位，再固定回退，结果均需人工检查。",
 		"固定坐标复制，不跟随物体运动。"][index]
 	_mode_hint.text = "更新同 ID 的 Poly，保留目标帧独有区域。" if index == 1 else "同 ID 更新，保留目标帧独有区域。"
@@ -811,11 +937,11 @@ func _select_mode(_index: int) -> void:
 func _sam_intent_changed() -> void:
 	if _algorithm.selected != 0:
 		return
-	_clear_transient(true)
+	_clear_transient()
 	refresh_current()
 
 func _observe_sam_context() -> void:
-	if not available() or not _host.has_method("_batch_sam_context"):
+	if _sam_committing or not available() or not _host.has_method("_batch_sam_context"):
 		return
 	var current: Dictionary = _host._batch_sam_context()
 	if _sam_context_signature.is_empty():
@@ -825,7 +951,7 @@ func _observe_sam_context() -> void:
 		return
 	_sam_context_signature = current.duplicate(true)
 	if _algorithm.selected == 0 or str(controller.get_plan().get("provider_id", "")) == "sam_video":
-		_clear_transient(true)
+		_clear_transient()
 
 func _update_sam_availability(advance: bool) -> void:
 	if not available() or _algorithm == null or _algorithm.selected != 0:
@@ -853,7 +979,7 @@ func _current_anchor_region() -> Dictionary:
 	return found
 
 func _sam_anchor_ready() -> bool:
-	if not _anchor_attestation.button_pressed or _current_anchor_region().is_empty():
+	if _current_anchor_region().is_empty():
 		return false
 	var context: Dictionary = _host._batch_sam_context()
 	return context.get("edit_pending") == false and int(context.get("key_index", -1)) >= 0 \
@@ -870,111 +996,136 @@ func _update_anchor_label() -> void:
 	_key_label.text = "%s · %s · %s · 关键帧 %d" % [
 		str(region.get("class", "")), str(region.get("id", "")), geometry, _host._current_record_frame()]
 
-func _present_sam_plan(plan: Dictionary) -> void:
-	_range_controls.visible = false
-	_edges.visible = false
-	_next_contiguous.visible = false
+func _commit_sam_plan(plan: Dictionary) -> void:
+	if _sam_committing:
+		return
+	_sam_committing = true
+	_range = Vector2i(int(plan.get("key_index", -1)), int(plan.get("end_index", -1)))
 	var generated := int(plan.get("generated_count", 0))
+	var navigation := _sam_navigation(plan)
+	_summary.text = _sam_summary(plan, generated)
+	_append_log("分析完成：\n%s" % _summary.text)
+	_info.text = "正在校验并保存 SAM 标注…"
+	_info.visible = true
+	_append_log("校验：正在验证来源、候选与写入范围。")
+	refresh_current()
+	if generated == 0:
+		controller.cancel()
+		_range = Vector2i(-1, -1)
+		_summary.text = _sam_summary(plan, 0)
+		_status("当前批次没有可写入的合法帧，已跳到停止帧修正。")
+		refresh_current()
+		if not navigation.is_empty():
+			_finish_sam_navigation(navigation)
+		_sam_context_signature = _host._batch_sam_context()
+		_sam_committing = false
+		refresh_current()
+		return
+	var preview: Dictionary = controller.preview(int(plan.key_index), int(plan.end_index), "merge")
+	var preview_errors: PackedStringArray = preview.get("errors", PackedStringArray())
+	if not preview_errors.is_empty():
+		_fail_sam_commit(preview_errors[0])
+		return
+	var operation_count: int = _store.snapshot_batch_operations().size()
+	_append_log("写入：%d 帧合法候选即将作为一个原子操作提交。" % generated)
+	var apply_errors: PackedStringArray = controller.apply_preview()
+	if not apply_errors.is_empty():
+		_fail_sam_commit(apply_errors[0])
+		return
+	var operations: Array = _store.snapshot_batch_operations()
+	if operations.size() != operation_count + 1:
+		_fail_sam_commit("SAM batch operation was not installed exactly once")
+		return
+	var operation: Dictionary = operations[-1]
+	var scope_errors: PackedStringArray = _store.begin_sam_auto_review_scope(operation)
+	if not scope_errors.is_empty():
+		_fail_sam_commit(scope_errors[0])
+		return
+	_host._refresh_after_edit(false)
+	controller.cancel()
+	_range = Vector2i(-1, -1)
+	_host._timeline.set_candidate(-1, -1, -1)
+	_sam_pending_navigation = navigation.duplicate(true)
+	_summary.text = "已生成 %d 帧，正在保存…" % generated
+	var saved := await _save()
+	if not saved:
+		_sam_committing = false
+		_summary.text = "已生成 %d 帧，但尚未保存到磁盘。请重试保存或撤销本批。" % generated
+		_append_log("未完成：%s" % _summary.text)
+		refresh_current()
+		return
 	var stop: Variant = plan.get("stop", {})
-	_reanchor_context.clear()
+	if stop is Dictionary and bool(stop.get("can_reanchor", false)):
+		_summary.text = "已保存前 %d 帧并标为已确认；正在跳到帧 %s 修正。" % [
+			generated, str(stop.get("frame_id", "-"))]
+	else:
+		_summary.text = "已生成并保存 %d 帧，均已标为已确认。" % generated
+	_append_log("完成：%s" % _summary.text)
+	_status(_summary.text)
+	refresh_current()
+	var pending := _sam_pending_navigation.duplicate(true)
+	_sam_pending_navigation.clear()
+	_finish_sam_navigation(pending)
+	_sam_context_signature = _host._batch_sam_context()
+	_sam_committing = false
+	refresh_current()
+
+func _fail_sam_commit(message: String) -> void:
+	controller.cancel()
+	_range = Vector2i(-1, -1)
+	_sam_committing = false
+	_sam_pending_navigation.clear()
+	_host._timeline.set_candidate(-1, -1, -1)
+	_append_log("提交失败：%s" % message)
+	_status(message)
+	refresh_current()
+
+func _sam_navigation(plan: Dictionary) -> Dictionary:
+	var stop: Variant = plan.get("stop", {})
 	if stop is Dictionary and not stop.is_empty() and bool(stop.get("can_reanchor", false)):
 		var stop_frame := int(stop.get("frame_id", -1))
 		for index in range(_host._frame_entries.size()):
 			if int(_host._frame_entries[index].frame_id) == stop_frame:
-				_reanchor_context = {"playback_index": index, "frame_id": stop_frame,
+				return {"action": "reanchor", "playback_index": index, "frame_id": stop_frame,
 					"region_id": str(plan.get("region_id", ""))}
-				break
-	_reanchor.visible = not _reanchor_context.is_empty()
-	if generated == 0:
-		_end_sam_preview_display()
-		_summary.text = _sam_summary(plan, 0)
-		_apply.text = "确认并写入 0 帧"
-		_apply.disabled = true
-		_show_preview.disabled = true
-		_range = Vector2i(int(plan.get("key_index", -1)), int(plan.get("key_index", -1)))
-		return
-	_range = Vector2i(int(plan.key_index), int(plan.end_index))
-	var preview := _update_sam_preview(plan)
-	_configure_sam_preview_cursor(plan)
-	_summary.text = _sam_summary(plan, int(preview.get("changed_count", generated)))
-	_summary.tooltip_text = "SAM 候选只合并当前 region，其他标注保持不变。"
-	_host._timeline.set_candidate(_range.x, _range.y, int(plan.key_index))
+	var first_target := int(plan.get("key_index", -1)) + 1
+	if int(plan.get("generated_count", 0)) > 0 and first_target >= 0 \
+			and first_target < _host._frame_entries.size():
+		return {"action": "inspect", "playback_index": first_target,
+			"frame_id": int(_host._frame_entries[first_target].frame_id),
+			"region_id": str(plan.get("region_id", ""))}
+	return {}
 
-func _update_sam_preview(plan: Dictionary) -> Dictionary:
-	var preview: Dictionary = controller.preview(int(plan.key_index), int(plan.end_index), "merge")
-	if not preview.get("errors", []).is_empty():
-		_apply.disabled = true
-		return preview
-	_range = Vector2i(int(plan.key_index), int(plan.end_index))
-	_apply.text = "确认并写入 %d 帧" % int(preview.get("changed_count", 0))
-	_apply.disabled = int(preview.get("changed_count", 0)) == 0
-	_verify_range.text = "确认本段（%d 帧）" % int(preview.get("target_count", 0))
-	_render_preview()
-	return preview
+func _finish_sam_navigation(navigation: Dictionary) -> void:
+	if navigation.is_empty():
+		return
+	if navigation.get("action") == "reanchor":
+		var playback_index := int(navigation.get("playback_index", -1))
+		if not _host.seek(playback_index) or _host._current_record_frame() != int(navigation.get("frame_id", -1)):
+			_status("已保存 SAM 标注，但停止帧加载失败。")
+			return
+		var region_id := str(navigation.get("region_id", ""))
+		var record: Dictionary = _store.get_corrected_record(int(navigation.frame_id))
+		_host._set_selected_region(region_id if not _host._find_region(record, region_id).is_empty() else "")
+		_reanchor_context = navigation.duplicate(true)
+		_reanchor.visible = true
+		_append_log("导航：已停在帧 %s；需要修正时点击“跳到停止帧重新锚定”。" % str(navigation.frame_id))
+		refresh_current()
+		return
+	var playback_index := int(navigation.get("playback_index", -1))
+	if not _host.seek(playback_index) or _host._current_record_frame() != int(navigation.get("frame_id", -1)):
+		_status("已保存 SAM 标注，但第一张结果帧加载失败。")
+		return
+	var region_id := str(navigation.get("region_id", ""))
+	var record: Dictionary = _store.get_corrected_record(int(navigation.frame_id))
+	_host._set_selected_region(region_id if not _host._find_region(record, region_id).is_empty() else "")
+	_append_log("导航：已打开第一张生成结果帧 %s；批量面板保持打开。" % str(navigation.frame_id))
+	refresh_current()
 
-func _configure_sam_preview_cursor(plan: Dictionary) -> void:
-	_sam_preview_indices.clear()
-	for index in range(int(plan.get("key_index", -1)) + 1, int(plan.get("end_index", -1)) + 1):
-		_sam_preview_indices.append(index)
-	_sam_preview_position = 0 if not _sam_preview_indices.is_empty() else -1
-	_sam_preview_row.visible = not _sam_preview_indices.is_empty()
-	_preview = not _sam_preview_indices.is_empty()
-	_show_preview.set_pressed_no_signal(_preview)
-	_show_sam_preview_at_cursor()
-
-func _move_sam_preview(offset: int) -> void:
-	if not _preview or _sam_preview_indices.is_empty():
-		return
-	_sam_preview_position = clampi(_sam_preview_position + offset, 0, _sam_preview_indices.size() - 1)
-	_show_sam_preview_at_cursor()
-
-func _show_sam_preview_at_cursor() -> void:
-	if not _preview or _sam_preview_position < 0 or _sam_preview_position >= _sam_preview_indices.size():
-		return
-	var playback_index := _sam_preview_indices[_sam_preview_position]
-	if playback_index < 0 or playback_index >= _host._frame_entries.size():
-		_clear_transient(true)
-		_status("SAM 候选帧已变化，请重新生成。")
-		return
-	var frame_id := int(_host._frame_entries[playback_index].frame_id)
-	var snapshot: Dictionary = _host._read_sam_batch_preview_snapshot(playback_index, frame_id)
-	var snapshot_errors: PackedStringArray = snapshot.get("errors", PackedStringArray())
-	if not snapshot_errors.is_empty():
-		_clear_transient(true)
-		_status(snapshot_errors[0])
-		return
-	# 快照读取后再取候选，Controller 会以 Service 冻结的 image_sha256 重验 Source。
-	var proposed := controller.proposed_record(frame_id)
-	var plan := controller.get_plan()
-	var expected_image_sha256 := str(plan.get("target_image_sha256", {}).get(playback_index, ""))
-	var errors: PackedStringArray = _host._show_sam_batch_preview_frame(
-		playback_index, frame_id, proposed, str(plan.get("region_id", "")), snapshot,
-		expected_image_sha256)
-	if not errors.is_empty():
-		_clear_transient(true)
-		_status(errors[0])
-		return
-	_sam_preview_label.text = "候选 %d / %d · 帧 %d" % [
-		_sam_preview_position + 1, _sam_preview_indices.size(), frame_id]
-	_sam_preview_previous.disabled = _sam_preview_position <= 0
-	_sam_preview_next.disabled = _sam_preview_position >= _sam_preview_indices.size() - 1
-	_host._set_status("预览候选 %d / %d，尚未应用。" % [
-		_sam_preview_position + 1, _sam_preview_indices.size()])
-
-func _end_sam_preview_display(clear_cursor: bool = true) -> void:
-	var had_sam_preview := not _sam_preview_indices.is_empty()
+func _end_sam_preview_display() -> void:
 	_preview = false
 	if _show_preview != null:
 		_show_preview.set_pressed_no_signal(false)
-	if clear_cursor:
-		_sam_preview_indices.clear()
-		_sam_preview_position = -1
-		if _sam_preview_row != null:
-			_sam_preview_row.visible = false
-	if had_sam_preview and _host != null and _host.has_method("_restore_sam_batch_preview_frame"):
-		var restore_errors: PackedStringArray = _host._restore_sam_batch_preview_frame()
-		if not restore_errors.is_empty():
-			_host._set_status("候选预览恢复失败；画布已清空，请重新载入当前帧。")
 
 func _sam_summary(plan: Dictionary, changed: int) -> String:
 	var lines: Array[String] = ["计划传播 %d 帧 · 成功生成 %d 帧 · 将修改 %d 帧" % [
@@ -1090,7 +1241,7 @@ func _mode_label(mode: String) -> String:
 		"fixed fallback":"固定回退（待检查）"}.get(mode, mode)
 
 func _exit_tree() -> void:
-	controller.cancel()
+	controller.shutdown()
 
 func _stop_reason(reason: String) -> String:
 	if ": similarity adjacent " in reason:

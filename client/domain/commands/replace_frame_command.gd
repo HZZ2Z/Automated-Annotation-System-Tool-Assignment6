@@ -6,6 +6,11 @@ var frame: int
 var before: Dictionary
 var after: Dictionary
 var _construction_errors := PackedStringArray()
+var _review_mode_initialized := false
+var _auto_review := false
+var _review_before: Dictionary = {}
+var _review_after: Dictionary = {}
+var _review_operations: Array = []
 
 
 func _init(frame_index: int, old_record: Dictionary, new_record: Dictionary) -> void:
@@ -19,6 +24,21 @@ func apply(store: Variant) -> PackedStringArray:
 		return _construction_errors.duplicate()
 	if not store is Object or not store.has_method("replace_corrected_record"):
 		return PackedStringArray(["command: store must provide replace_corrected_record(frame, record)"])
+	if not _review_mode_initialized:
+		_review_mode_initialized = true
+		_auto_review = store.has_method("sam_auto_review_enabled") \
+			and store.sam_auto_review_enabled(frame)
+		if _auto_review:
+			if not store.has_method("replace_corrected_record_with_review_state") \
+					or not store.has_method("record_value_digest"):
+				return PackedStringArray(["reviewed edit: Store is missing atomic review support"])
+			_review_before = store.snapshot_review_state()
+			_review_operations = store.snapshot_batch_operations()
+			_review_after = _review_before.duplicate(true)
+			_review_after[str(frame)] = {"accepted_digest": store.record_value_digest(after)}
+	if _auto_review:
+		return store.replace_corrected_record_with_review_state(
+			frame, after.duplicate(true), _review_before, _review_after, _review_operations)
 	return store.replace_corrected_record(frame, after.duplicate(true))
 
 
@@ -32,6 +52,9 @@ func is_noop() -> bool:
 func revert(store: Variant) -> PackedStringArray:
 	if not store is Object or not store.has_method("replace_corrected_record"):
 		return PackedStringArray(["command: store must provide replace_corrected_record(frame, record)"])
+	if _auto_review:
+		return store.replace_corrected_record_with_review_state(
+			frame, before.duplicate(true), _review_after, _review_before, _review_operations)
 	return store.replace_corrected_record(frame, before.duplicate(true))
 
 

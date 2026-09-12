@@ -362,8 +362,22 @@ func shutdown() -> void:
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_PREDELETE and (_preflight_pid > 0 or _pid > 0 or not _job_dir.is_empty()):
-		shutdown()
+	if what != NOTIFICATION_PREDELETE:
+		return
+	# RefCounted self is already invalid during PREDELETE in Godot. Owners use
+	# shutdown(); this inline emergency path avoids leaking an external worker
+	# if the final reference is nevertheless released unexpectedly.
+	for process_id: int in [_preflight_pid, _pid]:
+		if process_id > 0 and OS.is_process_running(process_id):
+			OS.kill(process_id)
+	if _preflight_stdio != null:
+		_preflight_stdio.close()
+	if _preflight_stderr != null:
+		_preflight_stderr.close()
+	if _stdio != null:
+		_stdio.close()
+	if _stderr != null:
+		_stderr.close()
 
 
 func _step_preflight() -> void:

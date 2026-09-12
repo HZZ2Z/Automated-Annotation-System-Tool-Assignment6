@@ -1,0 +1,13 @@
+{
+  "id": "training_coco_package_source",
+  "version": "1.0.0",
+  "api_version": 1,
+  "stage": "source",
+  "entry": "plugin.gd",
+  "priority": 110,
+  "capabilities": [
+    "frames",
+    "model_annotations",
+    "locator.training_coco_v1"
+  ]
+}

@@ -10,7 +10,10 @@ func open_workspace(options: Dictionary, token: Variant) -> Dictionary:
 	var media: Dictionary = options.media
 	var baseline_kind_value: Variant = media.get(
 		"baseline_kind",
-		"model" if options.manifest.get("model_version", "none") != "none" else "empty",
+		options.manifest.get(
+			"baseline_kind",
+			"model" if options.manifest.get("model_version", "none") != "none" else "empty",
+		),
 	)
 	if (
 		typeof(baseline_kind_value) != TYPE_STRING
@@ -46,7 +49,7 @@ func open_workspace(options: Dictionary, token: Variant) -> Dictionary:
 			for record: Dictionary in records: record.source = media.media_id
 	if token.is_cancelled(): return {"success":false,"errors":["Opening cancelled"],"cancelled":true}
 	var label = LABEL.new()
-	var context := {"baseline_kind":kind,"model_revision":options.manifest.get("model_revision",options.manifest.get("model_version","none")),"taxonomy_version":options.taxonomy_version,"source_root":label_root}
+	var context := {"baseline_kind":kind,"round_id":options.manifest.get("round_id","initial"),"model_revision":options.manifest.get("model_revision",options.manifest.get("model_version","none")),"taxonomy_version":options.taxonomy_version,"source_root":label_root}
 	var errors: PackedStringArray = label.prepare(options.root,media,entries,records,context)
 	if not errors.is_empty(): return {"success":false,"errors":errors}
 	label.set_baseline_descriptor(descriptor)
@@ -59,8 +62,15 @@ func open_direct(options: Dictionary, token: Variant) -> Dictionary:
 	var locator := String(options.locator)
 	var media_id := PATHS.portable_media_id(String(options.manifest.get("dataset_id",locator.get_file())))
 	var path := String(options.session_root).path_join(locator.sha256_text()).path_join("label/%s.json" % media_id)
-	var has_model: bool = options.manifest.get("model_version","none") != "none"
-	var request := {"path":path,"media_id":media_id,"media_type":"image" if records.size() == 1 else "image_sequence","source":records[0].source,"source_relative_path":media_id,"source_sha256":options.manifest.get("source_sha256"),"source_root":locator,"frame_entries":options.frame_entries,"seed_records":records if has_model else [],"baseline_kind":"model" if has_model else "empty","model_revision":options.manifest.get("model_revision",options.manifest.get("model_version","none")),"taxonomy_version":options.taxonomy_version}
+	var default_kind := (
+		"model" if options.manifest.get("model_version","none") != "none" else "empty")
+	var baseline_kind: Variant = options.manifest.get("baseline_kind", default_kind)
+	if typeof(baseline_kind) != TYPE_STRING or String(baseline_kind) not in [
+		"empty", "model", "imported_labels",
+	]:
+		return {"success":false,"errors":["Source baseline_kind is invalid"]}
+	var seeded := String(baseline_kind) in ["model", "imported_labels"]
+	var request := {"path":path,"media_id":media_id,"media_type":"image" if records.size() == 1 else "image_sequence","source":records[0].source,"source_relative_path":media_id,"source_sha256":options.manifest.get("source_sha256"),"source_root":locator,"frame_entries":options.frame_entries,"seed_records":records if seeded else [],"baseline_kind":String(baseline_kind),"round_id":options.manifest.get("round_id","initial"),"model_revision":options.manifest.get("model_revision",options.manifest.get("model_version","none")),"taxonomy_version":options.taxonomy_version}
 	var result: Dictionary = REPOSITORY.new().open_session(request,token)
 	if not result.success: return result
 	if token.is_cancelled(): return {"success":false,"errors":["Opening cancelled"],"cancelled":true}

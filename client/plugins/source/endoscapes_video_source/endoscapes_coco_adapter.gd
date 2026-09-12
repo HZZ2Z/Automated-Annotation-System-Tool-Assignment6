@@ -49,7 +49,7 @@ func read_for_video(
 			return _failure("Endoscapes frame IDs must be unique and non-negative")
 		requested[frame_id] = true
 	var selected_images := _read_selected_images(
-		document.images, video_id, requested, errors)
+		document.images, video_id, requested, errors, "detection")
 	if not errors.is_empty():
 		return _result([], 0, 0, 0, 0, errors)
 
@@ -73,30 +73,42 @@ func read_for_video(
 	var skipped_regions := 0
 	var fallback_reasons := {}
 	var skipped_reasons := {}
+	var import_bindings: Array[Dictionary] = []
+	var import_issues: Array[Dictionary] = []
 	for annotation_value: Variant in document.annotations:
 		if _cancelled(token):
 			return _failure("Endoscapes COCO import cancelled")
 		if not annotation_value is Dictionary:
 			return _failure("Endoscapes COCO annotation must be an object")
 		var annotation := annotation_value as Dictionary
-		if not _integer(annotation.get("image_id")):
-			return _failure("Endoscapes COCO annotation image_id must be an integer")
+		if not _positive_integer(annotation.get("image_id")):
+			return _failure("Endoscapes COCO annotation image_id must be a positive integer")
 		var image_id := int(annotation.image_id)
 		if not selected_images.has(image_id):
 			continue
-		if not _integer(annotation.get("id")) or not _integer(annotation.get("category_id")):
+		var image: Dictionary = selected_images[image_id]
+		var source_frame_id := int(image.source_frame_id)
+		if not _positive_integer(annotation.get("id")) \
+				or not _positive_integer(annotation.get("category_id")):
 			skipped_regions += 1
 			_increment_reason(skipped_reasons, "invalid_identity")
+			import_issues.append(_import_issue(
+				source_frame_id, image_id, null, "", "invalid_identity", true))
 			continue
+		var annotation_id := int(annotation.id)
+		var native_region_id := "endoscapes-%s-%d-%d" % [
+			split, image_id, annotation_id]
 		var category: Variant = categories.get(int(annotation.category_id))
 		if not category is Dictionary:
 			skipped_regions += 1
 			_increment_reason(skipped_reasons, "unknown_category")
+			import_issues.append(_import_issue(
+				source_frame_id, image_id, annotation_id, native_region_id,
+				"unknown_category", true))
 			continue
-		var image: Dictionary = selected_images[image_id]
 		var box := _valid_box(annotation.get("bbox"), image.size)
 		var region := {
-			"id": "endoscapes-%s-%d-%d" % [split, image_id, int(annotation.id)],
+			"id": native_region_id,
 			"class": String(category.name),
 			"kind": String(category.kind),
 		}
@@ -131,28 +143,77 @@ func read_for_video(
 				box_fallbacks += 1
 				_increment_reason(fallback_reasons,
 					fallback_reason if not fallback_reason.is_empty() else "polygon_refused")
+				import_issues.append(_import_issue(
+					source_frame_id, image_id, annotation_id, native_region_id,
+					fallback_reason if not fallback_reason.is_empty() else "polygon_refused",
+					false))
 			else:
 				skipped_regions += 1
 				_increment_reason(skipped_reasons,
 					fallback_reason if not fallback_reason.is_empty() else "invalid_geometry")
+				import_issues.append(_import_issue(
+					source_frame_id, image_id, annotation_id, native_region_id,
+					fallback_reason if not fallback_reason.is_empty() else "invalid_geometry",
+					true))
 				continue
 		elif not region.has("box"):
 			skipped_regions += 1
 			_increment_reason(skipped_reasons, "invalid_geometry")
+			import_issues.append(_import_issue(
+				source_frame_id, image_id, annotation_id, native_region_id,
+				"invalid_geometry", true))
 			continue
 		var target_record: Dictionary = records_by_frame[int(image.frame_id)]
 		target_record.regions.append(region)
+		import_bindings.append({
+			"source_frame_id": source_frame_id,
+			"image_id": image_id,
+			"original_annotation_id": annotation_id,
+			"native_region_id": native_region_id,
+			"imported_region": region.duplicate(true),
+			"fallback_reason": fallback_reason if not fallback_reason.is_empty() else null,
+		})
 		imported_regions += 1
 
 	for record: Dictionary in records:
 		record.regions.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
 			return String(left.id) < String(right.id))
+	import_bindings.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		if int(left.source_frame_id) != int(right.source_frame_id):
+			return int(left.source_frame_id) < int(right.source_frame_id)
+		return int(left.original_annotation_id) < int(right.original_annotation_id))
+	import_issues.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		if int(left.source_frame_id) != int(right.source_frame_id):
+			return int(left.source_frame_id) < int(right.source_frame_id)
+		var left_id := int(left.original_annotation_id) if left.original_annotation_id != null else -1
+		var right_id := int(right.original_annotation_id) if right.original_annotation_id != null else -1
+		if left_id != right_id: return left_id < right_id
+		return String(left.code) < String(right.code))
 	return _result(records, imported_regions, polygon_regions, box_fallbacks,
-		skipped_regions, PackedStringArray(), fallback_reasons, skipped_reasons)
+		skipped_regions, PackedStringArray(), fallback_reasons, skipped_reasons,
+		import_bindings, import_issues)
 
 
 func _increment_reason(counts: Dictionary, reason: String) -> void:
 	counts[reason] = int(counts.get(reason, 0)) + 1
+
+
+func _import_issue(
+	source_frame_id: int,
+	image_id: int,
+	original_annotation_id: Variant,
+	native_region_id: String,
+	code: String,
+	blocking: bool,
+) -> Dictionary:
+	return {
+		"source_frame_id": source_frame_id,
+		"image_id": image_id,
+		"original_annotation_id": original_annotation_id,
+		"native_region_id": native_region_id,
+		"code": code,
+		"blocking": blocking,
+	}
 
 
 func _read_categories(values: Array, errors: PackedStringArray) -> Dictionary:
@@ -161,8 +222,8 @@ func _read_categories(values: Array, errors: PackedStringArray) -> Dictionary:
 		if not value is Dictionary:
 			errors.append("Endoscapes COCO category must be an object")
 			continue
-		if not _integer(value.get("id")) or typeof(value.get("name")) != TYPE_STRING:
-			errors.append("Endoscapes COCO category requires integer id and string name")
+		if not _positive_integer(value.get("id")) or typeof(value.get("name")) != TYPE_STRING:
+			errors.append("Endoscapes COCO category requires positive integer id and string name")
 			continue
 		var category_id := int(value.id)
 		var category_name := String(value.name)
@@ -182,33 +243,46 @@ func _read_selected_images(
 	video_id: int,
 	requested: Dictionary,
 	errors: PackedStringArray,
+	view_role: String = "detection",
 ) -> Dictionary:
 	var result := {}
+	var selected_frames := {}
+	if view_role not in ["detection", "video", "ds"]:
+		errors.append("Endoscapes COCO image view role is invalid")
+		return result
 	for value: Variant in values:
 		if not value is Dictionary:
 			errors.append("Endoscapes COCO image must be an object")
 			continue
-		if not _integer(value.get("id")) or typeof(value.get("file_name")) != TYPE_STRING:
-			errors.append("Endoscapes COCO image requires integer id and string file_name")
+		if not _positive_integer(value.get("id")) or typeof(value.get("file_name")) != TYPE_STRING:
+			errors.append("Endoscapes COCO image requires positive integer id and string file_name")
 			continue
 		var parsed := _parse_frame_name(String(value.file_name))
 		if parsed.is_empty():
 			errors.append("Endoscapes COCO image has invalid file_name: %s" % value.file_name)
 			continue
 		var declared_video: Variant = value.get("video_id")
-		if declared_video != null and not _integer(declared_video):
-			errors.append("Endoscapes COCO image video_id must be integer or null")
+		if declared_video != null and not _nonnegative_integer(declared_video):
+			errors.append("Endoscapes COCO image video_id must be non-negative integer or null")
 			continue
 		var image_video_id := int(declared_video) if declared_video != null else int(parsed.video_id)
 		if image_video_id != int(parsed.video_id):
 			errors.append("Endoscapes COCO image video_id disagrees with file_name")
 			continue
 		var declared_frame: Variant = value.get("frame_id")
-		if declared_frame != null and not _integer(declared_frame):
-			errors.append("Endoscapes COCO image frame_id must be integer or null")
+		if declared_frame != null and not _nonnegative_integer(declared_frame):
+			errors.append("Endoscapes COCO image frame_id must be non-negative integer or null")
 			continue
-		var frame_id := int(declared_frame) if declared_frame != null else int(parsed.frame_id)
-		if frame_id != int(parsed.frame_id):
+		var source_frame_id := int(parsed.frame_id)
+		var dataset_sequence_index: Variant = (
+			int(declared_frame)
+			if view_role == "video" and declared_frame != null
+			else null)
+		if (
+			view_role != "video"
+			and declared_frame != null
+			and int(declared_frame) != source_frame_id
+		):
 			errors.append("Endoscapes COCO image frame_id disagrees with file_name")
 			continue
 		if not _integer(value.get("width")) or not _integer(value.get("height")):
@@ -218,13 +292,23 @@ func _read_selected_images(
 		if size.x <= 0 or size.y <= 0:
 			errors.append("Endoscapes COCO image dimensions must be positive")
 			continue
-		if image_video_id != video_id or not requested.has(frame_id):
+		if image_video_id != video_id or not requested.has(source_frame_id):
 			continue
 		var image_id := int(value.id)
 		if result.has(image_id):
 			errors.append("Endoscapes COCO repeats image id %d" % image_id)
 			continue
-		result[image_id] = {"frame_id": frame_id, "size": size}
+		if selected_frames.has(source_frame_id):
+			errors.append("Endoscapes COCO repeats source frame %d" % source_frame_id)
+			continue
+		selected_frames[source_frame_id] = image_id
+		result[image_id] = {
+			"frame_id": source_frame_id,
+			"source_frame_id": source_frame_id,
+			"dataset_sequence_index": dataset_sequence_index,
+			"file_name": String(value.file_name),
+			"size": size,
+		}
 	return result
 
 
@@ -280,6 +364,14 @@ func _integer(value: Variant) -> bool:
 	return _number(value) and float(value) == floorf(float(value))
 
 
+func _nonnegative_integer(value: Variant) -> bool:
+	return _integer(value) and float(value) >= 0.0
+
+
+func _positive_integer(value: Variant) -> bool:
+	return _integer(value) and float(value) >= 1.0
+
+
 func _number(value: Variant) -> bool:
 	return (
 		(typeof(value) == TYPE_INT or typeof(value) == TYPE_FLOAT)
@@ -304,6 +396,8 @@ func _result(
 	errors: PackedStringArray,
 	fallback_reasons: Dictionary = {},
 	skipped_reasons: Dictionary = {},
+	import_bindings: Array = [],
+	import_issues: Array = [],
 ) -> Dictionary:
 	return {
 		"records": records.duplicate(true),
@@ -313,5 +407,7 @@ func _result(
 		"skipped_regions": skipped_regions,
 		"fallback_reasons": fallback_reasons.duplicate(true),
 		"skipped_reasons": skipped_reasons.duplicate(true),
+		"import_bindings": import_bindings.duplicate(true),
+		"import_issues": import_issues.duplicate(true),
 		"errors": PackedStringArray(errors),
 	}
